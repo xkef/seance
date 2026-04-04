@@ -1,0 +1,34 @@
+#!/bin/sh
+# Workaround for Zig 0.15 on macOS 26+.
+#
+# macOS 26 SDK's libSystem.tbd only declares arm64e-macos, dropping
+# arm64-macos. Zig 0.15's linker targets arm64, so it can't resolve
+# system symbols. We redirect --show-sdk-path to a sysroot overlay
+# that uses Zig's own libSystem.tbd (which includes arm64-macos).
+#
+# Remove this workaround once Zig ships with macOS 26 linker stubs.
+set -e
+
+ensure_sysroot() {
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    SYSROOT="$SCRIPT_DIR/sysroot"
+    SDK_STAMP="$SYSROOT/.sdk-path"
+    ACTUAL_SDK="$(/usr/bin/xcrun --show-sdk-path)"
+
+    if [ ! -f "$SYSROOT/usr/lib/libSystem.tbd" ] || \
+       ! grep -q "arm64-macos" "$SYSROOT/usr/lib/libSystem.tbd" 2>/dev/null || \
+       [ ! -f "$SDK_STAMP" ] || \
+       [ "$(cat "$SDK_STAMP" 2>/dev/null)" != "$ACTUAL_SDK" ]; then
+        "$SCRIPT_DIR/setup-sysroot.sh" >/dev/null
+    fi
+}
+
+case "$*" in
+    *--show-sdk-path*)
+        ensure_sysroot
+        echo "$SYSROOT"
+        ;;
+    *)
+        exec /usr/bin/xcrun "$@"
+        ;;
+esac

@@ -1,0 +1,14 @@
+#!/bin/sh
+# Ensure Zig resolves the repo-local xcrun shim when it looks up the macOS SDK.
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SELF="$SCRIPT_DIR/zig"
+REAL_ZIG="$(which -a zig | awk -v self="$SELF" '$0 != self { print; exit }')"
+
+if [ -z "$REAL_ZIG" ]; then
+    echo "error: could not locate real zig binary behind $SELF" >&2
+    exit 1
+fi
+
+exec env PATH="$SCRIPT_DIR:$PATH" "$REAL_ZIG" "$@"

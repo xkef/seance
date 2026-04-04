@@ -1,0 +1,27 @@
+[package]
+name = "seance-app"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "seance terminal multiplexer application"
+
+[[bin]]
+name = "seance"
+path = "src/main.rs"
+
+[dependencies]
+seance-input = { path = "../seance-input" }
+seance-render = { path = "../seance-render" }
+seance-vt = { path = "../seance-vt" }
+arboard = "3"
+pollster = "0.4"
+log.workspace = true
+env_logger.workspace = true
+winit = "0.30"
+
+[lints]
+workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+raw-window-handle = "0.6"
