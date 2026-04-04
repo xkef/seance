@@ -1,0 +1,433 @@
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use winit::application::ApplicationHandler;
+use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::event::{ElementState, Modifiers, MouseButton, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::window::{Window, WindowId};
+
+use seance_input::{InputHandler, VtInput};
+use seance_render::{RenderInputs, RendererConfig, TerminalRenderer};
+use seance_vt::{LibGhosttyFrameSource, Terminal, TerminalModes};
+
+mod command;
+mod keybinds;
+mod platform;
+
+use command::AppCommand;
+use keybinds::Keybinds;
+
+const DEFAULT_FONT_SIZE: f32 = 14.0;
+const DEFAULT_FONT_FAMILY: &str = "JetBrainsMono Nerd Font";
+const FONT_SIZE_MIN: f32 = 6.0;
+const FONT_SIZE_MAX: f32 = 72.0;
+const POLL_INTERVAL: Duration = Duration::from_millis(4);
+const MULTI_CLICK_WINDOW: Duration = Duration::from_millis(500);
+
+struct MouseState {
+    cursor_pos: PhysicalPosition<f64>,
+    is_down: bool,
+    click_count: u8,
+    last_click_time: Instant,
+    last_click_pos: (u16, u16),
+}
+
+impl Default for MouseState {
+    fn default() -> Self {
+        Self {
+            cursor_pos: PhysicalPosition::new(0.0, 0.0),
+            is_down: false,
+            click_count: 0,
+            last_click_time: Instant::now(),
+            last_click_pos: (0, 0),
+        }
+    }
+}
+
+impl MouseState {
+    fn register_click(&mut self, col: u16, row: u16) -> u8 {
+        let now = Instant::now();
+        let fast = now.duration_since(self.last_click_time) < MULTI_CLICK_WINDOW;
+        let same_spot = (col, row) == self.last_click_pos;
+        self.click_count = if fast && same_spot {
+            (self.click_count % 3) + 1
+        } else {
+            1
+        };
+        self.last_click_time = now;
+        self.last_click_pos = (col, row);
+        self.click_count
+    }
+}
+
+struct App {
+    window: Option<Arc<Window>>,
+    renderer: Option<TerminalRenderer>,
+    terminal: Option<Terminal>,
+    input: InputHandler,
+    keybinds: Keybinds,
+    render_inputs: RenderInputs,
+    modifiers: Modifiers,
+    cell_size: [f32; 2],
+    font_size: f32,
+    content_dirty: bool,
+    occluded: bool,
+    mouse: MouseState,
+}
+
+impl App {
+    fn new() -> Self {
+        Self {
+            window: None,
+            renderer: None,
+            terminal: None,
+            input: InputHandler::new(),
+            keybinds: Keybinds::new(),
+            render_inputs: RenderInputs::default(),
+            modifiers: Modifiers::default(),
+            cell_size: [0.0, 0.0],
+            font_size: DEFAULT_FONT_SIZE,
+            content_dirty: true,
+            occluded: false,
+            mouse: MouseState::default(),
+        }
+    }
+
+    fn request_redraw(&self) {
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    fn mark_dirty(&mut self) {
+        self.content_dirty = true;
+        self.request_redraw();
+    }
+
+    fn poll_pty(&mut self) {
+        let Some(term) = &mut self.terminal else {
+            return;
+        };
+        if term.poll() {
+            self.content_dirty = true;
+        }
+        if !term.is_alive() {
+            self.terminal = None;
+        }
+    }
+
+    fn draw(&mut self) {
+        if self.occluded || self.terminal.is_none() {
+            return;
+        }
+        if self.content_dirty
+            && let (Some(r), Some(t)) = (&mut self.renderer, &mut self.terminal)
+        {
+            self.content_dirty = false;
+            let mut source = LibGhosttyFrameSource::new(t);
+            r.update_frame(&mut source);
+        }
+        if let Some(r) = &mut self.renderer {
+            r.render(&self.render_inputs);
+        }
+    }
+
+    /// Resize the surface and reflow the VT grid.
+    fn reflow(&mut self, pixel_size: PhysicalSize<u32>) {
+        let Some(r) = &mut self.renderer else {
+            return;
+        };
+        r.resize_surface(pixel_size.width, pixel_size.height);
+        self.cell_size = r.cell_size();
+        let (cols, rows) = r.grid_size();
+        if let Some(term) = &mut self.terminal {
+            term.resize(
+                cols,
+                rows,
+                pixel_size.width as u16,
+                pixel_size.height as u16,
+            );
+        }
+        self.mark_dirty();
+    }
+
+    fn apply_font_size(&mut self) {
+        if let (Some(r), Some(w)) = (&mut self.renderer, &self.window) {
+            r.set_font_size(self.font_size);
+            self.reflow(w.inner_size());
+        }
+    }
+
+    fn terminal_modes(&self) -> TerminalModes {
+        self.terminal
+            .as_ref()
+            .map(Terminal::modes)
+            .unwrap_or_default()
+    }
+
+    fn has_selection(&self) -> bool {
+        self.terminal.as_ref().is_some_and(Terminal::has_selection)
+    }
+
+    fn clear_selection(&mut self) {
+        if let Some(term) = &mut self.terminal {
+            term.clear_selection();
+        }
+        self.render_inputs.selection = None;
+    }
+
+    fn sync_selection_to_overlay(&mut self) {
+        self.render_inputs.selection = self.terminal.as_ref().and_then(Terminal::selection_range);
+    }
+
+    fn copy_selection_to_clipboard(&mut self) {
+        let Some(text) = self.terminal.as_mut().and_then(Terminal::selection_text) else {
+            return;
+        };
+        if text.is_empty() {
+            return;
+        }
+        if let Ok(mut cb) = arboard::Clipboard::new() {
+            let _ = cb.set_text(text);
+        }
+    }
+
+    fn on_keyboard_input(&mut self, event_loop: &ActiveEventLoop, event: &winit::event::KeyEvent) {
+        if let Some(cmd) = self.keybinds.match_event(event, &self.modifiers) {
+            let preserves_selection = matches!(cmd, AppCommand::Copy | AppCommand::SelectAll);
+            if !preserves_selection && self.has_selection() {
+                self.clear_selection();
+            }
+            self.execute_app_command(event_loop, cmd);
+            self.mark_dirty();
+            return;
+        }
+
+        let input = self
+            .input
+            .handle_key(event, &self.modifiers, self.terminal_modes());
+
+        if event.state == ElementState::Pressed
+            && !matches!(input, VtInput::Ignore)
+            && self.has_selection()
+        {
+            self.clear_selection();
+        }
+
+        if let VtInput::Write(bytes) = input
+            && let Some(term) = &self.terminal
+        {
+            term.write(&bytes);
+        }
+        self.mark_dirty();
+    }
+
+    fn execute_app_command(&mut self, event_loop: &ActiveEventLoop, cmd: AppCommand) {
+        match cmd {
+            AppCommand::Quit | AppCommand::CloseWindow => event_loop.exit(),
+            AppCommand::Copy => {
+                self.copy_selection_to_clipboard();
+                self.clear_selection();
+            }
+            AppCommand::Paste => self.paste_from_clipboard(),
+            AppCommand::SelectAll => {
+                if let Some(term) = &mut self.terminal {
+                    term.select_all();
+                }
+                self.sync_selection_to_overlay();
+            }
+            AppCommand::FontSizeDelta(delta) => {
+                self.font_size =
+                    (self.font_size + f32::from(delta)).clamp(FONT_SIZE_MIN, FONT_SIZE_MAX);
+                self.apply_font_size();
+            }
+            AppCommand::FontSizeReset => {
+                self.font_size = DEFAULT_FONT_SIZE;
+                self.apply_font_size();
+            }
+        }
+    }
+
+    fn paste_from_clipboard(&mut self) {
+        let Ok(mut cb) = arboard::Clipboard::new() else {
+            return;
+        };
+        let Ok(text) = cb.get_text() else {
+            return;
+        };
+        let Some(term) = &self.terminal else {
+            return;
+        };
+        let bracketed = term.modes().bracketed_paste;
+        if bracketed {
+            term.write(b"\x1b[200~");
+        }
+        term.write(text.as_bytes());
+        if bracketed {
+            term.write(b"\x1b[201~");
+        }
+    }
+
+    fn on_mouse_wheel(&mut self, delta: winit::event::MouseScrollDelta) {
+        let lines = match delta {
+            winit::event::MouseScrollDelta::LineDelta(_, y) => y as i32,
+            winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                let ch = self.cell_size[1].max(1.0);
+                (pos.y / f64::from(ch)) as i32
+            }
+        };
+        if lines == 0 {
+            return;
+        }
+        let modes = self.terminal_modes();
+        if let Some(data) = self.input.encode_mouse_wheel(lines, modes) {
+            if let Some(term) = &self.terminal {
+                term.write(&data);
+            }
+        } else if let Some(term) = &mut self.terminal {
+            term.scroll_lines(-lines);
+        }
+        self.mark_dirty();
+    }
+
+    fn on_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
+        self.mouse.cursor_pos = position;
+        if !self.mouse.is_down {
+            return;
+        }
+        let Some(r) = self.renderer.as_ref() else {
+            return;
+        };
+        let (col, row) = r.pixel_to_grid(position.x, position.y);
+        if let Some(term) = &mut self.terminal {
+            term.update_selection(col, row);
+        }
+        self.sync_selection_to_overlay();
+        self.mark_dirty();
+    }
+
+    fn on_mouse_input(&mut self, state: ElementState, button: MouseButton) {
+        if button != MouseButton::Left {
+            return;
+        }
+        match state {
+            ElementState::Pressed => self.handle_mouse_press(),
+            ElementState::Released => {
+                self.mouse.is_down = false;
+                self.copy_selection_to_clipboard();
+            }
+        }
+    }
+
+    fn handle_mouse_press(&mut self) {
+        let Some(r) = self.renderer.as_ref() else {
+            return;
+        };
+        let (col, row) = r.pixel_to_grid(self.mouse.cursor_pos.x, self.mouse.cursor_pos.y);
+        let clicks = self.mouse.register_click(col, row);
+        if let Some(term) = &mut self.terminal {
+            match clicks {
+                1 => term.start_selection(col, row),
+                2 => term.start_word_selection(col, row),
+                3 => term.start_line_selection(row),
+                _ => {}
+            }
+        }
+        self.sync_selection_to_overlay();
+        self.mouse.is_down = true;
+        self.mark_dirty();
+    }
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+
+        let window = Arc::new(
+            event_loop
+                .create_window(Window::default_attributes().with_title("seance"))
+                .expect("failed to create window"),
+        );
+
+        #[cfg(target_os = "macos")]
+        platform::configure_window(&window);
+
+        let size = window.inner_size();
+        let config = RendererConfig {
+            width: size.width,
+            height: size.height,
+            scale: window.scale_factor(),
+            font_family: DEFAULT_FONT_FAMILY.to_string(),
+            font_size: DEFAULT_FONT_SIZE,
+        };
+
+        let renderer = pollster::block_on(TerminalRenderer::new(window.clone(), config))
+            .expect("failed to create renderer");
+
+        self.cell_size = renderer.cell_size();
+        let (cols, rows) = renderer.grid_size();
+        self.renderer = Some(renderer);
+        self.window = Some(window);
+
+        self.terminal = Some(
+            Terminal::spawn(cols, rows, size.width as u16, size.height as u16)
+                .expect("failed to spawn terminal"),
+        );
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Resized(size) => {
+                self.reflow(size);
+                self.draw();
+            }
+            WindowEvent::ModifiersChanged(mods) => self.modifiers = mods,
+            WindowEvent::KeyboardInput { event, .. } => self.on_keyboard_input(event_loop, &event),
+            WindowEvent::MouseWheel { delta, .. } => self.on_mouse_wheel(delta),
+            WindowEvent::CursorMoved { position, .. } => self.on_cursor_moved(position),
+            WindowEvent::MouseInput { state, button, .. } => self.on_mouse_input(state, button),
+            WindowEvent::Occluded(is_occluded) => {
+                self.occluded = is_occluded;
+                if !is_occluded {
+                    self.mark_dirty();
+                }
+            }
+            WindowEvent::RedrawRequested => self.draw(),
+            _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.poll_pty();
+        if self.terminal.is_none() {
+            event_loop.exit();
+            return;
+        }
+        if self.content_dirty && !self.occluded {
+            self.request_redraw();
+        }
+        event_loop.set_control_flow(ControlFlow::wait_duration(POLL_INTERVAL));
+    }
+}
+
+fn main() {
+    env_logger::init();
+    let mut builder = EventLoop::builder();
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+        builder.with_activation_policy(ActivationPolicy::Regular);
+    }
+    let event_loop = builder.build().expect("failed to create event loop");
+    let mut app = App::new();
+    event_loop.run_app(&mut app).expect("event loop failed");
+}
