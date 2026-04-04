@@ -55,7 +55,7 @@ impl Pty {
     pub fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
         match unistd::read(&self.master, buf) {
             Ok(n) => Ok(n),
-            Err(nix::errno::Errno::EAGAIN | nix::errno::Errno::EWOULDBLOCK) => Ok(0),
+            Err(nix::errno::Errno::EAGAIN) => Ok(0),
             Err(e) => Err(io_err(e)),
         }
     }

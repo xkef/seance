@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::application::ApplicationHandler;
 use winit::event::{Modifiers, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
 use ghostty_renderer::{Renderer, RendererConfig, Terminal};
+use seance_gpu::GpuState;
 use seance_input::{Action, InputHandler};
 use seance_layout::{LayoutTree, PaneId};
 use seance_pty::Pty;
@@ -24,6 +24,7 @@ struct Pane {
 
 struct App {
     renderer: Option<Renderer>,
+    gpu: Option<GpuState>,
     window: Option<Arc<Window>>,
     panes: HashMap<PaneId, Pane>,
     layout: LayoutTree,
@@ -36,6 +37,7 @@ impl App {
     fn new() -> Self {
         Self {
             renderer: None,
+            gpu: None,
             window: None,
             panes: HashMap::new(),
             layout: LayoutTree::new(0, CELL_WIDTH, CELL_HEIGHT),
@@ -56,12 +58,19 @@ impl App {
         let ids: Vec<PaneId> = self.panes.keys().copied().collect();
         for id in ids {
             let pane = self.panes.get_mut(&id).unwrap();
-            match pane.pty.read(&mut buf) {
-                Ok(n) if n > 0 => {
-                    pane.terminal.vt_write(&buf[..n]);
+
+            loop {
+                match pane.pty.read(&mut buf) {
+                    Ok(n) if n > 0 => pane.terminal.vt_write(&buf[..n]),
+                    _ => break,
                 }
-                _ => {}
             }
+
+            let responses = pane.terminal.drain_responses();
+            if !responses.is_empty() {
+                let _ = pane.pty.write_all(responses);
+            }
+            pane.terminal.clear_responses();
         }
     }
 
@@ -88,18 +97,27 @@ impl ApplicationHandler for App {
         let size = window.inner_size();
         let scale = window.scale_factor();
 
-        let nsview = get_nsview(&window);
+        let native_handle = get_native_handle(&window);
 
-        let renderer = Renderer::new(&RendererConfig {
-            nsview,
+        let config = RendererConfig {
+            width_px: size.width,
+            height_px: size.height,
             content_scale: scale,
-            width: size.width,
-            height: size.height,
-            font_size: 0.0,
-        })
-        .expect("failed to create renderer");
+            ..Default::default()
+        };
+        let renderer =
+            Renderer::new(&config, native_handle).expect("failed to create renderer");
+
+        // Remove ghostty's IOSurfaceLayer so it doesn't cover our wgpu surface.
+        // ghostty attached it during Metal init; we only need the CPU-side
+        // cell buffers and atlas, not the Metal rendering.
+        remove_ghostty_layer(&window);
+
+        // Create wgpu state on the real window.
+        let gpu = pollster::block_on(GpuState::new(window.clone()));
 
         self.renderer = Some(renderer);
+        self.gpu = Some(gpu);
         self.window = Some(window);
 
         self.spawn_pane(0, DEFAULT_COLS, DEFAULT_ROWS);
@@ -107,6 +125,9 @@ impl ApplicationHandler for App {
         if let Some(pane) = self.panes.get(&0) {
             if let Some(r) = &self.renderer {
                 r.set_terminal(&pane.terminal);
+                // Catppuccin Mocha (hardcoded until theme loading works).
+                // Must be called AFTER set_terminal so colors propagate.
+                r.set_background(0x1e, 0x1e, 0x2e);
             }
         }
     }
@@ -121,6 +142,9 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => event_loop.exit(),
 
             WindowEvent::Resized(new_size) => {
+                if let Some(gpu) = &mut self.gpu {
+                    gpu.resize(new_size);
+                }
                 if let (Some(r), Some(w)) = (&self.renderer, &self.window) {
                     r.resize(new_size.width, new_size.height, w.scale_factor());
                 }
@@ -150,9 +174,31 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 self.pump_pty_io();
 
-                if let Some(r) = &self.renderer {
-                    r.update_frame();
-                    r.draw_frame();
+                if let (Some(renderer), Some(gpu)) = (&self.renderer, &mut self.gpu) {
+                    renderer.update_frame();
+                    let snapshot = renderer.frame_snapshot();
+
+                    let fd = snapshot.frame_data();
+                    let bg = snapshot.bg_cells();
+                    let text = snapshot.text_cells();
+                    let atlas_gs = snapshot.atlas_grayscale();
+                    let atlas_c = snapshot.atlas_color();
+
+                    static FRAME: std::sync::atomic::AtomicU32 =
+                        std::sync::atomic::AtomicU32::new(0);
+                    let frame = FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if frame < 3 || frame % 300 == 0 {
+                        log::info!(
+                            "frame={} grid={}x{} cell={:.1}x{:.1} text={} atlas={}px",
+                            frame,
+                            fd.grid_cols, fd.grid_rows,
+                            fd.cell_width, fd.cell_height,
+                            text.len(),
+                            atlas_gs.size,
+                        );
+                    }
+
+                    gpu.render_frame(&snapshot);
                 }
 
                 self.request_redraw();
@@ -164,7 +210,27 @@ impl ApplicationHandler for App {
 }
 
 #[cfg(target_os = "macos")]
-fn get_nsview(window: &Window) -> *mut std::ffi::c_void {
+fn remove_ghostty_layer(window: &Window) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+
+    let nsview = get_native_handle(window);
+    // SAFETY: ghostty attached an IOSurfaceLayer during Metal init.
+    // Remove it so wgpu can create its own layer on the same view.
+    unsafe {
+        let view: *mut AnyObject = nsview.cast();
+        let _: () = msg_send![view, setWantsLayer: false];
+        let nil: *mut AnyObject = std::ptr::null_mut();
+        let _: () = msg_send![view, setLayer: nil];
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn remove_ghostty_layer(_window: &Window) {}
+
+#[cfg(target_os = "macos")]
+fn get_native_handle(window: &Window) -> *mut std::ffi::c_void {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     let handle = window.window_handle().expect("no window handle");
     match handle.as_raw() {
         RawWindowHandle::AppKit(h) => h.ns_view.as_ptr(),
@@ -173,7 +239,7 @@ fn get_nsview(window: &Window) -> *mut std::ffi::c_void {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn get_nsview(_window: &Window) -> *mut std::ffi::c_void {
+fn get_native_handle(_window: &Window) -> *mut std::ffi::c_void {
     panic!("libghostty-renderer currently requires macOS");
 }
 
