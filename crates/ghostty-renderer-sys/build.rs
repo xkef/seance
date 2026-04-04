@@ -11,8 +11,6 @@ fn main() {
                 .unwrap()
                 .parent()
                 .unwrap()
-                .parent()
-                .unwrap()
                 .join("ghostty")
         });
 

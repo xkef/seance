@@ -22,6 +22,14 @@ pub enum Action {
     Ignore,
 }
 
+/// Terminal modes that affect input encoding.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TerminalModes {
+    pub cursor_keys: bool,
+    pub mouse_event: i32,
+    pub mouse_format_sgr: bool,
+}
+
 pub struct InputHandler {
     mode: Mode,
 }
@@ -35,19 +43,47 @@ impl InputHandler {
         self.mode
     }
 
-    pub fn handle_key(&mut self, event: &KeyEvent, modifiers: &winit::event::Modifiers) -> Action {
+    pub fn handle_key(
+        &mut self,
+        event: &KeyEvent,
+        modifiers: &winit::event::Modifiers,
+        term_modes: TerminalModes,
+    ) -> Action {
         if event.state != ElementState::Pressed {
             return Action::Ignore;
         }
 
         match self.mode {
-            Mode::Normal => self.handle_normal(event, modifiers),
+            Mode::Normal => self.handle_normal(event, modifiers, term_modes),
             Mode::Prefix => self.handle_prefix(event),
             Mode::Copy => Action::Ignore,
         }
     }
 
-    fn handle_normal(&mut self, event: &KeyEvent, modifiers: &winit::event::Modifiers) -> Action {
+    pub fn encode_mouse_wheel(&self, lines: i32, term_modes: TerminalModes) -> Option<Vec<u8>> {
+        if term_modes.mouse_event == 0 {
+            return None;
+        }
+        let mut out = Vec::new();
+        let count = lines.unsigned_abs();
+        for _ in 0..count {
+            if term_modes.mouse_format_sgr {
+                let button = if lines > 0 { 64 } else { 65 };
+                out.extend_from_slice(format!("\x1b[<{};1;1M", button).as_bytes());
+            } else {
+                let button: u8 = if lines > 0 { 64 + 32 } else { 65 + 32 };
+                out.extend_from_slice(&[b'\x1b', b'[', b'M', button, b'!', b'!']);
+            }
+        }
+        Some(out)
+    }
+
+    fn handle_normal(
+        &mut self,
+        event: &KeyEvent,
+        modifiers: &winit::event::Modifiers,
+        term_modes: TerminalModes,
+    ) -> Action {
         let ctrl = modifiers.state().control_key();
 
         if ctrl {
@@ -57,7 +93,7 @@ impl InputHandler {
             }
         }
 
-        let bytes = key_to_bytes(event, modifiers);
+        let bytes = key_to_bytes(event, modifiers, term_modes);
         if bytes.is_empty() {
             Action::Ignore
         } else {
@@ -90,8 +126,16 @@ impl InputHandler {
     }
 }
 
-fn key_to_bytes(event: &KeyEvent, modifiers: &winit::event::Modifiers) -> Vec<u8> {
+fn key_to_bytes(
+    event: &KeyEvent,
+    modifiers: &winit::event::Modifiers,
+    term_modes: TerminalModes,
+) -> Vec<u8> {
     let ctrl = modifiers.state().control_key();
+
+    // Application cursor mode (DECCKM) changes the CSI introducer
+    // from `[` to `O` for arrow/home/end keys.
+    let csi = if term_modes.cursor_keys { b'O' } else { b'[' };
 
     match &event.logical_key {
         Key::Named(named) => match named {
@@ -99,15 +143,28 @@ fn key_to_bytes(event: &KeyEvent, modifiers: &winit::event::Modifiers) -> Vec<u8
             NamedKey::Backspace => b"\x7f".to_vec(),
             NamedKey::Tab => b"\t".to_vec(),
             NamedKey::Escape => b"\x1b".to_vec(),
-            NamedKey::ArrowUp => b"\x1b[A".to_vec(),
-            NamedKey::ArrowDown => b"\x1b[B".to_vec(),
-            NamedKey::ArrowRight => b"\x1b[C".to_vec(),
-            NamedKey::ArrowLeft => b"\x1b[D".to_vec(),
-            NamedKey::Home => b"\x1b[H".to_vec(),
-            NamedKey::End => b"\x1b[F".to_vec(),
+            NamedKey::Space => b" ".to_vec(),
+            NamedKey::ArrowUp => vec![b'\x1b', csi, b'A'],
+            NamedKey::ArrowDown => vec![b'\x1b', csi, b'B'],
+            NamedKey::ArrowRight => vec![b'\x1b', csi, b'C'],
+            NamedKey::ArrowLeft => vec![b'\x1b', csi, b'D'],
+            NamedKey::Home => vec![b'\x1b', csi, b'H'],
+            NamedKey::End => vec![b'\x1b', csi, b'F'],
             NamedKey::Delete => b"\x1b[3~".to_vec(),
             NamedKey::PageUp => b"\x1b[5~".to_vec(),
             NamedKey::PageDown => b"\x1b[6~".to_vec(),
+            NamedKey::F1 => b"\x1bOP".to_vec(),
+            NamedKey::F2 => b"\x1bOQ".to_vec(),
+            NamedKey::F3 => b"\x1bOR".to_vec(),
+            NamedKey::F4 => b"\x1bOS".to_vec(),
+            NamedKey::F5 => b"\x1b[15~".to_vec(),
+            NamedKey::F6 => b"\x1b[17~".to_vec(),
+            NamedKey::F7 => b"\x1b[18~".to_vec(),
+            NamedKey::F8 => b"\x1b[19~".to_vec(),
+            NamedKey::F9 => b"\x1b[20~".to_vec(),
+            NamedKey::F10 => b"\x1b[21~".to_vec(),
+            NamedKey::F11 => b"\x1b[23~".to_vec(),
+            NamedKey::F12 => b"\x1b[24~".to_vec(),
             _ => Vec::new(),
         },
         Key::Character(c) => {

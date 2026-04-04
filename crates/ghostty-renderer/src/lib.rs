@@ -352,8 +352,37 @@ impl Terminal {
             ScrollAction::PageUp => (3, 0),
             ScrollAction::PageDown => (4, 0),
         };
-        // SAFETY: `self.raw` is valid.
         unsafe { ffi::ghostty_terminal_scroll(self.raw.as_ptr(), action_id, delta) };
+    }
+
+    /// Whether DECCKM (application cursor keys) is active.
+    pub fn mode_cursor_keys(&self) -> bool {
+        unsafe { ffi::ghostty_terminal_mode_cursor_keys(self.raw.as_ptr()) }
+    }
+
+    /// Active mouse tracking mode (0=none, 9=X10, 1000/1002/1003).
+    pub fn mode_mouse_event(&self) -> i32 {
+        unsafe { ffi::ghostty_terminal_mode_mouse_event(self.raw.as_ptr()) }
+    }
+
+    /// Whether SGR mouse format (mode 1006) is active.
+    pub fn mode_mouse_format_sgr(&self) -> bool {
+        unsafe { ffi::ghostty_terminal_mode_mouse_format_sgr(self.raw.as_ptr()) }
+    }
+
+    /// Whether synchronized output (mode 2026) is active.
+    pub fn mode_synchronized_output(&self) -> bool {
+        unsafe { ffi::ghostty_terminal_mode_synchronized_output(self.raw.as_ptr()) }
+    }
+
+    /// Dump the current screen content as UTF-8 text.
+    pub fn dump_screen(&self) -> String {
+        let mut buf = vec![0u8; 64 * 1024];
+        let len = unsafe {
+            ffi::ghostty_terminal_dump_screen(self.raw.as_ptr(), buf.as_mut_ptr(), buf.len())
+        };
+        buf.truncate(len);
+        String::from_utf8_lossy(&buf).into_owned()
     }
 }
 

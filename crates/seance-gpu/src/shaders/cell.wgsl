@@ -6,7 +6,7 @@ struct Uniforms {
     cell_size: vec2<f32>,
     grid_size: vec2<u32>,
     grid_padding: vec4<f32>, // left, top, right, bottom
-    bg_color: vec4<f32>,     // premultiplied linear RGBA
+    bg_color: vec4<f32>,     // linear RGBA
     min_contrast: f32,
     cursor_pos: vec2<u32>,
     cursor_color: vec4<f32>,
@@ -26,10 +26,6 @@ struct FullScreenOut {
 @vertex
 fn vs_fullscreen(@builtin(vertex_index) vid: u32) -> FullScreenOut {
     var out: FullScreenOut;
-    // Single triangle covering the viewport:
-    //   vid 0: (-1, -3)
-    //   vid 1: (-1,  1)
-    //   vid 2: ( 3,  1)
     let x = select(-1.0, 3.0, vid == 2u);
     let y = select(1.0, -3.0, vid == 0u);
     out.position = vec4<f32>(x, y, 0.0, 1.0);
@@ -134,9 +130,7 @@ fn vs_cell_text(
 @fragment
 fn fs_cell_text(in: CellTextOut) -> @location(0) vec4<f32> {
     if in.atlas == 0u {
-        // Grayscale atlas: text glyphs.
-        // The atlas stores coverage alpha. The color comes from
-        // the vertex (set by ghostty's cell rebuilder).
+        // Grayscale atlas: coverage alpha. Color from vertex.
         let gs_size = vec2<f32>(textureDimensions(atlas_grayscale));
         let uv = in.tex_coord / gs_size;
         let a = textureSample(atlas_grayscale, atlas_sampler, uv).r;

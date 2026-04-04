@@ -131,6 +131,11 @@ unsafe extern "C" {
     pub fn ghostty_terminal_get_cursor(terminal: GhosttyTerminal, col: *mut u16, row: *mut u16, visible: *mut bool);
     pub fn ghostty_terminal_scroll(terminal: GhosttyTerminal, action: i32, delta: i32);
     pub fn ghostty_terminal_get_scrollback_rows(terminal: GhosttyTerminal) -> usize;
+    pub fn ghostty_terminal_mode_cursor_keys(terminal: GhosttyTerminal) -> bool;
+    pub fn ghostty_terminal_mode_mouse_event(terminal: GhosttyTerminal) -> i32;
+    pub fn ghostty_terminal_mode_mouse_format_sgr(terminal: GhosttyTerminal) -> bool;
+    pub fn ghostty_terminal_mode_synchronized_output(terminal: GhosttyTerminal) -> bool;
+    pub fn ghostty_terminal_dump_screen(terminal: GhosttyTerminal, buf: *mut u8, buf_len: usize) -> usize;
     pub fn ghostty_free(ptr: *mut c_void);
 }
 
