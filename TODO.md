@@ -1,0 +1,3 @@
+- full keyboard support (e.g. cmd-v for pasting, platform specific)
+- remove window decorations
+- make it look 1to1 and have better settings (vim should look the same)
