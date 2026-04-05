@@ -36,7 +36,47 @@ impl GpuState {
     pub(crate) async fn new(window: Arc<winit::window::Window>) -> Self {
         let size = window.inner_size();
         let instance = Instance::default();
-        let surface = instance.create_surface(window).unwrap();
+        let surface = instance.create_surface(window.clone()).unwrap();
+
+        // Tell the CAMetalLayer to present frames as part of the
+        // CoreAnimation transaction. Without this, macOS stretches
+        // the previous frame to fill the new window size during live
+        // resize, causing visible font distortion.
+        #[cfg(target_os = "macos")]
+        {
+            use objc2::msg_send;
+            use objc2::runtime::{AnyClass, AnyObject};
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+            let handle = window.window_handle().expect("no window handle");
+            if let RawWindowHandle::AppKit(h) = handle.as_raw() {
+                unsafe {
+                    let view: *mut AnyObject = h.ns_view.as_ptr().cast();
+                    let layer: *mut AnyObject = msg_send![view, layer];
+                    if !layer.is_null() {
+                        // wgpu's CAMetalLayer is a sublayer of the view's
+                        // backing layer, not the layer itself.
+                        if let Some(metal_class) = AnyClass::get("CAMetalLayer") {
+                            let sublayers: *mut AnyObject = msg_send![layer, sublayers];
+                            if !sublayers.is_null() {
+                                let count: usize = msg_send![sublayers, count];
+                                for i in 0..count {
+                                    let sub: *mut AnyObject =
+                                        msg_send![sublayers, objectAtIndex: i];
+                                    let is_metal: bool =
+                                        msg_send![sub, isKindOfClass: metal_class];
+                                    if is_metal {
+                                        let _: () =
+                                            msg_send![sub, setPresentsWithTransaction: true];
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         let adapter = instance
             .request_adapter(&RequestAdapterOptions {
@@ -59,10 +99,13 @@ impl GpuState {
             .expect("failed to create device");
 
         let caps = surface.get_capabilities(&adapter);
+        // Use a non-sRGB format so alpha blending happens in gamma/sRGB
+        // space ("native" blending). This matches Ghostty's default on
+        // macOS and produces the expected text weight.
         let format = caps
             .formats
             .iter()
-            .find(|f| f.is_srgb())
+            .find(|f| !f.is_srgb())
             .copied()
             .unwrap_or(caps.formats[0]);
 
@@ -337,7 +380,7 @@ impl GpuState {
     ) -> bool {
         let bpp: u32 = match format {
             TextureFormat::R8Unorm => 1,
-            TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => 4,
+            TextureFormat::Bgra8Unorm => 4,
             _ => panic!("unsupported atlas format"),
         };
         let tex_size = Extent3d {
@@ -394,7 +437,7 @@ impl GpuState {
         let resized = Self::write_atlas(
             &self.device, &self.queue,
             &mut self.atlas_color_texture,
-            data, size, TextureFormat::Bgra8UnormSrgb, "atlas_color",
+            data, size, TextureFormat::Bgra8Unorm, "atlas_color",
         );
         if resized {
             self.atlas_bind_group = None;
@@ -432,7 +475,7 @@ impl GpuState {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: TextureDimension::D2,
-                    format: TextureFormat::Bgra8UnormSrgb,
+                    format: TextureFormat::Bgra8Unorm,
                     usage: TextureUsages::TEXTURE_BINDING,
                     view_formats: &[],
                 });
