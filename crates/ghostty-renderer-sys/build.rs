@@ -29,15 +29,32 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static=ghostty-renderer");
 
-    println!("cargo:rustc-link-lib=framework=Foundation");
-    println!("cargo:rustc-link-lib=framework=CoreFoundation");
-    println!("cargo:rustc-link-lib=framework=CoreGraphics");
-    println!("cargo:rustc-link-lib=framework=CoreText");
-    println!("cargo:rustc-link-lib=framework=CoreVideo");
-    println!("cargo:rustc-link-lib=framework=QuartzCore");
-    println!("cargo:rustc-link-lib=framework=IOSurface");
-    println!("cargo:rustc-link-lib=framework=Metal");
-    println!("cargo:rustc-link-lib=c++");
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    match target_os.as_str() {
+        "macos" => {
+            println!("cargo:rustc-link-lib=framework=Foundation");
+            println!("cargo:rustc-link-lib=framework=CoreFoundation");
+            println!("cargo:rustc-link-lib=framework=CoreGraphics");
+            println!("cargo:rustc-link-lib=framework=CoreText");
+            println!("cargo:rustc-link-lib=framework=CoreVideo");
+            println!("cargo:rustc-link-lib=framework=QuartzCore");
+            println!("cargo:rustc-link-lib=framework=IOSurface");
+            println!("cargo:rustc-link-lib=framework=Metal");
+            println!("cargo:rustc-link-lib=c++");
+        }
+        "linux" => {
+            // The ghostty renderer uses freetype, harfbuzz, and fontconfig
+            // for font loading/shaping. These are linked dynamically.
+            println!("cargo:rustc-link-lib=dylib=freetype");
+            println!("cargo:rustc-link-lib=dylib=harfbuzz");
+            println!("cargo:rustc-link-lib=dylib=fontconfig");
+            println!("cargo:rustc-link-lib=dylib=c");
+        }
+        other => {
+            eprintln!("unsupported target OS: {other}");
+            std::process::exit(1);
+        }
+    }
 
     println!("cargo:include={}", include_dir.display());
     println!("cargo:rerun-if-changed=build.rs");

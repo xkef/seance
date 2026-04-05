@@ -8,7 +8,7 @@ use winit::event::{Modifiers, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
-use ghostty_renderer::{Renderer, RendererConfig, Terminal};
+use ghostty_renderer::{Blending, Color, Renderer, RendererConfig, Terminal};
 use seance_gpu::GpuState;
 use seance_input::{Action, InputHandler};
 use seance_layout::{LayoutTree, PaneId};
@@ -160,6 +160,7 @@ impl ApplicationHandler for App {
             width_px: size.width,
             height_px: size.height,
             content_scale: scale,
+            alpha_blending: Blending::Linear,
             ..Default::default()
         };
         let renderer =
@@ -191,7 +192,7 @@ impl ApplicationHandler for App {
 
         if let Some(r) = &self.renderer {
             r.set_terminal(view.terminal());
-            r.set_background(0x1e, 0x1e, 0x2e);
+            r.set_background(Color { r: 0x1e, g: 0x1e, b: 0x2e });
         }
 
         self.panes.insert(0, view);
@@ -365,7 +366,9 @@ fn get_native_handle(window: &Window) -> *mut std::ffi::c_void {
 
 #[cfg(not(target_os = "macos"))]
 fn get_native_handle(_window: &Window) -> *mut std::ffi::c_void {
-    panic!("libghostty-renderer currently requires macOS");
+    // Level 2 (consumer-draws): no native surface handle needed.
+    // The renderer produces cell buffers; we own the GPU pipeline via wgpu.
+    std::ptr::null_mut()
 }
 
 fn main() {

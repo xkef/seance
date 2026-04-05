@@ -42,6 +42,78 @@ fn linearize(color: vec4<f32>) -> vec4<f32> {
     );
 }
 
+fn linear_to_srgb_component(c: f32) -> f32 {
+    if c <= 0.0031308 {
+        return c * 12.92;
+    }
+    return 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+}
+
+// ================================================================
+// Min-contrast (WCAG relative luminance)
+// ================================================================
+
+fn luminance(linear_rgb: vec3<f32>) -> f32 {
+    return dot(linear_rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+}
+
+fn contrast_ratio(l1: f32, l2: f32) -> f32 {
+    let lighter = max(l1, l2);
+    let darker = min(l1, l2);
+    return (lighter + 0.05) / (darker + 0.05);
+}
+
+/// Adjust foreground color to meet minimum contrast against background.
+/// Both colors must be in linear space. Returns adjusted fg in linear space.
+fn apply_min_contrast(fg: vec3<f32>, bg: vec3<f32>, min_ratio: f32) -> vec3<f32> {
+    if min_ratio <= 1.0 {
+        return fg;
+    }
+
+    let fg_lum = luminance(fg);
+    let bg_lum = luminance(bg);
+
+    if contrast_ratio(fg_lum, bg_lum) >= min_ratio {
+        return fg;
+    }
+
+    // Determine target luminance. Try lighter first, then darker.
+    // target_lighter: (target + 0.05) / (bg_lum + 0.05) = min_ratio
+    let target_lighter = min_ratio * (bg_lum + 0.05) - 0.05;
+    // target_darker: (bg_lum + 0.05) / (target + 0.05) = min_ratio
+    let target_darker = (bg_lum + 0.05) / min_ratio - 0.05;
+
+    var target_lum: f32;
+    if target_lighter <= 1.0 {
+        target_lum = target_lighter;
+    } else if target_darker >= 0.0 {
+        target_lum = target_darker;
+    } else {
+        // Can't achieve the ratio either way; pick the best we can.
+        target_lum = select(0.0, 1.0, abs(target_lighter - fg_lum) < abs(target_darker - fg_lum));
+    }
+
+    // Scale the linear color to match target luminance.
+    if fg_lum > 0.001 {
+        let scale = target_lum / fg_lum;
+        let adjusted = clamp(fg * scale, vec3<f32>(0.0), vec3<f32>(1.0));
+        // If scaling saturated a channel, do a final luminance fixup via mix with white/black.
+        let adj_lum = luminance(adjusted);
+        if abs(adj_lum - target_lum) > 0.01 {
+            if target_lum > adj_lum {
+                let t = (target_lum - adj_lum) / (1.0 - adj_lum + 0.001);
+                return mix(adjusted, vec3<f32>(1.0), clamp(t, 0.0, 1.0));
+            } else {
+                let t = (adj_lum - target_lum) / (adj_lum + 0.001);
+                return mix(adjusted, vec3<f32>(0.0), clamp(t, 0.0, 1.0));
+            }
+        }
+        return adjusted;
+    }
+    // fg is near-black; mix toward white.
+    return vec3<f32>(target_lum);
+}
+
 // ================================================================
 // Full-screen vertex (used by bg_color and cell_bg passes)
 // ================================================================
@@ -121,6 +193,7 @@ struct CellTextOut {
     @location(0) tex_coord: vec2<f32>,
     @location(1) @interpolate(flat) color: vec4<f32>,
     @location(2) @interpolate(flat) atlas: u32,
+    @location(3) @interpolate(flat) bg_color_linear: vec3<f32>,
 }
 
 @group(2) @binding(0) var atlas_grayscale: texture_2d<f32>;
@@ -157,12 +230,21 @@ fn vs_cell_text(
         color = uniforms.cursor_color;
     }
 
+    // Look up the cell's background color for min-contrast.
+    let bg_idx = instance.grid_pos.y * uniforms.grid_size.x + instance.grid_pos.x;
+    let bg_packed = bg_cells[bg_idx];
+    let bg_srgb = unpack_rgba(bg_packed);
+    let bg_linear = linearize(bg_srgb).rgb;
+    // If cell bg is transparent, fall back to the surface bg color.
+    let effective_bg = select(bg_linear, linearize(uniforms.bg_color).rgb, bg_srgb.a < 0.01);
+
     var out: CellTextOut;
     out.position = uniforms.projection * vec4<f32>(world_pos, 0.0, 1.0);
     out.tex_coord = vec2<f32>(f32(instance.glyph_pos.x), f32(instance.glyph_pos.y))
                   + vec2<f32>(f32(instance.glyph_size.x), f32(instance.glyph_size.y)) * corner;
     out.color = linearize(color);
     out.atlas = instance.atlas_and_flags & 0xFFu;
+    out.bg_color_linear = effective_bg;
 
     return out;
 }
@@ -174,8 +256,12 @@ fn fs_cell_text(in: CellTextOut) -> @location(0) vec4<f32> {
         let gs_size = vec2<f32>(textureDimensions(atlas_grayscale));
         let uv = in.tex_coord / gs_size;
         let a = textureSample(atlas_grayscale, atlas_sampler, uv).r;
+
+        // Apply min-contrast adjustment against the cell's background.
+        let fg = apply_min_contrast(in.color.rgb, in.bg_color_linear, uniforms.min_contrast);
+
         let alpha = a * in.color.a;
-        return vec4<f32>(in.color.rgb * alpha, alpha);
+        return vec4<f32>(fg * alpha, alpha);
     } else {
         // Color atlas: emoji. Texture is Bgra8UnormSrgb so hardware
         // auto-linearizes on sample. Already premultiplied.
