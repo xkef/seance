@@ -2,7 +2,7 @@
 
 use wgpu::*;
 
-use crate::uniforms::Uniforms;
+use super::uniforms::Uniforms;
 
 /// All render pipelines and bind group layouts used by the renderer.
 pub(crate) struct Pipelines {
@@ -21,7 +21,6 @@ impl Pipelines {
             source: ShaderSource::Wgsl(include_str!("shaders/cell.wgsl").into()),
         });
 
-        // Bind group layout 0: uniforms (shared by all passes)
         let uniform_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("uniform_bgl"),
             entries: &[BindGroupLayoutEntry {
@@ -38,7 +37,6 @@ impl Pipelines {
             }],
         });
 
-        // Bind group layout 1: cell backgrounds (storage buffer)
         let bg_cells_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("bg_cells_bgl"),
             entries: &[BindGroupLayoutEntry {
@@ -53,7 +51,6 @@ impl Pipelines {
             }],
         });
 
-        // Bind group layout 2: atlas textures
         let atlas_bgl = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("atlas_bgl"),
             entries: &[
@@ -175,42 +172,35 @@ impl Pipelines {
             cache: None,
         });
 
-        // Instance buffer layout for CellText (32 bytes per instance)
         let cell_text_instance_layout = VertexBufferLayout {
             array_stride: 32,
             step_mode: VertexStepMode::Instance,
             attributes: &[
-                // glyph_pos: vec2<u32> at offset 0
                 VertexAttribute {
                     format: VertexFormat::Uint32x2,
                     offset: 0,
                     shader_location: 0,
                 },
-                // glyph_size: vec2<u32> at offset 8
                 VertexAttribute {
                     format: VertexFormat::Uint32x2,
                     offset: 8,
                     shader_location: 1,
                 },
-                // bearings: [2]i16 at offset 16 -> vec2<i32> in shader
                 VertexAttribute {
                     format: VertexFormat::Sint16x2,
                     offset: 16,
                     shader_location: 2,
                 },
-                // grid_pos: [2]u16 at offset 20 -> vec2<u32> in shader
                 VertexAttribute {
                     format: VertexFormat::Uint16x2,
                     offset: 20,
                     shader_location: 3,
                 },
-                // color: vec4<f32> at offset 24 (u8x4 -> unorm)
                 VertexAttribute {
                     format: VertexFormat::Unorm8x4,
                     offset: 24,
                     shader_location: 4,
                 },
-                // atlas + flags: u32 at offset 28 (u8 + u8 packed)
                 VertexAttribute {
                     format: VertexFormat::Uint32,
                     offset: 28,

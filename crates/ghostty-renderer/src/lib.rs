@@ -22,6 +22,14 @@ pub use ffi::GhosttyRendererConfig as RendererConfig;
 pub use ffi::GhosttyRendererCellText as CellText;
 pub use ffi::GhosttyRendererFrameData as FrameData;
 
+// Re-export enums and basic types so consumers don't need `ghostty_renderer_sys`.
+pub use ffi::GhosttyBlending as Blending;
+pub use ffi::GhosttyColor as Color;
+pub use ffi::GhosttyColorspace as Colorspace;
+pub use ffi::GhosttyOptColor as OptColor;
+pub use ffi::GhosttyPaddingColor as PaddingColor;
+pub use ffi::GhosttyScrollAction;
+
 /// GPU terminal renderer backed by libghostty-renderer.
 ///
 /// Manages font loading, text shaping, glyph atlas, and cell buffer
@@ -94,21 +102,43 @@ impl Renderer {
         FrameSnapshot { renderer: self }
     }
 
+    // -- Theme --
+
+    /// Load a named theme (searches Ghostty's built-in theme list).
+    pub fn load_theme(&self, name: &std::ffi::CStr) -> bool {
+        unsafe { ffi::ghostty_renderer_load_theme(self.raw.as_ptr(), name.as_ptr()) }
+    }
+
+    /// Load a theme from a file path.
+    pub fn load_theme_file(&self, path: &std::ffi::CStr) -> bool {
+        unsafe { ffi::ghostty_renderer_load_theme_file(self.raw.as_ptr(), path.as_ptr()) }
+    }
+
     // -- Runtime config --
 
-    pub fn set_background(&self, r: u8, g: u8, b: u8) {
-        // SAFETY: `self.raw` is a valid handle.
-        unsafe { ffi::ghostty_renderer_set_background(self.raw.as_ptr(), r, g, b) };
+    pub fn set_font_size(&self, points: f32) {
+        unsafe { ffi::ghostty_renderer_set_font_size(self.raw.as_ptr(), points) };
+    }
+
+    pub fn set_background(&self, color: Color) {
+        unsafe { ffi::ghostty_renderer_set_background(self.raw.as_ptr(), color) };
+    }
+
+    pub fn set_foreground(&self, color: Color) {
+        unsafe { ffi::ghostty_renderer_set_foreground(self.raw.as_ptr(), color) };
     }
 
     pub fn set_background_opacity(&self, opacity: f32) {
-        // SAFETY: `self.raw` is a valid handle.
         unsafe { ffi::ghostty_renderer_set_background_opacity(self.raw.as_ptr(), opacity) };
     }
 
     pub fn set_min_contrast(&self, contrast: f32) {
-        // SAFETY: `self.raw` is a valid handle.
         unsafe { ffi::ghostty_renderer_set_min_contrast(self.raw.as_ptr(), contrast) };
+    }
+
+    /// Set the 256-color palette. `palette` must contain exactly 256 entries.
+    pub fn set_palette(&self, palette: &[Color; 256]) {
+        unsafe { ffi::ghostty_renderer_set_palette(self.raw.as_ptr(), palette.as_ptr()) };
     }
 }
 
@@ -252,6 +282,7 @@ pub struct AtlasTexture<'a> {
 // ============================================================
 
 /// Scroll direction for `Terminal::scroll`.
+#[derive(Debug, Clone, Copy)]
 pub enum ScrollAction {
     Lines(i32),
     Top,
@@ -260,7 +291,20 @@ pub enum ScrollAction {
     PageDown,
 }
 
+impl ScrollAction {
+    fn to_ffi(self) -> (GhosttyScrollAction, i32) {
+        match self {
+            ScrollAction::Lines(d) => (GhosttyScrollAction::Lines, d),
+            ScrollAction::Top => (GhosttyScrollAction::Top, 0),
+            ScrollAction::Bottom => (GhosttyScrollAction::Bottom, 0),
+            ScrollAction::PageUp => (GhosttyScrollAction::PageUp, 0),
+            ScrollAction::PageDown => (GhosttyScrollAction::PageDown, 0),
+        }
+    }
+}
+
 /// Cursor state returned by `Terminal::cursor`.
+#[derive(Debug, Clone, Copy)]
 pub struct CursorState {
     pub col: u16,
     pub row: u16,
@@ -289,14 +333,14 @@ impl Terminal {
     }
 
     /// Feed raw bytes (PTY output) into the VT parser.
-    pub fn vt_write(&self, data: &[u8]) {
+    pub fn vt_write(&mut self, data: &[u8]) {
         // SAFETY: `self.raw` is valid. `data` is a valid slice.
         // The C function reads `len` bytes from `data.as_ptr()`.
         unsafe { ffi::ghostty_terminal_vt_write(self.raw.as_ptr(), data.as_ptr(), data.len()) };
     }
 
     /// Resize the terminal grid.
-    pub fn resize(&self, cols: u16, rows: u16) {
+    pub fn resize(&mut self, cols: u16, rows: u16) {
         // SAFETY: `self.raw` is valid.
         unsafe { ffi::ghostty_terminal_resize(self.raw.as_ptr(), cols, rows) };
     }
@@ -305,8 +349,9 @@ impl Terminal {
     /// (e.g. device attribute replies, size reports).
     ///
     /// Returns an empty slice if there are no pending responses.
-    /// The returned data is valid until the next `vt_write` or `drain_responses` call.
-    pub fn drain_responses(&self) -> &[u8] {
+    /// The returned data is valid until the next mutating call (`vt_write`,
+    /// `resize`, `clear_responses`). Taking `&mut self` prevents aliasing.
+    pub fn drain_responses(&mut self) -> &[u8] {
         let mut len: usize = 0;
         // SAFETY: `self.raw` is valid. `len` is a valid output pointer.
         let ptr = unsafe { ffi::ghostty_terminal_drain_responses(self.raw.as_ptr(), &mut len) };
@@ -314,12 +359,12 @@ impl Terminal {
             return &[];
         }
         // SAFETY: the C function returns a pointer to `len` bytes in the
-        // terminal's response buffer. Valid until the next mutating call.
+        // terminal's response buffer. Valid for `'_` (the reborrow of `self`).
         unsafe { std::slice::from_raw_parts(ptr, len) }
     }
 
     /// Clear the response buffer.
-    pub fn clear_responses(&self) {
+    pub fn clear_responses(&mut self) {
         // SAFETY: `self.raw` is valid.
         unsafe { ffi::ghostty_terminal_clear_responses(self.raw.as_ptr()) };
     }
@@ -344,15 +389,25 @@ impl Terminal {
     }
 
     /// Scroll the terminal viewport.
-    pub fn scroll(&self, action: ScrollAction) {
-        let (action_id, delta) = match action {
-            ScrollAction::Lines(d) => (0, d),
-            ScrollAction::Top => (1, 0),
-            ScrollAction::Bottom => (2, 0),
-            ScrollAction::PageUp => (3, 0),
-            ScrollAction::PageDown => (4, 0),
-        };
-        unsafe { ffi::ghostty_terminal_scroll(self.raw.as_ptr(), action_id, delta) };
+    pub fn scroll(&mut self, action: ScrollAction) {
+        let (ffi_action, delta) = action.to_ffi();
+        unsafe { ffi::ghostty_terminal_scroll(self.raw.as_ptr(), ffi_action, delta) };
+    }
+
+    /// Number of scrollback rows currently available.
+    pub fn scrollback_rows(&self) -> usize {
+        unsafe { ffi::ghostty_terminal_get_scrollback_rows(self.raw.as_ptr()) }
+    }
+
+    /// Get the terminal title (set via OSC 0/2).
+    pub fn title(&self) -> Option<String> {
+        let mut len: usize = 0;
+        let ptr = unsafe { ffi::ghostty_terminal_get_title(self.raw.as_ptr(), &mut len) };
+        if ptr.is_null() || len == 0 {
+            return None;
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), len) };
+        Some(String::from_utf8_lossy(bytes).into_owned())
     }
 
     /// Whether DECCKM (application cursor keys) is active.
@@ -376,7 +431,7 @@ impl Terminal {
     }
 
     /// Dump the current screen content as UTF-8 text.
-    pub fn dump_screen(&self) -> String {
+    pub fn dump_screen(&mut self) -> String {
         let mut buf = vec![0u8; 64 * 1024];
         let len = unsafe {
             ffi::ghostty_terminal_dump_screen(self.raw.as_ptr(), buf.as_mut_ptr(), buf.len())

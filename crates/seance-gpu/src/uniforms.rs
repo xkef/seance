@@ -1,5 +1,7 @@
 //! GPU uniform buffer types matching the WGSL shader layout.
 
+use ghostty_renderer::FrameData;
+
 /// Uniform buffer sent to all shader passes.
 ///
 /// Layout must match the `Uniforms` struct in `cell.wgsl` exactly.
@@ -24,6 +26,25 @@ pub struct Uniforms {
 }
 
 impl Uniforms {
+    /// Build uniforms from a ghostty `FrameData` snapshot and the current
+    /// surface size. This is the single source of truth for uniform
+    /// construction — both full and bg-only render paths use it.
+    pub fn from_frame_data(fd: &FrameData, surface_width: f32, surface_height: f32) -> Self {
+        Self {
+            projection: Self::ortho(surface_width, surface_height),
+            cell_size: [fd.cell_width, fd.cell_height],
+            grid_size: [fd.grid_cols as u32, fd.grid_rows as u32],
+            grid_padding: fd.grid_padding,
+            bg_color: u8x4_to_f32(fd.bg_color),
+            min_contrast: fd.min_contrast,
+            _pad0: 0,
+            cursor_pos: [fd.cursor_pos[0] as u32, fd.cursor_pos[1] as u32],
+            cursor_color: u8x4_to_f32(fd.cursor_color),
+            cursor_wide: if fd.cursor_wide { 1 } else { 0 },
+            _pad1: [0; 3],
+        }
+    }
+
     /// Build an orthographic projection matrix for the given screen size.
     ///
     /// Maps (0,0) at top-left to (width, height) at bottom-right,
@@ -37,4 +58,13 @@ impl Uniforms {
             [-1.0, 1.0, 0.0, 1.0],
         ]
     }
+}
+
+fn u8x4_to_f32(c: [u8; 4]) -> [f32; 4] {
+    [
+        c[0] as f32 / 255.0,
+        c[1] as f32 / 255.0,
+        c[2] as f32 / 255.0,
+        c[3] as f32 / 255.0,
+    ]
 }

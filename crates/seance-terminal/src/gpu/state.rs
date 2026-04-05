@@ -7,11 +7,12 @@ use wgpu::util::DeviceExt;
 
 use ghostty_renderer::FrameSnapshot;
 
-use crate::pipeline::Pipelines;
-use crate::uniforms::Uniforms;
+use crate::renderer::Overlay;
+use super::pipeline::Pipelines;
+use super::uniforms::Uniforms;
 
 /// Manages the wgpu device, surface, pipelines, and per-frame GPU resources.
-pub struct GpuState {
+pub(crate) struct GpuState {
     surface: Surface<'static>,
     device: Device,
     queue: Queue,
@@ -32,8 +33,7 @@ pub struct GpuState {
 }
 
 impl GpuState {
-    /// Create the GPU state for a given window.
-    pub async fn new(window: Arc<winit::window::Window>) -> Self {
+    pub(crate) async fn new(window: Arc<winit::window::Window>) -> Self {
         let size = window.inner_size();
         let instance = Instance::default();
         let surface = instance.create_surface(window).unwrap();
@@ -59,10 +59,6 @@ impl GpuState {
             .expect("failed to create device");
 
         let caps = surface.get_capabilities(&adapter);
-        // Use an sRGB format so the GPU applies gamma encoding after
-        // blending. This matches Ghostty's default linear blending mode
-        // (bgra8unorm_srgb on Metal). All shader outputs are in linear
-        // space; the hardware converts to sRGB on write.
         let format = caps
             .formats
             .iter()
@@ -128,20 +124,16 @@ impl GpuState {
         }
     }
 
-    pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+    pub(crate) fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
             self.size = new_size;
             self.config.width = new_size.width;
             self.config.height = new_size.height;
-            // Defer configure to render_frame so the reconfigure and
-            // draw happen atomically, avoiding a blank flash.
             self.surface_dirty = true;
         }
     }
 
-    /// Render only the background color (no cell content). Used during
-    /// resize transitions to avoid showing a half-redrawn terminal.
-    pub fn render_frame_bg_only(&mut self, snapshot: &FrameSnapshot<'_>) -> bool {
+    pub(crate) fn render_frame_bg_only(&mut self, snapshot: &FrameSnapshot<'_>, overlay: &Overlay) -> bool {
         if self.surface_dirty {
             self.surface.configure(&self.device, &self.config);
             self.surface_dirty = false;
@@ -158,11 +150,7 @@ impl GpuState {
         };
 
         let fd = snapshot.frame_data();
-        let uniforms = Uniforms::from_frame_data(
-            &fd,
-            self.size.width as f32,
-            self.size.height as f32,
-        );
+        let uniforms = Uniforms::from_frame_data(&fd, self.size.width as f32, self.size.height as f32, overlay);
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         let view = output.texture.create_view(&TextureViewDescriptor::default());
@@ -198,17 +186,12 @@ impl GpuState {
         true
     }
 
-    /// Upload Level 2 data from a `FrameSnapshot` and render one frame.
-    pub fn render_frame(&mut self, snapshot: &FrameSnapshot<'_>) -> bool {
-        // Apply any deferred surface reconfiguration so the configure
-        // and draw happen in the same frame (no blank flash on resize).
+    pub(crate) fn render_frame(&mut self, snapshot: &FrameSnapshot<'_>, overlay: &Overlay) -> bool {
         if self.surface_dirty {
             self.surface.configure(&self.device, &self.config);
             self.surface_dirty = false;
         }
 
-        // Acquire the surface. This blocks on vsync, rate-limiting
-        // the upload+draw path to the display refresh rate.
         let output = match self.surface.get_current_texture() {
             CurrentSurfaceTexture::Success(frame)
             | CurrentSurfaceTexture::Suboptimal(frame) => frame,
@@ -219,33 +202,22 @@ impl GpuState {
             }
         };
 
-        // Build uniforms from frame data.
-        // Colors are sent as sRGB floats; the shader linearizes them
-        // before output. The sRGB surface format handles re-encoding.
         let fd = snapshot.frame_data();
-        let uniforms = Uniforms::from_frame_data(
-            &fd,
-            self.size.width as f32,
-            self.size.height as f32,
-        );
+        let uniforms = Uniforms::from_frame_data(&fd, self.size.width as f32, self.size.height as f32, overlay);
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        // Upload cell backgrounds
         let bg_cells = snapshot.bg_cells();
         if !bg_cells.is_empty() {
             let bg_data = bytemuck::cast_slice::<[u8; 4], u8>(bg_cells);
             self.upload_bg_cells(bg_data);
         }
 
-        // Upload text cell instances
         let text_cells = snapshot.text_cells();
         self.text_instance_count = text_cells.len() as u32;
         if !text_cells.is_empty() {
             self.upload_text_instances(bytemuck::cast_slice(text_cells));
         }
 
-        // Upload atlas textures. Reuses existing GPU textures via
-        // write_texture; only allocates new ones on atlas resize.
         let gs = snapshot.atlas_grayscale();
         if gs.size > 0 {
             self.upload_atlas_grayscale(gs.data, gs.size);
@@ -255,7 +227,6 @@ impl GpuState {
             self.upload_atlas_color(color.data, color.size);
         }
 
-        // Ensure atlas bind group exists (even with placeholder textures)
         self.ensure_atlas_bind_group();
 
         let view = output.texture.create_view(&TextureViewDescriptor::default());
@@ -298,13 +269,7 @@ impl GpuState {
             let have_inst = self.text_instance_buffer.is_some();
             let have_atlas = self.atlas_bind_group.is_some();
             let have_bg = self.bg_cells_bind_group.is_some();
-            if self.text_instance_count == 0 || !have_inst || !have_atlas || !have_bg {
-                log::debug!(
-                    "skip text: count={} inst={} atlas={} bg={}",
-                    self.text_instance_count, have_inst, have_atlas, have_bg
-                );
-            } else {
-                log::debug!("drawing {} text instances", self.text_instance_count);
+            if self.text_instance_count > 0 && have_inst && have_atlas && have_bg {
                 pass.set_pipeline(&self.pipelines.cell_text);
                 pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                 pass.set_bind_group(1, self.bg_cells_bind_group.as_ref().unwrap(), &[]);
@@ -321,10 +286,7 @@ impl GpuState {
 
     fn upload_bg_cells(&mut self, data: &[u8]) {
         let needed = data.len() as u64;
-        let recreate = self
-            .bg_cells_buffer
-            .as_ref()
-            .map_or(true, |b| b.size() < needed);
+        let recreate = self.bg_cells_buffer.as_ref().map_or(true, |b| b.size() < needed);
 
         if recreate {
             let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -349,10 +311,7 @@ impl GpuState {
 
     fn upload_text_instances(&mut self, data: &[u8]) {
         let needed = data.len() as u64;
-        let recreate = self
-            .text_instance_buffer
-            .as_ref()
-            .map_or(true, |b| b.size() < needed);
+        let recreate = self.text_instance_buffer.as_ref().map_or(true, |b| b.size() < needed);
 
         if recreate {
             self.text_instance_buffer = Some(
@@ -387,10 +346,7 @@ impl GpuState {
             depth_or_array_layers: 1,
         };
 
-        // Only allocate a new texture when the size changes.
-        let need_new = existing
-            .as_ref()
-            .map_or(true, |t| t.width() != size || t.height() != size);
+        let need_new = existing.as_ref().map_or(true, |t| t.width() != size || t.height() != size);
 
         if need_new {
             *existing = Some(device.create_texture(&TextureDescriptor {
@@ -435,8 +391,6 @@ impl GpuState {
     }
 
     fn upload_atlas_color(&mut self, data: &[u8], size: u32) {
-        // Use Bgra8UnormSrgb so the GPU auto-linearizes color emoji
-        // texels on sample, matching Ghostty's Metal renderer.
         let resized = Self::write_atlas(
             &self.device, &self.queue,
             &mut self.atlas_color_texture,
@@ -452,7 +406,6 @@ impl GpuState {
             return;
         }
 
-        // Create 1x1 placeholder textures if atlas hasn't been uploaded yet
         let grayscale_view = match &self.atlas_grayscale_texture {
             Some(t) => t.create_view(&TextureViewDescriptor::default()),
             None => {
@@ -507,4 +460,3 @@ impl GpuState {
         }));
     }
 }
-

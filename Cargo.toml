@@ -6,7 +6,7 @@ members = [
     "crates/seance-pty",
     "crates/seance-layout",
     "crates/seance-input",
-    "crates/seance-gpu",
+    "crates/seance-terminal",
     "crates/seance-app",
 ]
 

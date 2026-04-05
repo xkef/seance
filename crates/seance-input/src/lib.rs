@@ -15,7 +15,7 @@ pub enum Action {
     SplitVertical,
     FocusNext,
     FocusPrev,
-    ClosePaneNone,
+    ClosePane,
     Zoom,
     EnterCopyMode,
     Detach,
@@ -34,9 +34,15 @@ pub struct InputHandler {
     mode: Mode,
 }
 
+impl Default for InputHandler {
+    fn default() -> Self {
+        Self { mode: Mode::Normal }
+    }
+}
+
 impl InputHandler {
     pub fn new() -> Self {
-        Self { mode: Mode::Normal }
+        Self::default()
     }
 
     pub fn mode(&self) -> Mode {
@@ -109,7 +115,7 @@ impl InputHandler {
                 "-" | "_" => Action::SplitVertical,
                 "n" => Action::FocusNext,
                 "p" => Action::FocusPrev,
-                "x" => Action::ClosePaneNone,
+                "x" => Action::ClosePane,
                 "z" => Action::Zoom,
                 "[" => {
                     self.mode = Mode::Copy;
