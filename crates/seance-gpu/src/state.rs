@@ -138,6 +138,83 @@ impl GpuState {
         }
     }
 
+    /// Render only the background color (no cell content). Used during
+    /// resize transitions to avoid showing a half-redrawn terminal.
+    pub fn render_frame_bg_only(&mut self, snapshot: &FrameSnapshot<'_>) -> bool {
+        if self.surface_dirty {
+            self.surface.configure(&self.device, &self.config);
+            self.surface_dirty = false;
+        }
+
+        let output = match self.surface.get_current_texture() {
+            CurrentSurfaceTexture::Success(frame)
+            | CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            other => {
+                log::debug!("surface not ready: {other:?}");
+                self.surface.configure(&self.device, &self.config);
+                return false;
+            }
+        };
+
+        let frame_data = snapshot.frame_data();
+        let uniforms = Uniforms {
+            projection: Uniforms::ortho(self.size.width as f32, self.size.height as f32),
+            cell_size: [frame_data.cell_width, frame_data.cell_height],
+            grid_size: [frame_data.grid_cols as u32, frame_data.grid_rows as u32],
+            grid_padding: frame_data.grid_padding,
+            bg_color: [
+                frame_data.bg_color[0] as f32 / 255.0,
+                frame_data.bg_color[1] as f32 / 255.0,
+                frame_data.bg_color[2] as f32 / 255.0,
+                frame_data.bg_color[3] as f32 / 255.0,
+            ],
+            min_contrast: frame_data.min_contrast,
+            _pad0: 0,
+            cursor_pos: [frame_data.cursor_pos[0] as u32, frame_data.cursor_pos[1] as u32],
+            cursor_color: [
+                frame_data.cursor_color[0] as f32 / 255.0,
+                frame_data.cursor_color[1] as f32 / 255.0,
+                frame_data.cursor_color[2] as f32 / 255.0,
+                frame_data.cursor_color[3] as f32 / 255.0,
+            ],
+            cursor_wide: if frame_data.cursor_wide { 1 } else { 0 },
+            _pad1: [0; 3],
+        };
+        self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+
+        let view = output.texture.create_view(&TextureViewDescriptor::default());
+        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("frame_bg_only"),
+        });
+
+        {
+            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("seance_bg_only"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: Operations {
+                        load: LoadOp::Clear(wgpu::Color::BLACK),
+                        store: StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            pass.set_pipeline(&self.pipelines.bg_color);
+            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        self.queue.submit(std::iter::once(encoder.finish()));
+        output.present();
+        true
+    }
+
     /// Upload Level 2 data from a `FrameSnapshot` and render one frame.
     pub fn render_frame(&mut self, snapshot: &FrameSnapshot<'_>) -> bool {
         // Apply any deferred surface reconfiguration so the configure
