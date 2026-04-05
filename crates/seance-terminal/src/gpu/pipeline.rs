@@ -41,7 +41,7 @@ impl Pipelines {
             label: Some("bg_cells_bgl"),
             entries: &[BindGroupLayoutEntry {
                 binding: 0,
-                visibility: ShaderStages::FRAGMENT,
+                visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,

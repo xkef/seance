@@ -121,11 +121,11 @@ impl Renderer {
     }
 
     pub fn set_background(&self, color: Color) {
-        unsafe { ffi::ghostty_renderer_set_background(self.raw.as_ptr(), color) };
+        unsafe { ffi::ghostty_renderer_set_background(self.raw.as_ptr(), color.r, color.g, color.b) };
     }
 
     pub fn set_foreground(&self, color: Color) {
-        unsafe { ffi::ghostty_renderer_set_foreground(self.raw.as_ptr(), color) };
+        unsafe { ffi::ghostty_renderer_set_foreground(self.raw.as_ptr(), color.r, color.g, color.b) };
     }
 
     pub fn set_background_opacity(&self, opacity: f32) {

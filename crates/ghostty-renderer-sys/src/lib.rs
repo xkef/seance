@@ -194,8 +194,8 @@ unsafe extern "C" {
 
     // Runtime config
     pub fn ghostty_renderer_set_font_size(renderer: GhosttyRenderer, points: f32);
-    pub fn ghostty_renderer_set_background(renderer: GhosttyRenderer, c: GhosttyColor);
-    pub fn ghostty_renderer_set_foreground(renderer: GhosttyRenderer, c: GhosttyColor);
+    pub fn ghostty_renderer_set_background(renderer: GhosttyRenderer, r: u8, g: u8, b: u8);
+    pub fn ghostty_renderer_set_foreground(renderer: GhosttyRenderer, r: u8, g: u8, b: u8);
     pub fn ghostty_renderer_set_background_opacity(renderer: GhosttyRenderer, opacity: f32);
     pub fn ghostty_renderer_set_min_contrast(renderer: GhosttyRenderer, contrast: f32);
     pub fn ghostty_renderer_set_palette(renderer: GhosttyRenderer, palette: *const GhosttyColor);
