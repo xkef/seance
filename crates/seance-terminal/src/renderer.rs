@@ -154,6 +154,17 @@ impl TerminalRenderer {
         self.gpu.resize(winit::dpi::PhysicalSize::new(width, height));
     }
 
+    /// Resize only the wgpu surface (no ghostty renderer update).
+    /// Call [`resize_renderer`] later to update grid metrics.
+    pub fn resize_gpu(&mut self, width: u32, height: u32) {
+        self.gpu.resize(winit::dpi::PhysicalSize::new(width, height));
+    }
+
+    /// Resize the ghostty renderer (updates grid metrics, padding, etc.).
+    pub fn resize_renderer(&mut self, width: u32, height: u32, scale: f64) {
+        self.renderer.resize(width, height, scale);
+    }
+
     // -- Overlay --
 
     /// Mutable access to the overlay state.

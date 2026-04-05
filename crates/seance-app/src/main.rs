@@ -129,7 +129,7 @@ impl ApplicationHandler for App {
 
         if let Some(r) = &self.renderer {
             r.attach(&term);
-            r.set_background(Color { r: 0x1e, g: 0x1e, b: 0x2e });
+            r.set_background(Color { r: 0x30, g: 0x34, b: 0x46 });
         }
 
         self.panes.insert(0, term);

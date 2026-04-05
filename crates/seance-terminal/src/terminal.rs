@@ -120,6 +120,17 @@ impl Terminal {
         let _ = self.pty.resize(seance_pty::Size { cols, rows });
     }
 
+    /// Resize only the PTY (sends SIGWINCH to the shell).
+    /// Call [`resize_vt`] later to update the VT grid.
+    pub fn resize_pty(&mut self, cols: u16, rows: u16) {
+        let _ = self.pty.resize(seance_pty::Size { cols, rows });
+    }
+
+    /// Resize only the VT grid (reflows content).
+    pub fn resize_vt(&mut self, cols: u16, rows: u16) {
+        self.vt.resize(cols, rows);
+    }
+
     /// Current grid dimensions `(cols, rows)`.
     pub fn size(&self) -> (u16, u16) {
         self.vt.size()
