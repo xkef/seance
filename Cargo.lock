@@ -1638,28 +1638,13 @@ name = "seance-app"
 version = "0.1.0"
 dependencies = [
  "env_logger",
- "ghostty-renderer",
  "log",
  "objc2 0.5.2",
- "objc2-foundation 0.2.2",
  "pollster",
  "raw-window-handle",
- "seance-gpu",
  "seance-input",
  "seance-layout",
- "seance-pty",
- "winit",
-]
-
-[[package]]
-name = "seance-gpu"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "ghostty-renderer",
- "log",
- "raw-window-handle",
- "wgpu",
+ "seance-terminal",
  "winit",
 ]
 
@@ -1680,6 +1665,21 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "nix",
+]
+
+[[package]]
+name = "seance-terminal"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "ghostty-renderer",
+ "ghostty-renderer-sys",
+ "log",
+ "objc2 0.5.2",
+ "raw-window-handle",
+ "seance-pty",
+ "wgpu",
+ "winit",
 ]
 
 [[package]]

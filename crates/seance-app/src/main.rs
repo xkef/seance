@@ -1,5 +1,3 @@
-mod terminal;
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -8,25 +6,20 @@ use winit::event::{Modifiers, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
-use ghostty_renderer::{Blending, Color, Renderer, RendererConfig, Terminal};
-use seance_gpu::GpuState;
 use seance_input::{Action, InputHandler};
 use seance_layout::{LayoutTree, PaneId};
-
-use crate::terminal::TerminalView;
+use seance_terminal::{Color, RendererConfig, ScrollAction, Terminal, TerminalRenderer};
 
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
 
 struct App {
-    // Window + GPU
     window: Option<Arc<Window>>,
-    renderer: Option<Renderer>,
-    gpu: Option<GpuState>,
+    renderer: Option<TerminalRenderer>,
 
     // Panes
-    panes: HashMap<PaneId, TerminalView>,
+    panes: HashMap<PaneId, Terminal>,
     layout: LayoutTree,
     focused: PaneId,
 
@@ -38,13 +31,8 @@ struct App {
     cell_size: [f32; 2],
 
     // Frame scheduling
-    /// True when cell buffers need to be rebuilt from terminal state.
     content_dirty: bool,
-    /// Frames to wait after PTY data before committing a render update.
-    /// Batches rapid bursts of output into a single `update_frame`.
     cooldown: u8,
-    /// Suppress `update_frame` after a resize until the shell redraws.
-    /// While set, we render only the background color — no stale content.
     resize_pending: bool,
 }
 
@@ -53,7 +41,6 @@ impl App {
         Self {
             window: None,
             renderer: None,
-            gpu: None,
             panes: HashMap::new(),
             layout: LayoutTree::new(0, 1.0, 1.0),
             focused: 0,
@@ -65,8 +52,6 @@ impl App {
             resize_pending: false,
         }
     }
-
-    // -- helpers -------------------------------------------------------------
 
     fn grid_size_for_pixels(&self, width: u32, height: u32) -> (u16, u16) {
         let [cw, ch] = self.cell_size;
@@ -84,53 +69,38 @@ impl App {
         }
     }
 
-    // -- I/O -----------------------------------------------------------------
-
-    /// Poll all panes for PTY output. Returns true if any data arrived.
     fn poll_pty(&mut self) -> bool {
         let mut got_data = false;
-        for view in self.panes.values_mut() {
-            got_data |= view.poll();
+        for term in self.panes.values_mut() {
+            got_data |= term.poll();
         }
         got_data
     }
 
-    // -- frame loop ----------------------------------------------------------
-
     fn draw(&mut self) {
         let got_data = self.poll_pty();
 
-        // --- frame scheduling ---
         if got_data {
             self.content_dirty = true;
-            self.cooldown = 2; // wait 2 frames to batch rapid output
-
-            // Shell has started redrawing after resize — unfreeze.
+            self.cooldown = 2;
             if self.resize_pending {
                 self.resize_pending = false;
             }
         } else if self.cooldown > 0 {
             self.cooldown -= 1;
         } else if self.content_dirty {
-            // Cooldown elapsed, commit the update.
             self.content_dirty = false;
-            if let Some(renderer) = &self.renderer {
-                renderer.update_frame();
+            if let Some(r) = &self.renderer {
+                r.update_frame();
             }
         }
 
-        // --- render ---
-        let Some(renderer) = &self.renderer else { return };
-        let Some(gpu) = &mut self.gpu else { return };
+        let Some(r) = &mut self.renderer else { return };
 
         if self.resize_pending {
-            // Render background-only frame: avoids showing a half-drawn
-            // terminal while the shell is processing SIGWINCH.
-            let snapshot = renderer.frame_snapshot();
-            gpu.render_frame_bg_only(&snapshot);
+            r.render_bg_only();
         } else {
-            let snapshot = renderer.frame_snapshot();
-            gpu.render_frame(&snapshot);
+            r.render();
         }
     }
 }
@@ -154,48 +124,31 @@ impl ApplicationHandler for App {
 
         let size = window.inner_size();
         let scale = window.scale_factor();
-        let native_handle = get_native_handle(&window);
 
         let config = RendererConfig {
-            width_px: size.width,
-            height_px: size.height,
-            content_scale: scale,
-            alpha_blending: Blending::Linear,
-            ..Default::default()
+            width: size.width,
+            height: size.height,
+            scale,
+            native_handle: get_native_handle(&window),
         };
-        let renderer =
-            Renderer::new(&config, native_handle).expect("failed to create renderer");
 
-        remove_ghostty_layer(&window);
+        let renderer = pollster::block_on(TerminalRenderer::new(window.clone(), config))
+            .expect("failed to create renderer");
 
-        let gpu = pollster::block_on(GpuState::new(window.clone()));
-
+        self.cell_size = renderer.cell_size();
+        self.layout.set_cell_size(self.cell_size[0], self.cell_size[1]);
         self.renderer = Some(renderer);
-        self.gpu = Some(gpu);
         self.window = Some(window);
 
-        // Read cell metrics from a throwaway terminal. Cell size is
-        // determined by font metrics and stays constant.
-        if let Some(r) = &self.renderer {
-            let tmp = Terminal::new(80, 24).expect("temp terminal");
-            r.set_terminal(&tmp);
-            r.update_frame();
-            let snap = r.frame_snapshot();
-            let fd = snap.frame_data();
-            self.cell_size = [fd.cell_width, fd.cell_height];
-            self.layout.set_cell_size(fd.cell_width, fd.cell_height);
-            drop(snap);
-        }
-
         let (cols, rows) = self.grid_size_for_pixels(size.width, size.height);
-        let view = TerminalView::spawn(cols, rows);
+        let term = Terminal::spawn(cols, rows).expect("failed to spawn terminal");
 
         if let Some(r) = &self.renderer {
-            r.set_terminal(view.terminal());
+            r.attach(&term);
             r.set_background(Color { r: 0x1e, g: 0x1e, b: 0x2e });
         }
 
-        self.panes.insert(0, view);
+        self.panes.insert(0, term);
     }
 
     fn window_event(
@@ -208,28 +161,15 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => event_loop.exit(),
 
             WindowEvent::Resized(new_size) => {
-                if let Some(gpu) = &mut self.gpu {
-                    gpu.resize(new_size);
-                }
-                if let (Some(r), Some(w)) = (&self.renderer, &self.window) {
-                    r.resize(new_size.width, new_size.height, w.scale_factor());
+                if let (Some(r), Some(w)) = (&mut self.renderer, &self.window) {
+                    r.resize_surface(new_size.width, new_size.height, w.scale_factor());
                 }
                 let (cols, rows) = self.grid_size_for_pixels(new_size.width, new_size.height);
-                for view in self.panes.values_mut() {
-                    view.resize(cols, rows);
+                for term in self.panes.values_mut() {
+                    term.resize(cols, rows);
                 }
-
-                // Freeze rendering until the shell redraws after SIGWINCH.
-                // We'll show only the background color in the meantime.
                 self.resize_pending = true;
-
-                with_metal_layer(&self.window, |layer| {
-                    set_presents_with_transaction(layer, true);
-                });
                 self.draw();
-                with_metal_layer(&self.window, |layer| {
-                    set_presents_with_transaction(layer, false);
-                });
             }
 
             WindowEvent::ModifiersChanged(mods) => {
@@ -239,12 +179,19 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 let modes = self.panes
                     .get(&self.focused)
-                    .map_or(Default::default(), |v| v.modes());
+                    .map_or(Default::default(), |t| {
+                        let m = t.modes();
+                        seance_input::TerminalModes {
+                            cursor_keys: m.cursor_keys,
+                            mouse_event: m.mouse_event,
+                            mouse_format_sgr: m.mouse_format_sgr,
+                        }
+                    });
                 let action = self.input.handle_key(&event, &self.modifiers, modes);
                 match action {
                     Action::WritePty(data) => {
-                        if let Some(view) = self.panes.get(&self.focused) {
-                            view.write(&data);
+                        if let Some(term) = self.panes.get(&self.focused) {
+                            term.write(&data);
                         }
                     }
                     Action::Ignore => {}
@@ -267,13 +214,20 @@ impl ApplicationHandler for App {
                 if lines != 0 {
                     let modes = self.panes
                         .get(&self.focused)
-                        .map_or(Default::default(), |v| v.modes());
+                        .map_or(Default::default(), |t| {
+                            let m = t.modes();
+                            seance_input::TerminalModes {
+                                cursor_keys: m.cursor_keys,
+                                mouse_event: m.mouse_event,
+                                mouse_format_sgr: m.mouse_format_sgr,
+                            }
+                        });
                     if let Some(data) = self.input.encode_mouse_wheel(lines, modes) {
-                        if let Some(view) = self.panes.get(&self.focused) {
-                            view.write(&data);
+                        if let Some(term) = self.panes.get(&self.focused) {
+                            term.write(&data);
                         }
-                    } else if let Some(view) = self.panes.get_mut(&self.focused) {
-                        view.scroll(ghostty_renderer::ScrollAction::Lines(-lines));
+                    } else if let Some(term) = self.panes.get_mut(&self.focused) {
+                        term.scroll(ScrollAction::Lines(-lines));
                     }
                     self.content_dirty = true;
                     self.request_redraw();
@@ -295,66 +249,6 @@ impl ApplicationHandler for App {
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "macos")]
-fn remove_ghostty_layer(window: &Window) {
-    use objc2::msg_send;
-    use objc2::runtime::AnyObject;
-
-    let nsview = get_native_handle(window);
-    unsafe {
-        let view: *mut AnyObject = nsview.cast();
-        let _: () = msg_send![view, setWantsLayer: false];
-        let nil: *mut AnyObject = std::ptr::null_mut();
-        let _: () = msg_send![view, setLayer: nil];
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn remove_ghostty_layer(_window: &Window) {}
-
-#[cfg(target_os = "macos")]
-fn with_metal_layer(window: &Option<Arc<Window>>, f: impl FnOnce(*mut objc2::runtime::AnyObject)) {
-    use objc2::msg_send;
-    use objc2::runtime::{AnyClass, AnyObject};
-
-    let Some(window) = window else { return };
-    let nsview = get_native_handle(window);
-    unsafe {
-        let view: *mut AnyObject = nsview.cast();
-        let layer: *mut AnyObject = msg_send![view, layer];
-        if layer.is_null() {
-            return;
-        }
-        let sublayers: *mut AnyObject = msg_send![layer, sublayers];
-        if sublayers.is_null() {
-            return;
-        }
-        let count: usize = msg_send![sublayers, count];
-        let Some(metal_class) = AnyClass::get("CAMetalLayer") else {
-            return;
-        };
-        for i in 0..count {
-            let sublayer: *mut AnyObject = msg_send![sublayers, objectAtIndex: i];
-            let is_metal: bool = msg_send![sublayer, isKindOfClass: metal_class];
-            if is_metal {
-                f(sublayer);
-                return;
-            }
-        }
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn with_metal_layer(_window: &Option<Arc<Window>>, _f: impl FnOnce(*mut u8)) {}
-
-#[cfg(target_os = "macos")]
-fn set_presents_with_transaction(layer: *mut objc2::runtime::AnyObject, value: bool) {
-    use objc2::msg_send;
-    unsafe {
-        let _: () = msg_send![layer, setPresentsWithTransaction: value];
-    }
-}
-
-#[cfg(target_os = "macos")]
 fn get_native_handle(window: &Window) -> *mut std::ffi::c_void {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     let handle = window.window_handle().expect("no window handle");
@@ -366,8 +260,6 @@ fn get_native_handle(window: &Window) -> *mut std::ffi::c_void {
 
 #[cfg(not(target_os = "macos"))]
 fn get_native_handle(_window: &Window) -> *mut std::ffi::c_void {
-    // Level 2 (consumer-draws): no native surface handle needed.
-    // The renderer produces cell buffers; we own the GPU pipeline via wgpu.
     std::ptr::null_mut()
 }
 

@@ -10,17 +10,14 @@ name = "seance"
 path = "src/main.rs"
 
 [dependencies]
-ghostty-renderer = { path = "../ghostty-renderer" }
-seance-gpu = { path = "../seance-gpu" }
-seance-pty = { path = "../seance-pty" }
+seance-terminal = { path = "../seance-terminal" }
 seance-layout = { path = "../seance-layout" }
 seance-input = { path = "../seance-input" }
 pollster = "0.4"
 log.workspace = true
 env_logger.workspace = true
 winit = "0.30"
-raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"
-objc2-foundation = { version = "0.2", features = ["NSGeometry"] }
+raw-window-handle = "0.6"
