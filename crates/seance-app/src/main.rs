@@ -32,8 +32,6 @@ struct App {
 
     // Frame scheduling
     content_dirty: bool,
-    cooldown: u8,
-    resize_pending: bool,
 }
 
 impl App {
@@ -48,8 +46,6 @@ impl App {
             modifiers: Modifiers::default(),
             cell_size: [0.0, 0.0],
             content_dirty: true,
-            cooldown: 0,
-            resize_pending: false,
         }
     }
 
@@ -80,26 +76,14 @@ impl App {
     fn draw(&mut self) {
         let got_data = self.poll_pty();
 
-        if got_data {
-            self.content_dirty = true;
-            self.cooldown = 2;
-            if self.resize_pending {
-                self.resize_pending = false;
-            }
-        } else if self.cooldown > 0 {
-            self.cooldown -= 1;
-        } else if self.content_dirty {
+        if got_data || self.content_dirty {
             self.content_dirty = false;
             if let Some(r) = &self.renderer {
                 r.update_frame();
             }
         }
 
-        let Some(r) = &mut self.renderer else { return };
-
-        if self.resize_pending {
-            r.render_bg_only();
-        } else {
+        if let Some(r) = &mut self.renderer {
             r.render();
         }
     }
@@ -168,7 +152,7 @@ impl ApplicationHandler for App {
                 for term in self.panes.values_mut() {
                     term.resize(cols, rows);
                 }
-                self.resize_pending = true;
+                self.content_dirty = true;
                 self.draw();
             }
 
