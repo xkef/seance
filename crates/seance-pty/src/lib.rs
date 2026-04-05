@@ -103,6 +103,18 @@ impl Pty {
     }
 }
 
+impl Drop for Pty {
+    fn drop(&mut self) {
+        // Close master fd first (handled by OwnedFd drop), then reap child.
+        if let Child::Active(pid) = self.child {
+            // Send SIGHUP (the standard "terminal closed" signal), then reap.
+            let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGHUP);
+            let _ = nix::sys::wait::waitpid(pid, None);
+            self.child = Child::Exited;
+        }
+    }
+}
+
 fn setup_slave(slave: OwnedFd) {
     let raw_fd = slave.as_raw_fd();
     unsafe {

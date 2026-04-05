@@ -106,7 +106,7 @@ impl LayoutTree {
         let divider = 1u32;
         match direction {
             SplitDirection::Horizontal => {
-                let left_w = snap_to_grid(vp.width - divider, ratio, self.cell_width);
+                let left_w = snap_to_grid(vp.width.saturating_sub(divider), ratio, self.cell_width);
                 let right_x = vp.x + left_w + divider;
                 let right_w = vp.width.saturating_sub(left_w + divider);
                 (
@@ -119,7 +119,7 @@ impl LayoutTree {
                 )
             }
             SplitDirection::Vertical => {
-                let top_h = snap_to_grid(vp.height - divider, ratio, self.cell_height);
+                let top_h = snap_to_grid(vp.height.saturating_sub(divider), ratio, self.cell_height);
                 let bottom_y = vp.y + top_h + divider;
                 let bottom_h = vp.height.saturating_sub(top_h + divider);
                 (

@@ -156,30 +156,12 @@ impl GpuState {
             }
         };
 
-        let frame_data = snapshot.frame_data();
-        let uniforms = Uniforms {
-            projection: Uniforms::ortho(self.size.width as f32, self.size.height as f32),
-            cell_size: [frame_data.cell_width, frame_data.cell_height],
-            grid_size: [frame_data.grid_cols as u32, frame_data.grid_rows as u32],
-            grid_padding: frame_data.grid_padding,
-            bg_color: [
-                frame_data.bg_color[0] as f32 / 255.0,
-                frame_data.bg_color[1] as f32 / 255.0,
-                frame_data.bg_color[2] as f32 / 255.0,
-                frame_data.bg_color[3] as f32 / 255.0,
-            ],
-            min_contrast: frame_data.min_contrast,
-            _pad0: 0,
-            cursor_pos: [frame_data.cursor_pos[0] as u32, frame_data.cursor_pos[1] as u32],
-            cursor_color: [
-                frame_data.cursor_color[0] as f32 / 255.0,
-                frame_data.cursor_color[1] as f32 / 255.0,
-                frame_data.cursor_color[2] as f32 / 255.0,
-                frame_data.cursor_color[3] as f32 / 255.0,
-            ],
-            cursor_wide: if frame_data.cursor_wide { 1 } else { 0 },
-            _pad1: [0; 3],
-        };
+        let fd = snapshot.frame_data();
+        let uniforms = Uniforms::from_frame_data(
+            &fd,
+            self.size.width as f32,
+            self.size.height as f32,
+        );
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         let view = output.texture.create_view(&TextureViewDescriptor::default());
@@ -236,34 +218,15 @@ impl GpuState {
             }
         };
 
-        let frame_data = snapshot.frame_data();
-
-        // Build uniforms.
+        // Build uniforms from frame data.
         // Surface format is non-sRGB (matching Ghostty's Metal renderer),
         // so colors are passed through as sRGB without conversion.
-        let uniforms = Uniforms {
-            projection: Uniforms::ortho(self.size.width as f32, self.size.height as f32),
-            cell_size: [frame_data.cell_width, frame_data.cell_height],
-            grid_size: [frame_data.grid_cols as u32, frame_data.grid_rows as u32],
-            grid_padding: frame_data.grid_padding,
-            bg_color: [
-                frame_data.bg_color[0] as f32 / 255.0,
-                frame_data.bg_color[1] as f32 / 255.0,
-                frame_data.bg_color[2] as f32 / 255.0,
-                frame_data.bg_color[3] as f32 / 255.0,
-            ],
-            min_contrast: frame_data.min_contrast,
-            _pad0: 0,
-            cursor_pos: [frame_data.cursor_pos[0] as u32, frame_data.cursor_pos[1] as u32],
-            cursor_color: [
-                frame_data.cursor_color[0] as f32 / 255.0,
-                frame_data.cursor_color[1] as f32 / 255.0,
-                frame_data.cursor_color[2] as f32 / 255.0,
-                frame_data.cursor_color[3] as f32 / 255.0,
-            ],
-            cursor_wide: if frame_data.cursor_wide { 1 } else { 0 },
-            _pad1: [0; 3],
-        };
+        let fd = snapshot.frame_data();
+        let uniforms = Uniforms::from_frame_data(
+            &fd,
+            self.size.width as f32,
+            self.size.height as f32,
+        );
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         // Upload cell backgrounds
@@ -277,13 +240,7 @@ impl GpuState {
         let text_cells = snapshot.text_cells();
         self.text_instance_count = text_cells.len() as u32;
         if !text_cells.is_empty() {
-            let text_data: &[u8] = unsafe {
-                std::slice::from_raw_parts(
-                    text_cells.as_ptr().cast(),
-                    text_cells.len() * size_of::<ghostty_renderer::CellText>(),
-                )
-            };
-            self.upload_text_instances(text_data);
+            self.upload_text_instances(bytemuck::cast_slice(text_cells));
         }
 
         // Upload atlas textures. Reuses existing GPU textures via

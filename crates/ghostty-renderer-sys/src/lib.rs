@@ -60,11 +60,13 @@ pub struct GhosttyRendererConfig {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GhosttyRendererCellBg {
     pub rgba: [u8; 4],
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GhosttyRendererCellText {
     pub glyph_pos: [u32; 2],
     pub glyph_size: [u32; 2],
@@ -73,6 +75,7 @@ pub struct GhosttyRendererCellText {
     pub color: [u8; 4],
     pub atlas: u8,
     pub flags: u8,
+    pub _pad: [u8; 2],
 }
 
 const _: () = assert!(size_of::<GhosttyRendererCellText>() == 32);

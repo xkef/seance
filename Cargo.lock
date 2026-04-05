@@ -578,7 +578,7 @@ dependencies = [
 name = "ghostty-renderer-sys"
 version = "0.1.0"
 dependencies = [
- "cc",
+ "bytemuck",
  "libc",
 ]
 

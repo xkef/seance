@@ -252,6 +252,7 @@ pub struct AtlasTexture<'a> {
 // ============================================================
 
 /// Scroll direction for `Terminal::scroll`.
+#[derive(Debug, Clone, Copy)]
 pub enum ScrollAction {
     Lines(i32),
     Top,
@@ -261,6 +262,7 @@ pub enum ScrollAction {
 }
 
 /// Cursor state returned by `Terminal::cursor`.
+#[derive(Debug, Clone, Copy)]
 pub struct CursorState {
     pub col: u16,
     pub row: u16,
@@ -289,14 +291,14 @@ impl Terminal {
     }
 
     /// Feed raw bytes (PTY output) into the VT parser.
-    pub fn vt_write(&self, data: &[u8]) {
+    pub fn vt_write(&mut self, data: &[u8]) {
         // SAFETY: `self.raw` is valid. `data` is a valid slice.
         // The C function reads `len` bytes from `data.as_ptr()`.
         unsafe { ffi::ghostty_terminal_vt_write(self.raw.as_ptr(), data.as_ptr(), data.len()) };
     }
 
     /// Resize the terminal grid.
-    pub fn resize(&self, cols: u16, rows: u16) {
+    pub fn resize(&mut self, cols: u16, rows: u16) {
         // SAFETY: `self.raw` is valid.
         unsafe { ffi::ghostty_terminal_resize(self.raw.as_ptr(), cols, rows) };
     }
@@ -305,8 +307,9 @@ impl Terminal {
     /// (e.g. device attribute replies, size reports).
     ///
     /// Returns an empty slice if there are no pending responses.
-    /// The returned data is valid until the next `vt_write` or `drain_responses` call.
-    pub fn drain_responses(&self) -> &[u8] {
+    /// The returned data is valid until the next mutating call (`vt_write`,
+    /// `resize`, `clear_responses`). Taking `&mut self` prevents aliasing.
+    pub fn drain_responses(&mut self) -> &[u8] {
         let mut len: usize = 0;
         // SAFETY: `self.raw` is valid. `len` is a valid output pointer.
         let ptr = unsafe { ffi::ghostty_terminal_drain_responses(self.raw.as_ptr(), &mut len) };
@@ -314,12 +317,12 @@ impl Terminal {
             return &[];
         }
         // SAFETY: the C function returns a pointer to `len` bytes in the
-        // terminal's response buffer. Valid until the next mutating call.
+        // terminal's response buffer. Valid for `'_` (the reborrow of `self`).
         unsafe { std::slice::from_raw_parts(ptr, len) }
     }
 
     /// Clear the response buffer.
-    pub fn clear_responses(&self) {
+    pub fn clear_responses(&mut self) {
         // SAFETY: `self.raw` is valid.
         unsafe { ffi::ghostty_terminal_clear_responses(self.raw.as_ptr()) };
     }
@@ -344,7 +347,7 @@ impl Terminal {
     }
 
     /// Scroll the terminal viewport.
-    pub fn scroll(&self, action: ScrollAction) {
+    pub fn scroll(&mut self, action: ScrollAction) {
         let (action_id, delta) = match action {
             ScrollAction::Lines(d) => (0, d),
             ScrollAction::Top => (1, 0),
@@ -376,7 +379,7 @@ impl Terminal {
     }
 
     /// Dump the current screen content as UTF-8 text.
-    pub fn dump_screen(&self) -> String {
+    pub fn dump_screen(&mut self) -> String {
         let mut buf = vec![0u8; 64 * 1024];
         let len = unsafe {
             ffi::ghostty_terminal_dump_screen(self.raw.as_ptr(), buf.as_mut_ptr(), buf.len())

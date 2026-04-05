@@ -78,14 +78,6 @@ impl App {
         (cols, rows)
     }
 
-    fn focused_view(&self) -> Option<&TerminalView> {
-        self.panes.get(&self.focused)
-    }
-
-    fn focused_view_mut(&mut self) -> Option<&mut TerminalView> {
-        self.panes.get_mut(&self.focused)
-    }
-
     fn request_redraw(&self) {
         if let Some(w) = &self.window {
             w.request_redraw();
@@ -96,12 +88,9 @@ impl App {
 
     /// Poll all panes for PTY output. Returns true if any data arrived.
     fn poll_pty(&mut self) -> bool {
-        let ids: Vec<PaneId> = self.panes.keys().copied().collect();
         let mut got_data = false;
-        for id in ids {
-            if let Some(view) = self.panes.get_mut(&id) {
-                got_data |= view.poll();
-            }
+        for view in self.panes.values_mut() {
+            got_data |= view.poll();
         }
         got_data
     }
@@ -247,11 +236,13 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::KeyboardInput { event, .. } => {
-                let modes = self.focused_view().map_or(Default::default(), |v| v.modes());
+                let modes = self.panes
+                    .get(&self.focused)
+                    .map_or(Default::default(), |v| v.modes());
                 let action = self.input.handle_key(&event, &self.modifiers, modes);
                 match action {
                     Action::WritePty(data) => {
-                        if let Some(view) = self.focused_view() {
+                        if let Some(view) = self.panes.get(&self.focused) {
                             view.write(&data);
                         }
                     }
@@ -273,12 +264,14 @@ impl ApplicationHandler for App {
                     }
                 };
                 if lines != 0 {
-                    let modes = self.focused_view().map_or(Default::default(), |v| v.modes());
+                    let modes = self.panes
+                        .get(&self.focused)
+                        .map_or(Default::default(), |v| v.modes());
                     if let Some(data) = self.input.encode_mouse_wheel(lines, modes) {
-                        if let Some(view) = self.focused_view() {
+                        if let Some(view) = self.panes.get(&self.focused) {
                             view.write(&data);
                         }
-                    } else if let Some(view) = self.focused_view() {
+                    } else if let Some(view) = self.panes.get_mut(&self.focused) {
                         view.scroll(ghostty_renderer::ScrollAction::Lines(-lines));
                     }
                     self.content_dirty = true;

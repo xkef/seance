@@ -5,17 +5,17 @@ use wgpu::*;
 use crate::uniforms::Uniforms;
 
 /// All render pipelines and bind group layouts used by the renderer.
-pub struct Pipelines {
-    pub bg_color: RenderPipeline,
-    pub cell_bg: RenderPipeline,
-    pub cell_text: RenderPipeline,
-    pub uniform_bgl: BindGroupLayout,
-    pub bg_cells_bgl: BindGroupLayout,
-    pub atlas_bgl: BindGroupLayout,
+pub(crate) struct Pipelines {
+    pub(crate) bg_color: RenderPipeline,
+    pub(crate) cell_bg: RenderPipeline,
+    pub(crate) cell_text: RenderPipeline,
+    pub(crate) uniform_bgl: BindGroupLayout,
+    pub(crate) bg_cells_bgl: BindGroupLayout,
+    pub(crate) atlas_bgl: BindGroupLayout,
 }
 
 impl Pipelines {
-    pub fn new(device: &Device, format: TextureFormat) -> Self {
+    pub(crate) fn new(device: &Device, format: TextureFormat) -> Self {
         let shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("cell_shader"),
             source: ShaderSource::Wgsl(include_str!("shaders/cell.wgsl").into()),

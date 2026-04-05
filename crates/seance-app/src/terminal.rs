@@ -48,6 +48,8 @@ impl TerminalView {
             }
         }
         // Drain device-status responses back to the PTY.
+        // drain_responses borrows &mut self.terminal; we must write
+        // before calling any other mutating terminal method.
         let responses = self.terminal.drain_responses();
         if !responses.is_empty() {
             let _ = self.pty.write_all(responses);
@@ -70,7 +72,7 @@ impl TerminalView {
         let _ = self.pty.resize(seance_pty::Size { cols, rows });
     }
 
-    pub fn scroll(&self, action: ScrollAction) {
+    pub fn scroll(&mut self, action: ScrollAction) {
         self.terminal.scroll(action);
     }
 
@@ -80,7 +82,7 @@ impl TerminalView {
         std::mem::take(&mut self.dirty)
     }
 
-    /// Query terminal modes for input encoding.
+    /// Query terminal modes for input encoding (read-only).
     pub fn modes(&self) -> TerminalModes {
         TerminalModes {
             cursor_keys: self.terminal.mode_cursor_keys(),
