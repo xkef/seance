@@ -8,29 +8,17 @@ use winit::window::{Window, WindowId};
 
 use seance_input::{Action, InputHandler};
 use seance_layout::{LayoutTree, PaneId};
-use seance_terminal::{Color, RendererConfig, ScrollAction, Terminal, TerminalRenderer};
-
-// ---------------------------------------------------------------------------
-// App
-// ---------------------------------------------------------------------------
+use seance_terminal::{RendererConfig, ScrollAction, Terminal, TerminalRenderer};
 
 struct App {
     window: Option<Arc<Window>>,
     renderer: Option<TerminalRenderer>,
-
-    // Panes
     panes: HashMap<PaneId, Terminal>,
     layout: LayoutTree,
     focused: PaneId,
-
-    // Input
     input: InputHandler,
     modifiers: Modifiers,
-
-    // Metrics (constant after init)
     cell_size: [f32; 2],
-
-    // Frame scheduling
     content_dirty: bool,
 }
 
@@ -49,16 +37,6 @@ impl App {
         }
     }
 
-    fn grid_size_for_pixels(&self, width: u32, height: u32) -> (u16, u16) {
-        let [cw, ch] = self.cell_size;
-        if cw <= 0.0 || ch <= 0.0 {
-            return (80, 24);
-        }
-        let cols = (width as f32 / cw).floor().max(1.0) as u16;
-        let rows = (height as f32 / ch).floor().max(1.0) as u16;
-        (cols, rows)
-    }
-
     fn request_redraw(&self) {
         if let Some(w) = &self.window {
             w.request_redraw();
@@ -74,6 +52,9 @@ impl App {
     }
 
     fn draw(&mut self) {
+        if self.panes.is_empty() {
+            return;
+        }
         let got_data = self.poll_pty();
 
         if got_data || self.content_dirty {
@@ -89,10 +70,6 @@ impl App {
     }
 }
 
-// ---------------------------------------------------------------------------
-// winit event handler
-// ---------------------------------------------------------------------------
-
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
@@ -105,6 +82,9 @@ impl ApplicationHandler for App {
                 .create_window(attrs)
                 .expect("failed to create window"),
         );
+
+        #[cfg(target_os = "macos")]
+        configure_macos_window(&window);
 
         let size = window.inner_size();
         let scale = window.scale_factor();
@@ -120,18 +100,16 @@ impl ApplicationHandler for App {
             .expect("failed to create renderer");
 
         self.cell_size = renderer.cell_size();
-        self.layout.set_cell_size(self.cell_size[0], self.cell_size[1]);
+        self.layout
+            .set_cell_size(self.cell_size[0], self.cell_size[1]);
+        let (cols, rows) = renderer.grid_size();
         self.renderer = Some(renderer);
         self.window = Some(window);
 
-        let (cols, rows) = self.grid_size_for_pixels(size.width, size.height);
         let term = Terminal::spawn(cols, rows).expect("failed to spawn terminal");
-
         if let Some(r) = &self.renderer {
             r.attach(&term);
-            r.set_background(Color { r: 0x30, g: 0x34, b: 0x46 });
         }
-
         self.panes.insert(0, term);
     }
 
@@ -148,7 +126,11 @@ impl ApplicationHandler for App {
                 if let (Some(r), Some(w)) = (&mut self.renderer, &self.window) {
                     r.resize_surface(new_size.width, new_size.height, w.scale_factor());
                 }
-                let (cols, rows) = self.grid_size_for_pixels(new_size.width, new_size.height);
+                let (cols, rows) = self
+                    .renderer
+                    .as_ref()
+                    .map(|r| r.grid_size())
+                    .unwrap_or((80, 24));
                 for term in self.panes.values_mut() {
                     term.resize(cols, rows);
                 }
@@ -161,7 +143,8 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::KeyboardInput { event, .. } => {
-                let modes = self.panes
+                let modes = self
+                    .panes
                     .get(&self.focused)
                     .map_or(Default::default(), |t| {
                         let m = t.modes();
@@ -196,7 +179,8 @@ impl ApplicationHandler for App {
                     }
                 };
                 if lines != 0 {
-                    let modes = self.panes
+                    let modes = self
+                        .panes
                         .get(&self.focused)
                         .map_or(Default::default(), |t| {
                             let m = t.modes();
@@ -233,6 +217,38 @@ impl ApplicationHandler for App {
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "macos")]
+fn configure_macos_window(window: &Window) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let handle = window.window_handle().expect("no window handle");
+    let nsview = match handle.as_raw() {
+        RawWindowHandle::AppKit(h) => h.ns_view.as_ptr(),
+        _ => return,
+    };
+    unsafe {
+        let view: *mut AnyObject = nsview.cast();
+        let nswindow: *mut AnyObject = msg_send![view, window];
+        if nswindow.is_null() {
+            return;
+        }
+        let mask: usize = 1 | 2 | 4 | 8 | (1 << 15);
+        let _: () = msg_send![nswindow, setStyleMask: mask];
+        let _: () = msg_send![nswindow, setTitlebarAppearsTransparent: true];
+        let _: () = msg_send![nswindow, setTitleVisibility: 1_isize];
+        let _: () = msg_send![nswindow, setMovableByWindowBackground: true];
+
+        for i in 0_isize..3 {
+            let button: *mut AnyObject = msg_send![nswindow, standardWindowButton: i];
+            if !button.is_null() {
+                let _: () = msg_send![button, setHidden: true];
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn get_native_handle(window: &Window) -> *mut std::ffi::c_void {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     let handle = window.window_handle().expect("no window handle");
@@ -249,6 +265,16 @@ fn get_native_handle(_window: &Window) -> *mut std::ffi::c_void {
 
 fn main() {
     env_logger::init();
+
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let resources = manifest
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("ghostty/zig-out/share/ghostty");
+    unsafe { std::env::set_var("GHOSTTY_RESOURCES_DIR", &resources) };
+
     let event_loop = EventLoop::new().expect("failed to create event loop");
     let mut app = App::new();
     event_loop.run_app(&mut app).expect("event loop failed");

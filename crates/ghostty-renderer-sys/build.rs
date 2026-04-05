@@ -28,6 +28,7 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static=ghostty-renderer");
+    println!("cargo:rustc-link-lib=static=ghostty-vt");
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     match target_os.as_str() {
@@ -43,8 +44,6 @@ fn main() {
             println!("cargo:rustc-link-lib=c++");
         }
         "linux" => {
-            // The ghostty renderer uses freetype, harfbuzz, and fontconfig
-            // for font loading/shaping. These are linked dynamically.
             println!("cargo:rustc-link-lib=dylib=freetype");
             println!("cargo:rustc-link-lib=dylib=harfbuzz");
             println!("cargo:rustc-link-lib=dylib=fontconfig");

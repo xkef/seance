@@ -1,0 +1,13 @@
+[env]
+MACOSX_DEPLOYMENT_TARGET = "13.0"
+
+# Suppress libghostty-vt-sys's build script (which tries to invoke zig
+# and link a shared library). We link libghostty-vt.a statically from
+# ghostty-renderer-sys/build.rs alongside libghostty-renderer.a instead.
+[target.aarch64-apple-darwin.ghostty-vt]
+rustc-link-lib = []
+rustc-link-search = []
+
+[target.x86_64-apple-darwin.ghostty-vt]
+rustc-link-lib = []
+rustc-link-search = []

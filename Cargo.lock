@@ -571,7 +571,6 @@ name = "ghostty-renderer"
 version = "0.1.0"
 dependencies = [
  "ghostty-renderer-sys",
- "log",
 ]
 
 [[package]]
@@ -834,6 +833,11 @@ name = "libc"
 version = "0.2.184"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48f5d2a454e16a5ea0f4ced81bd44e4cfc7bd3a507b61887c99fd3538b28e4af"
+
+[[package]]
+name = "libghostty-vt-sys"
+version = "0.1.1"
+source = "git+https://github.com/Uzaaft/libghostty-rs.git#811cbdd85a99b40a63424a9d247c4f3653c11924"
 
 [[package]]
 name = "libloading"
@@ -1674,6 +1678,7 @@ dependencies = [
  "bytemuck",
  "ghostty-renderer",
  "ghostty-renderer-sys",
+ "libghostty-vt-sys",
  "log",
  "objc2 0.5.2",
  "raw-window-handle",

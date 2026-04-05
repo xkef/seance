@@ -7,4 +7,3 @@ description = "Safe Rust wrapper for libghostty-renderer"
 
 [dependencies]
 ghostty-renderer-sys = { path = "../ghostty-renderer-sys" }
-log.workspace = true
