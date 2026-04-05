@@ -7,6 +7,7 @@ use wgpu::util::DeviceExt;
 
 use ghostty_renderer::FrameSnapshot;
 
+use crate::renderer::Overlay;
 use super::pipeline::Pipelines;
 use super::uniforms::Uniforms;
 
@@ -132,7 +133,7 @@ impl GpuState {
         }
     }
 
-    pub(crate) fn render_frame_bg_only(&mut self, snapshot: &FrameSnapshot<'_>) -> bool {
+    pub(crate) fn render_frame_bg_only(&mut self, snapshot: &FrameSnapshot<'_>, overlay: &Overlay) -> bool {
         if self.surface_dirty {
             self.surface.configure(&self.device, &self.config);
             self.surface_dirty = false;
@@ -149,7 +150,7 @@ impl GpuState {
         };
 
         let fd = snapshot.frame_data();
-        let uniforms = Uniforms::from_frame_data(&fd, self.size.width as f32, self.size.height as f32);
+        let uniforms = Uniforms::from_frame_data(&fd, self.size.width as f32, self.size.height as f32, overlay);
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         let view = output.texture.create_view(&TextureViewDescriptor::default());
@@ -185,7 +186,7 @@ impl GpuState {
         true
     }
 
-    pub(crate) fn render_frame(&mut self, snapshot: &FrameSnapshot<'_>) -> bool {
+    pub(crate) fn render_frame(&mut self, snapshot: &FrameSnapshot<'_>, overlay: &Overlay) -> bool {
         if self.surface_dirty {
             self.surface.configure(&self.device, &self.config);
             self.surface_dirty = false;
@@ -202,7 +203,7 @@ impl GpuState {
         };
 
         let fd = snapshot.frame_data();
-        let uniforms = Uniforms::from_frame_data(&fd, self.size.width as f32, self.size.height as f32);
+        let uniforms = Uniforms::from_frame_data(&fd, self.size.width as f32, self.size.height as f32, overlay);
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         let bg_cells = snapshot.bg_cells();

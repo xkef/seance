@@ -12,12 +12,20 @@ struct Uniforms {
     projection: mat4x4<f32>,
     cell_size: vec2<f32>,
     grid_size: vec2<u32>,
-    grid_padding: vec4<f32>, // left, top, right, bottom
-    bg_color: vec4<f32>,     // sRGB RGBA (linearized in shader)
+    grid_padding: vec4<f32>,     // left, top, right, bottom
+    bg_color: vec4<f32>,         // sRGB RGBA (linearized in shader)
     min_contrast: f32,
+    cursor_visible: u32,         // 0 = hidden (e.g. in copy mode), 1 = visible
     cursor_pos: vec2<u32>,
-    cursor_color: vec4<f32>, // sRGB RGBA (linearized in shader)
-    cursor_wide: u32,        // bool as u32
+    cursor_color: vec4<f32>,     // sRGB RGBA
+    cursor_wide: u32,
+    overlay_shape: u32,          // 0=hidden, 1=block, 2=underline, 3=bar
+    overlay_pos: vec2<u32>,
+    overlay_color: vec4<f32>,    // sRGB RGBA
+    selection_start: vec2<u32>,  // (col, row) inclusive
+    selection_end: vec2<u32>,    // (col, row) inclusive
+    selection_color: vec4<f32>,  // sRGB RGBA
+    selection_active: u32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -63,8 +71,6 @@ fn contrast_ratio(l1: f32, l2: f32) -> f32 {
     return (lighter + 0.05) / (darker + 0.05);
 }
 
-/// Adjust foreground color to meet minimum contrast against background.
-/// Both colors must be in linear space. Returns adjusted fg in linear space.
 fn apply_min_contrast(fg: vec3<f32>, bg: vec3<f32>, min_ratio: f32) -> vec3<f32> {
     if min_ratio <= 1.0 {
         return fg;
@@ -77,10 +83,7 @@ fn apply_min_contrast(fg: vec3<f32>, bg: vec3<f32>, min_ratio: f32) -> vec3<f32>
         return fg;
     }
 
-    // Determine target luminance. Try lighter first, then darker.
-    // target_lighter: (target + 0.05) / (bg_lum + 0.05) = min_ratio
     let target_lighter = min_ratio * (bg_lum + 0.05) - 0.05;
-    // target_darker: (bg_lum + 0.05) / (target + 0.05) = min_ratio
     let target_darker = (bg_lum + 0.05) / min_ratio - 0.05;
 
     var target_lum: f32;
@@ -89,15 +92,12 @@ fn apply_min_contrast(fg: vec3<f32>, bg: vec3<f32>, min_ratio: f32) -> vec3<f32>
     } else if target_darker >= 0.0 {
         target_lum = target_darker;
     } else {
-        // Can't achieve the ratio either way; pick the best we can.
         target_lum = select(0.0, 1.0, abs(target_lighter - fg_lum) < abs(target_darker - fg_lum));
     }
 
-    // Scale the linear color to match target luminance.
     if fg_lum > 0.001 {
         let scale = target_lum / fg_lum;
         let adjusted = clamp(fg * scale, vec3<f32>(0.0), vec3<f32>(1.0));
-        // If scaling saturated a channel, do a final luminance fixup via mix with white/black.
         let adj_lum = luminance(adjusted);
         if abs(adj_lum - target_lum) > 0.01 {
             if target_lum > adj_lum {
@@ -110,8 +110,41 @@ fn apply_min_contrast(fg: vec3<f32>, bg: vec3<f32>, min_ratio: f32) -> vec3<f32>
         }
         return adjusted;
     }
-    // fg is near-black; mix toward white.
     return vec3<f32>(target_lum);
+}
+
+// ================================================================
+// Selection and overlay helpers
+// ================================================================
+
+// Check if a grid cell is inside the selection range.
+// Selection is a linear range from (start_col, start_row) to (end_col, end_row)
+// in reading order (start <= end guaranteed by the host).
+fn is_in_selection(col: u32, row: u32) -> bool {
+    if uniforms.selection_active == 0u {
+        return false;
+    }
+    let s = uniforms.selection_start;
+    let e = uniforms.selection_end;
+
+    // Before first row or after last row
+    if row < s.y || row > e.y {
+        return false;
+    }
+    // Single row: check column bounds
+    if s.y == e.y {
+        return col >= s.x && col <= e.x;
+    }
+    // First row: from start_col to end of line
+    if row == s.y {
+        return col >= s.x;
+    }
+    // Last row: from start of line to end_col
+    if row == e.y {
+        return col <= e.x;
+    }
+    // Middle rows: entire line is selected
+    return true;
 }
 
 // ================================================================
@@ -141,7 +174,7 @@ fn fs_bg_color(in: FullScreenOut) -> @location(0) vec4<f32> {
 }
 
 // ================================================================
-// Cell background pass: per-cell background colors
+// Cell background pass: per-cell background colors + selection + overlay cursor
 // ================================================================
 
 @group(1) @binding(0) var<storage, read> bg_cells: array<u32>;
@@ -166,9 +199,50 @@ fn fs_cell_bg(in: FullScreenOut) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
 
-    let idx = u32(grid_pos.y) * uniforms.grid_size.x + u32(grid_pos.x);
+    let col = u32(grid_pos.x);
+    let row = u32(grid_pos.y);
+    let idx = row * uniforms.grid_size.x + col;
     let packed = bg_cells[idx];
     var color = linearize(unpack_rgba(packed));
+
+    // Selection highlight: blend selection color over cell bg
+    if is_in_selection(col, row) {
+        let sel = linearize(uniforms.selection_color);
+        // Alpha-blend selection over cell bg
+        color = vec4<f32>(
+            mix(color.rgb, sel.rgb, sel.a),
+            max(color.a, sel.a),
+        );
+    }
+
+    // Overlay cursor: draw cursor shape at overlay_pos
+    if uniforms.overlay_shape != 0u
+       && col == uniforms.overlay_pos.x
+       && row == uniforms.overlay_pos.y {
+        let local = pos - uniforms.cell_size * vec2<f32>(f32(col), f32(row));
+        let cur_color = linearize(uniforms.overlay_color);
+        var draw = false;
+
+        if uniforms.overlay_shape == 1u {
+            // Block: fill entire cell
+            draw = true;
+        } else if uniforms.overlay_shape == 2u {
+            // Underline: bottom 2px (or ~12% of cell height)
+            let thickness = max(2.0, uniforms.cell_size.y * 0.12);
+            draw = local.y >= (uniforms.cell_size.y - thickness);
+        } else if uniforms.overlay_shape == 3u {
+            // Bar: left 2px (or ~10% of cell width)
+            let thickness = max(2.0, uniforms.cell_size.x * 0.1);
+            draw = local.x < thickness;
+        }
+
+        if draw {
+            color = vec4<f32>(
+                mix(color.rgb, cur_color.rgb, cur_color.a),
+                max(color.a, cur_color.a),
+            );
+        }
+    }
 
     // Premultiply alpha (in linear space)
     color = vec4<f32>(color.rgb * color.a, color.a);
@@ -217,12 +291,16 @@ fn vs_cell_text(
 
     let world_pos = cell_pos + size * corner + offset + uniforms.grid_padding.xy;
 
-    // Determine text color. If this cell is under the cursor, use
-    // the cursor color instead (matching Ghostty's behavior).
+    // Determine text color. If the VT cursor is visible and this cell
+    // is under it, use the cursor color (matching Ghostty's behavior).
+    // When cursor_visible == 0 (e.g. copy mode), skip this swap entirely
+    // so the overlay cursor doesn't fight with the VT cursor.
     let is_cursor_glyph = (instance.atlas_and_flags & 0xFF00u) != 0u;
-    let at_cursor = instance.grid_pos.x == uniforms.cursor_pos.x
+    let at_cursor = uniforms.cursor_visible != 0u
+                 && instance.grid_pos.x == uniforms.cursor_pos.x
                  && instance.grid_pos.y == uniforms.cursor_pos.y;
-    let at_cursor_wide = uniforms.cursor_wide != 0u
+    let at_cursor_wide = uniforms.cursor_visible != 0u
+                      && uniforms.cursor_wide != 0u
                       && instance.grid_pos.x == uniforms.cursor_pos.x + 1u
                       && instance.grid_pos.y == uniforms.cursor_pos.y;
     var color = instance.color;
@@ -235,7 +313,6 @@ fn vs_cell_text(
     let bg_packed = bg_cells[bg_idx];
     let bg_srgb = unpack_rgba(bg_packed);
     let bg_linear = linearize(bg_srgb).rgb;
-    // If cell bg is transparent, fall back to the surface bg color.
     let effective_bg = select(bg_linear, linearize(uniforms.bg_color).rgb, bg_srgb.a < 0.01);
 
     var out: CellTextOut;

@@ -61,7 +61,7 @@ mod terminal;
 
 // Re-export the public API.
 pub use ghostty_renderer::{Blending, Color, Colorspace, OptColor, ScrollAction};
-pub use renderer::{RendererConfig, TerminalRenderer};
+pub use renderer::{CursorShape, Overlay, RendererConfig, TerminalRenderer};
 pub use search::SearchMatch;
 pub use selection::GridPos;
 pub use terminal::{CursorState, Terminal, TerminalModes};

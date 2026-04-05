@@ -5,20 +5,14 @@
 //! - Converting terminal state to GPU-ready cell buffers
 //! - Presenting frames to the window surface via wgpu
 //!
-//! # Multiplexing
+//! # Overlay
 //!
-//! For split-pane rendering, the typical flow is:
+//! The renderer supports an overlay layer for multiplexer UI:
+//! - A cursor with configurable shape (block/underline/bar)
+//! - Selection highlighting over a range of cells
+//! - The ability to hide the VT cursor (so it doesn't fight the overlay)
 //!
-//! 1. Attach a terminal to the renderer
-//! 2. Call [`update_frame`](TerminalRenderer::update_frame) to rebuild
-//!    cell buffers from the terminal state
-//! 3. Call [`render`](TerminalRenderer::render) or
-//!    [`render_bg_only`](TerminalRenderer::render_bg_only) to present
-//!
-//! In a multiplexed setup, the app iterates panes and calls `attach` +
-//! `update_frame` for each, then renders them into viewports. Currently
-//! we render a single pane per frame; multi-viewport compositing will
-//! extend this in Phase 2.
+//! Set the overlay state before calling [`render`](TerminalRenderer::render).
 
 use std::ffi::CString;
 use std::sync::Arc;
@@ -28,6 +22,8 @@ use winit::window::Window;
 use ghostty_renderer as gr;
 
 use crate::gpu::GpuState;
+pub use crate::gpu::uniforms::CursorShape;
+use crate::selection::GridPos;
 use crate::Terminal;
 
 /// Configuration for creating a [`TerminalRenderer`].
@@ -42,6 +38,65 @@ pub struct RendererConfig {
     pub native_handle: *mut std::ffi::c_void,
 }
 
+/// Overlay state for the current frame.
+///
+/// Controls the multiplexer's visual overlay: cursor, selection highlight,
+/// and whether the VT (terminal) cursor is visible.
+///
+/// # Example: copy mode
+///
+/// ```no_run
+/// # use seance_terminal::*;
+/// # use seance_terminal::renderer::CursorShape;
+/// # let renderer: TerminalRenderer = todo!();
+/// let overlay = renderer.overlay_mut();
+/// overlay.vt_cursor_visible = false;                     // hide VT cursor
+/// overlay.cursor_shape = CursorShape::Block;             // show block cursor
+/// overlay.cursor_pos = GridPos { col: 5, row: 10 };      // at copy position
+/// overlay.cursor_color = [0.8, 0.8, 0.2, 1.0];          // yellow
+/// overlay.selection = Some((                              // highlight selection
+///     GridPos { col: 0, row: 8 },
+///     GridPos { col: 20, row: 10 },
+/// ));
+/// ```
+pub struct Overlay {
+    /// Whether the VT (terminal emulator) cursor should be rendered.
+    /// Set to `false` in copy mode to prevent it from fighting with
+    /// the overlay cursor.
+    pub vt_cursor_visible: bool,
+
+    /// Shape of the overlay cursor. `CursorShape::Hidden` disables it.
+    pub cursor_shape: CursorShape,
+
+    /// Grid position of the overlay cursor.
+    pub cursor_pos: GridPos,
+
+    /// Overlay cursor color as linear RGBA floats.
+    /// Default: white fully opaque.
+    pub cursor_color: [f32; 4],
+
+    /// Selection range as `(start, end)` in normalized reading order
+    /// (start <= end). `None` means no selection highlight.
+    pub selection: Option<(GridPos, GridPos)>,
+
+    /// Selection highlight color as sRGB RGBA floats.
+    /// Default: semi-transparent blue.
+    pub selection_color: [f32; 4],
+}
+
+impl Default for Overlay {
+    fn default() -> Self {
+        Self {
+            vt_cursor_visible: true,
+            cursor_shape: CursorShape::Hidden,
+            cursor_pos: GridPos { col: 0, row: 0 },
+            cursor_color: [1.0, 1.0, 1.0, 1.0],
+            selection: None,
+            selection_color: [0.3, 0.5, 0.8, 0.4],
+        }
+    }
+}
+
 /// GPU-accelerated terminal renderer.
 ///
 /// Wraps the ghostty renderer (font shaping, cell buffer generation)
@@ -52,14 +107,11 @@ pub struct TerminalRenderer {
     renderer: gr::Renderer,
     gpu: GpuState,
     cell_size: [f32; 2],
+    overlay: Overlay,
 }
 
 impl TerminalRenderer {
     /// Create a new renderer for the given window.
-    ///
-    /// This initializes the ghostty renderer (font loading, glyph atlas)
-    /// and the wgpu GPU pipeline. The renderer is ready to render after
-    /// this call.
     pub async fn new(window: Arc<Window>, config: RendererConfig) -> Option<Self> {
         let renderer_config = gr::RendererConfig {
             width_px: config.width,
@@ -87,12 +139,11 @@ impl TerminalRenderer {
             renderer,
             gpu,
             cell_size,
+            overlay: Overlay::default(),
         })
     }
 
     /// Cell dimensions in pixels `[width, height]`.
-    ///
-    /// Determined by the loaded font; constant for the renderer's lifetime.
     pub fn cell_size(&self) -> [f32; 2] {
         self.cell_size
     }
@@ -103,40 +154,46 @@ impl TerminalRenderer {
         self.gpu.resize(winit::dpi::PhysicalSize::new(width, height));
     }
 
+    // -- Overlay --
+
+    /// Mutable access to the overlay state.
+    ///
+    /// Modify this before calling [`render`] to control the overlay
+    /// cursor, selection highlight, and VT cursor visibility.
+    pub fn overlay_mut(&mut self) -> &mut Overlay {
+        &mut self.overlay
+    }
+
+    /// Read-only access to the overlay state.
+    pub fn overlay(&self) -> &Overlay {
+        &self.overlay
+    }
+
     // -- Terminal attachment --
 
     /// Attach a terminal to the renderer for the next frame.
-    ///
-    /// This sets the ghostty renderer's terminal reference so that
-    /// `update_frame` reads from this terminal's state.
     pub fn attach(&self, terminal: &Terminal) {
         self.renderer.set_terminal(terminal.vt());
     }
 
     /// Rebuild cell buffers from the currently attached terminal.
-    ///
-    /// Call this after `attach` and before `render`.
     pub fn update_frame(&self) {
         self.renderer.update_frame();
     }
 
     // -- Rendering --
 
-    /// Render a full frame (background + cell backgrounds + text).
-    ///
-    /// Call `attach` + `update_frame` first.
+    /// Render a full frame (background + cell backgrounds + selection +
+    /// overlay cursor + text).
     pub fn render(&mut self) -> bool {
         let snapshot = self.renderer.frame_snapshot();
-        self.gpu.render_frame(&snapshot)
+        self.gpu.render_frame(&snapshot, &self.overlay)
     }
 
     /// Render only the background color (no cell content).
-    ///
-    /// Used during resize transitions to avoid showing stale content
-    /// while the shell processes SIGWINCH.
     pub fn render_bg_only(&mut self) -> bool {
         let snapshot = self.renderer.frame_snapshot();
-        self.gpu.render_frame_bg_only(&snapshot)
+        self.gpu.render_frame_bg_only(&snapshot, &self.overlay)
     }
 
     // -- Appearance --
@@ -178,9 +235,6 @@ impl TerminalRenderer {
     }
 
     /// Set minimum contrast ratio for text vs background (WCAG).
-    ///
-    /// A value of 1.0 disables contrast adjustment. Values like 4.5
-    /// (WCAG AA) or 7.0 (WCAG AAA) enforce readability.
     pub fn set_min_contrast(&self, contrast: f32) {
         self.renderer.set_min_contrast(contrast);
     }
