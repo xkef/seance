@@ -1,19 +1,46 @@
-// Cell rendering shaders for seance.
-// Ported from ghostty's Metal shaders (shaders.metal).
+// Cell rendering shaders for séance.
+// Ported from Ghostty's Metal shaders.
+//
+// Colors are handled in linear space. The surface uses an sRGB format,
+// so the GPU applies gamma encoding on write. All sRGB inputs (uniform
+// colors, vertex colors, cell bg colors) are linearized in the shader
+// before blending. The color emoji atlas uses Bgra8UnormSrgb, so the
+// hardware linearizes texels on sample. The grayscale atlas is R8Unorm
+// (coverage values, not color — no conversion needed).
 
 struct Uniforms {
     projection: mat4x4<f32>,
     cell_size: vec2<f32>,
     grid_size: vec2<u32>,
     grid_padding: vec4<f32>, // left, top, right, bottom
-    bg_color: vec4<f32>,     // linear RGBA
+    bg_color: vec4<f32>,     // sRGB RGBA (linearized in shader)
     min_contrast: f32,
     cursor_pos: vec2<u32>,
-    cursor_color: vec4<f32>,
+    cursor_color: vec4<f32>, // sRGB RGBA (linearized in shader)
     cursor_wide: u32,        // bool as u32
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+// ================================================================
+// sRGB ↔ linear conversion
+// ================================================================
+
+fn srgb_to_linear_component(c: f32) -> f32 {
+    if c <= 0.04045 {
+        return c / 12.92;
+    }
+    return pow((c + 0.055) / 1.055, 2.4);
+}
+
+fn linearize(color: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(
+        srgb_to_linear_component(color.r),
+        srgb_to_linear_component(color.g),
+        srgb_to_linear_component(color.b),
+        color.a,
+    );
+}
 
 // ================================================================
 // Full-screen vertex (used by bg_color and cell_bg passes)
@@ -38,7 +65,7 @@ fn vs_fullscreen(@builtin(vertex_index) vid: u32) -> FullScreenOut {
 
 @fragment
 fn fs_bg_color(in: FullScreenOut) -> @location(0) vec4<f32> {
-    return uniforms.bg_color;
+    return linearize(uniforms.bg_color);
 }
 
 // ================================================================
@@ -69,9 +96,9 @@ fn fs_cell_bg(in: FullScreenOut) -> @location(0) vec4<f32> {
 
     let idx = u32(grid_pos.y) * uniforms.grid_size.x + u32(grid_pos.x);
     let packed = bg_cells[idx];
-    var color = unpack_rgba(packed);
+    var color = linearize(unpack_rgba(packed));
 
-    // Premultiply alpha
+    // Premultiply alpha (in linear space)
     color = vec4<f32>(color.rgb * color.a, color.a);
     return color;
 }
@@ -117,11 +144,24 @@ fn vs_cell_text(
 
     let world_pos = cell_pos + size * corner + offset + uniforms.grid_padding.xy;
 
+    // Determine text color. If this cell is under the cursor, use
+    // the cursor color instead (matching Ghostty's behavior).
+    let is_cursor_glyph = (instance.atlas_and_flags & 0xFF00u) != 0u;
+    let at_cursor = instance.grid_pos.x == uniforms.cursor_pos.x
+                 && instance.grid_pos.y == uniforms.cursor_pos.y;
+    let at_cursor_wide = uniforms.cursor_wide != 0u
+                      && instance.grid_pos.x == uniforms.cursor_pos.x + 1u
+                      && instance.grid_pos.y == uniforms.cursor_pos.y;
+    var color = instance.color;
+    if (at_cursor || at_cursor_wide) && !is_cursor_glyph {
+        color = uniforms.cursor_color;
+    }
+
     var out: CellTextOut;
     out.position = uniforms.projection * vec4<f32>(world_pos, 0.0, 1.0);
     out.tex_coord = vec2<f32>(f32(instance.glyph_pos.x), f32(instance.glyph_pos.y))
                   + vec2<f32>(f32(instance.glyph_size.x), f32(instance.glyph_size.y)) * corner;
-    out.color = instance.color;
+    out.color = linearize(color);
     out.atlas = instance.atlas_and_flags & 0xFFu;
 
     return out;
@@ -130,17 +170,15 @@ fn vs_cell_text(
 @fragment
 fn fs_cell_text(in: CellTextOut) -> @location(0) vec4<f32> {
     if in.atlas == 0u {
-        // Grayscale atlas: coverage alpha. Color from vertex.
+        // Grayscale atlas: coverage alpha. Color from vertex (already linear).
         let gs_size = vec2<f32>(textureDimensions(atlas_grayscale));
         let uv = in.tex_coord / gs_size;
         let a = textureSample(atlas_grayscale, atlas_sampler, uv).r;
-        if a < 0.01 {
-            discard;
-        }
         let alpha = a * in.color.a;
         return vec4<f32>(in.color.rgb * alpha, alpha);
     } else {
-        // Color atlas: emoji (already premultiplied BGRA).
+        // Color atlas: emoji. Texture is Bgra8UnormSrgb so hardware
+        // auto-linearizes on sample. Already premultiplied.
         let c_size = vec2<f32>(textureDimensions(atlas_color_tex));
         let uv = in.tex_coord / c_size;
         return textureSample(atlas_color_tex, atlas_sampler, uv);

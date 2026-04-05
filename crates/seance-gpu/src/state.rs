@@ -59,13 +59,14 @@ impl GpuState {
             .expect("failed to create device");
 
         let caps = surface.get_capabilities(&adapter);
-        // Use a non-sRGB format to match Ghostty's Metal renderer, which
-        // uses bgra8Unorm (no automatic gamma encoding). Colors from
-        // ghostty are already in sRGB and are passed through directly.
+        // Use an sRGB format so the GPU applies gamma encoding after
+        // blending. This matches Ghostty's default linear blending mode
+        // (bgra8unorm_srgb on Metal). All shader outputs are in linear
+        // space; the hardware converts to sRGB on write.
         let format = caps
             .formats
             .iter()
-            .find(|f| !f.is_srgb())
+            .find(|f| f.is_srgb())
             .copied()
             .unwrap_or(caps.formats[0]);
 
@@ -219,8 +220,8 @@ impl GpuState {
         };
 
         // Build uniforms from frame data.
-        // Surface format is non-sRGB (matching Ghostty's Metal renderer),
-        // so colors are passed through as sRGB without conversion.
+        // Colors are sent as sRGB floats; the shader linearizes them
+        // before output. The sRGB surface format handles re-encoding.
         let fd = snapshot.frame_data();
         let uniforms = Uniforms::from_frame_data(
             &fd,
@@ -377,7 +378,7 @@ impl GpuState {
     ) -> bool {
         let bpp: u32 = match format {
             TextureFormat::R8Unorm => 1,
-            TextureFormat::Bgra8Unorm => 4,
+            TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => 4,
             _ => panic!("unsupported atlas format"),
         };
         let tex_size = Extent3d {
@@ -434,10 +435,12 @@ impl GpuState {
     }
 
     fn upload_atlas_color(&mut self, data: &[u8], size: u32) {
+        // Use Bgra8UnormSrgb so the GPU auto-linearizes color emoji
+        // texels on sample, matching Ghostty's Metal renderer.
         let resized = Self::write_atlas(
             &self.device, &self.queue,
             &mut self.atlas_color_texture,
-            data, size, TextureFormat::Bgra8Unorm, "atlas_color",
+            data, size, TextureFormat::Bgra8UnormSrgb, "atlas_color",
         );
         if resized {
             self.atlas_bind_group = None;
@@ -476,7 +479,7 @@ impl GpuState {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: TextureDimension::D2,
-                    format: TextureFormat::Bgra8Unorm,
+                    format: TextureFormat::Bgra8UnormSrgb,
                     usage: TextureUsages::TEXTURE_BINDING,
                     view_formats: &[],
                 });
