@@ -182,10 +182,6 @@ impl ApplicationHandler for App {
                 if let (Some(r), Some(w)) = (&mut self.renderer, &self.window) {
                     r.resize_surface(new_size.width, new_size.height, w.scale_factor());
                 }
-                // Ask ghostty to recompute the grid for the new pixel size.
-                if let Some(r) = &self.renderer {
-                    r.update_frame();
-                }
                 let (cols, rows) = self
                     .renderer
                     .as_ref()

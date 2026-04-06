@@ -142,14 +142,21 @@ impl TerminalRenderer {
 
     /// Notify the renderer and GPU of a new surface size.
     ///
-    /// Updates ghostty's internal layout. The caller should follow up with
-    /// `update_frame()` to refresh the cached grid dimensions.
+    /// Also refreshes the cached grid dimensions from ghostty so that
+    /// `grid_size()` returns the correct values for the new size.
     pub fn resize_surface(&mut self, width: u32, height: u32, _scale: f64) {
         self.surface_width = width;
         self.surface_height = height;
         self.renderer.resize(width, height);
         self.gpu
             .resize(winit::dpi::PhysicalSize::new(width, height));
+
+        // Read ghostty's recomputed grid dimensions without consuming
+        // dirty state (that's update_frame's job).
+        let fd = self.renderer.frame_snapshot().frame_data();
+        self.grid_padding.set(fd.grid_padding);
+        self.grid_cols.set(fd.grid_cols);
+        self.grid_rows.set(fd.grid_rows);
     }
 
     /// Mutable access to the overlay state (cursor, selection).
