@@ -2,6 +2,7 @@
 
 use std::cell::Cell;
 use std::ffi::CString;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use winit::window::Window;
@@ -43,7 +44,7 @@ impl Default for Overlay {
 }
 
 pub struct TerminalRenderer {
-    font_grid: Arc<gr::FontGrid>,
+    font_grid: Rc<gr::FontGrid>,
     renderer: gr::Renderer,
     gpu: GpuState,
     cell_size: [f32; 2],
@@ -66,7 +67,7 @@ impl TerminalRenderer {
             ..Default::default()
         };
 
-        let font_grid = Arc::new(gr::FontGrid::new(&font_grid_config)?);
+        let font_grid = Rc::new(gr::FontGrid::new(&font_grid_config)?);
         let metrics = font_grid.metrics();
         let cell_size = [metrics.cell_width, metrics.cell_height];
 
@@ -116,7 +117,7 @@ impl TerminalRenderer {
         (col, row)
     }
 
-    pub fn font_grid(&self) -> &Arc<gr::FontGrid> { &self.font_grid }
+    pub fn font_grid(&self) -> &Rc<gr::FontGrid> { &self.font_grid }
 
     pub fn resize_surface(&mut self, width: u32, height: u32, _scale: f64) {
         self.surface_width = width;
@@ -137,7 +138,8 @@ impl TerminalRenderer {
     pub fn overlay(&self) -> &Overlay { &self.overlay }
 
     pub fn attach(&self, terminal: &Terminal) {
-        self.renderer.set_terminal_raw(terminal.raw_terminal_ptr());
+        // Safety: raw_terminal_ptr() returns a valid GhosttyTerminal handle.
+        unsafe { self.renderer.set_terminal_raw(terminal.raw_terminal_ptr()) };
     }
 
     pub fn update_frame(&self) {
@@ -157,11 +159,11 @@ impl TerminalRenderer {
     }
 
     pub fn set_theme(&self, name: &str) -> bool {
-        CString::new(name).ok().map_or(false, |c| self.renderer.load_theme(&c))
+        CString::new(name).ok().is_some_and(|c| self.renderer.load_theme(&c))
     }
 
     pub fn set_theme_file(&self, path: &str) -> bool {
-        CString::new(path).ok().map_or(false, |c| self.renderer.load_theme_file(&c))
+        CString::new(path).ok().is_some_and(|c| self.renderer.load_theme_file(&c))
     }
 
     pub fn set_font_size(&mut self, points: f32) {

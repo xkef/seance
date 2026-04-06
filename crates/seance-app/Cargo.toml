@@ -19,6 +19,9 @@ log.workspace = true
 env_logger.workspace = true
 winit = "0.30"
 
+[lints]
+workspace = true
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"
 raw-window-handle = "0.6"

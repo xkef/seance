@@ -6,7 +6,7 @@
 use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use ghostty_renderer_sys as ffi;
 
@@ -75,17 +75,19 @@ impl Drop for FontGrid {
 
 pub struct Renderer {
     raw: NonNull<c_void>,
-    _grid: Arc<FontGrid>,
+    _grid: Rc<FontGrid>,
     _not_send: PhantomData<*mut ()>,
 }
 
 impl Renderer {
-    pub fn new(grid: Arc<FontGrid>, config: &RendererConfig) -> Option<Self> {
+    pub fn new(grid: Rc<FontGrid>, config: &RendererConfig) -> Option<Self> {
         let raw = unsafe { ffi::ghostty_renderer_new(grid.raw.as_ptr(), config) };
         NonNull::new(raw).map(|raw| Self { raw, _grid: grid, _not_send: PhantomData })
     }
 
-    pub fn set_terminal_raw(&self, terminal: *mut c_void) {
+    /// # Safety
+    /// `terminal` must be a valid GhosttyTerminal handle from libghostty-vt.
+    pub unsafe fn set_terminal_raw(&self, terminal: *mut c_void) {
         unsafe { ffi::ghostty_renderer_set_terminal(self.raw.as_ptr(), terminal) };
     }
 

@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "PTY spawning and I/O for seance"
 
+[lints]
+workspace = true
+
 [dependencies]
 libc.workspace = true
 

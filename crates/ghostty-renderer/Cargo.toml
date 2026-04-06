@@ -5,5 +5,8 @@ edition.workspace = true
 license.workspace = true
 description = "Safe Rust wrapper for libghostty-renderer"
 
+[lints]
+workspace = true
+
 [dependencies]
 ghostty-renderer-sys = { path = "../ghostty-renderer-sys" }

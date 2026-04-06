@@ -184,8 +184,8 @@ impl Terminal {
         let screen = self.dump_screen();
         self.search.search(query, &screen, cols)
     }
-    pub fn search_next(&mut self) -> Option<crate::search::SearchMatch> { self.search.next() }
-    pub fn search_prev(&mut self) -> Option<crate::search::SearchMatch> { self.search.prev() }
+    pub fn search_next(&mut self) -> Option<crate::search::SearchMatch> { self.search.next_match() }
+    pub fn search_prev(&mut self) -> Option<crate::search::SearchMatch> { self.search.prev_match() }
     pub fn current_search_match(&self) -> Option<crate::search::SearchMatch> { self.search.current_match() }
     pub fn search_matches(&self) -> &[crate::search::SearchMatch] { self.search.matches() }
     pub fn clear_search(&mut self) { self.search.clear(); }

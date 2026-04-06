@@ -16,7 +16,8 @@ pub struct SearchMatch {
 /// Persistent search state for a terminal.
 ///
 /// Caches the query and match list. Call [`search`] to find all matches
-/// on the current screen content, then use [`next`]/[`prev`] to cycle.
+/// on the current screen content, then use [`next_match`]/[`prev_match`] to cycle.
+#[derive(Default)]
 pub struct SearchState {
     query: String,
     matches: Vec<SearchMatch>,
@@ -25,11 +26,7 @@ pub struct SearchState {
 
 impl SearchState {
     pub fn new() -> Self {
-        Self {
-            query: String::new(),
-            matches: Vec::new(),
-            current: None,
-        }
+        Self::default()
     }
 
     /// Run a new search against screen content. Returns the number of matches.
@@ -75,7 +72,7 @@ impl SearchState {
     }
 
     /// Advance to the next match, wrapping around.
-    pub fn next(&mut self) -> Option<SearchMatch> {
+    pub fn next_match(&mut self) -> Option<SearchMatch> {
         if self.matches.is_empty() {
             return None;
         }
@@ -88,7 +85,7 @@ impl SearchState {
     }
 
     /// Move to the previous match, wrapping around.
-    pub fn prev(&mut self) -> Option<SearchMatch> {
+    pub fn prev_match(&mut self) -> Option<SearchMatch> {
         if self.matches.is_empty() {
             return None;
         }

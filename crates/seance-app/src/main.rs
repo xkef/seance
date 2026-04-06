@@ -210,7 +210,7 @@ impl ApplicationHandler for App {
                     let had_selection = self
                         .panes
                         .get(&self.focused)
-                        .map_or(false, |t| t.has_selection());
+                        .is_some_and(|t| t.has_selection());
                     if had_selection {
                         if let Some(term) = self.panes.get_mut(&self.focused) {
                             term.clear_selection();
@@ -231,10 +231,10 @@ impl ApplicationHandler for App {
                     }
                     Action::Copy => {
                         if let Some(term) = self.panes.get_mut(&self.focused) {
-                            if let Some(text) = term.selection_text() {
-                                if let Ok(mut cb) = arboard::Clipboard::new() {
-                                    let _ = cb.set_text(text);
-                                }
+                            if let Some(text) = term.selection_text()
+                                && let Ok(mut cb) = arboard::Clipboard::new()
+                            {
+                                let _ = cb.set_text(text);
                             }
                             term.clear_selection();
                         }
@@ -243,20 +243,20 @@ impl ApplicationHandler for App {
                         }
                     }
                     Action::Paste => {
-                        if let Ok(mut cb) = arboard::Clipboard::new() {
-                            if let Ok(text) = cb.get_text() {
-                                let bracketed = self
-                                    .panes
-                                    .get(&self.focused)
-                                    .map_or(false, |t| t.modes().bracketed_paste);
-                                if let Some(term) = self.panes.get(&self.focused) {
-                                    if bracketed {
-                                        term.write(b"\x1b[200~");
-                                    }
-                                    term.write(text.as_bytes());
-                                    if bracketed {
-                                        term.write(b"\x1b[201~");
-                                    }
+                        if let Ok(mut cb) = arboard::Clipboard::new()
+                            && let Ok(text) = cb.get_text()
+                        {
+                            let bracketed = self
+                                .panes
+                                .get(&self.focused)
+                                .is_some_and(|t| t.modes().bracketed_paste);
+                            if let Some(term) = self.panes.get(&self.focused) {
+                                if bracketed {
+                                    term.write(b"\x1b[200~");
+                                }
+                                term.write(text.as_bytes());
+                                if bracketed {
+                                    term.write(b"\x1b[201~");
                                 }
                             }
                         }
@@ -387,15 +387,12 @@ impl ApplicationHandler for App {
                         }
                         ElementState::Released => {
                             self.mouse_down = false;
-                            // Auto-copy selection to clipboard on mouse release
-                            if let Some(term) = self.panes.get_mut(&self.focused) {
-                                if let Some(text) = term.selection_text() {
-                                    if !text.is_empty() {
-                                        if let Ok(mut cb) = arboard::Clipboard::new() {
-                                            let _ = cb.set_text(text);
-                                        }
-                                    }
-                                }
+                            if let Some(term) = self.panes.get_mut(&self.focused)
+                                && let Some(text) = term.selection_text()
+                                && !text.is_empty()
+                                && let Ok(mut cb) = arboard::Clipboard::new()
+                            {
+                                let _ = cb.set_text(text);
                             }
                         }
                     }

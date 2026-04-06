@@ -329,7 +329,7 @@ impl GpuState {
 
     fn upload_bg_cells(&mut self, data: &[u8]) {
         let needed = data.len() as u64;
-        let recreate = self.bg_cells_buffer.as_ref().map_or(true, |b| b.size() < needed);
+        let recreate = self.bg_cells_buffer.as_ref().is_none_or(|b| b.size() < needed);
 
         if recreate {
             let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -354,7 +354,7 @@ impl GpuState {
 
     fn upload_text_instances(&mut self, data: &[u8]) {
         let needed = data.len() as u64;
-        let recreate = self.text_instance_buffer.as_ref().map_or(true, |b| b.size() < needed);
+        let recreate = self.text_instance_buffer.as_ref().is_none_or(|b| b.size() < needed);
 
         if recreate {
             self.text_instance_buffer = Some(
@@ -389,7 +389,7 @@ impl GpuState {
             depth_or_array_layers: 1,
         };
 
-        let need_new = existing.as_ref().map_or(true, |t| t.width() != size || t.height() != size);
+        let need_new = existing.as_ref().is_none_or(|t| t.width() != size || t.height() != size);
 
         if need_new {
             *existing = Some(device.create_texture(&TextureDescriptor {
