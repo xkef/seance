@@ -120,12 +120,9 @@ impl TerminalRenderer {
     /// surface dimensions minus padding, divided by cell size.
     pub fn grid_size(&self) -> (u16, u16) {
         let [cw, ch] = self.cell_size;
-        let pad = self.grid_padding.get();
-        let usable_w = (self.surface_width as f32 - pad[0] - pad[2]).max(cw);
-        let usable_h = (self.surface_height as f32 - pad[1] - pad[3]).max(ch);
-        let cols = (usable_w / cw).max(1.0) as u16;
-        let rows = (usable_h / ch).max(1.0) as u16;
-        (cols, rows)
+        let cols = (self.surface_width as f32 / cw) as u16;
+        let rows = (self.surface_height as f32 / ch) as u16;
+        (cols.max(1), rows.max(1))
     }
 
     /// Convert a pixel position to a grid cell (col, row).
