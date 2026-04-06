@@ -1,4 +1,9 @@
-use std::collections::HashMap;
+//! Séance — a GPU-accelerated terminal emulator built on libghostty.
+//!
+//! Single-window application using winit for the event loop and wgpu for
+//! rendering. PTY polling is decoupled from the render path: `about_to_wait`
+//! drives I/O at ~250 Hz, and redraws are requested only when content changes.
+
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -8,22 +13,22 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
 use seance_input::{Action, InputHandler};
-use seance_layout::{LayoutTree, PaneId};
 use seance_terminal::{RendererConfig, Terminal, TerminalRenderer};
 
 const DEFAULT_FONT_SIZE: f32 = 14.0;
 
+/// Top-level application state.
 struct App {
     window: Option<Arc<Window>>,
     renderer: Option<TerminalRenderer>,
-    panes: HashMap<PaneId, Terminal>,
-    layout: LayoutTree,
-    focused: PaneId,
+    terminal: Option<Terminal>,
     input: InputHandler,
     modifiers: Modifiers,
     cell_size: [f32; 2],
     font_size: f32,
     content_dirty: bool,
+
+    // Mouse selection state.
     cursor_pos: winit::dpi::PhysicalPosition<f64>,
     mouse_down: bool,
     click_count: u8,
@@ -36,9 +41,7 @@ impl App {
         Self {
             window: None,
             renderer: None,
-            panes: HashMap::new(),
-            layout: LayoutTree::new(0, 1.0, 1.0),
-            focused: 0,
+            terminal: None,
             input: InputHandler::new(),
             modifiers: Modifiers::default(),
             cell_size: [0.0, 0.0],
@@ -58,17 +61,15 @@ impl App {
         }
     }
 
+    /// Read pending PTY output and feed it to the VT emulator.
+    /// Returns true if new data arrived.
     fn poll_pty(&mut self) -> bool {
-        let mut got_data = false;
-        let mut dead = Vec::new();
-        for (&id, term) in self.panes.iter_mut() {
-            got_data |= term.poll();
-            if !term.is_alive() {
-                dead.push(id);
-            }
-        }
-        for id in dead {
-            self.panes.remove(&id);
+        let Some(term) = &mut self.terminal else {
+            return false;
+        };
+        let got_data = term.poll();
+        if !term.is_alive() {
+            self.terminal = None;
         }
         if got_data {
             self.content_dirty = true;
@@ -76,40 +77,54 @@ impl App {
         got_data
     }
 
+    /// Render one frame. Only rebuilds the cell buffer when content is dirty.
     fn draw(&mut self) {
-        if self.panes.is_empty() {
+        if self.terminal.is_none() {
             return;
         }
-
         if self.content_dirty {
             self.content_dirty = false;
             if let Some(r) = &self.renderer {
                 r.update_frame();
             }
         }
-
         if let Some(r) = &mut self.renderer {
             r.render();
         }
     }
 
+    /// Apply the current `font_size` to the renderer and resize terminals.
     fn apply_font_size(&mut self) {
         if let (Some(r), Some(w)) = (&mut self.renderer, &self.window) {
             r.set_font_size(self.font_size);
             let size = w.inner_size();
             r.resize_surface(size.width, size.height, w.scale_factor());
             self.cell_size = r.cell_size();
-            self.layout
-                .set_cell_size(self.cell_size[0], self.cell_size[1]);
             let (cols, rows) = r.grid_size();
-            for term in self.panes.values_mut() {
+            if let Some(term) = &mut self.terminal {
                 term.resize(cols, rows);
             }
         }
         self.content_dirty = true;
         self.request_redraw();
     }
+
+    /// Build a `TerminalModes` snapshot for the input encoder.
+    fn terminal_modes(&self) -> seance_input::TerminalModes {
+        self.terminal.as_ref().map_or(Default::default(), |t| {
+            let m = t.modes();
+            seance_input::TerminalModes {
+                cursor_keys: m.cursor_keys,
+                mouse_event: m.mouse_event,
+                mouse_format_sgr: m.mouse_format_sgr,
+            }
+        })
+    }
 }
+
+// ---------------------------------------------------------------------------
+// Event loop
+// ---------------------------------------------------------------------------
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -147,8 +162,6 @@ impl ApplicationHandler for App {
         }
 
         self.cell_size = renderer.cell_size();
-        self.layout
-            .set_cell_size(self.cell_size[0], self.cell_size[1]);
         let (cols, rows) = renderer.grid_size();
         self.renderer = Some(renderer);
         self.window = Some(window);
@@ -157,7 +170,7 @@ impl ApplicationHandler for App {
         if let Some(r) = &self.renderer {
             r.attach(&term);
         }
-        self.panes.insert(0, term);
+        self.terminal = Some(term);
     }
 
     fn window_event(
@@ -178,7 +191,7 @@ impl ApplicationHandler for App {
                     .as_ref()
                     .map(|r| r.grid_size())
                     .unwrap_or((80, 24));
-                for term in self.panes.values_mut() {
+                if let Some(term) = &mut self.terminal {
                     term.resize(cols, rows);
                 }
                 self.content_dirty = true;
@@ -190,39 +203,25 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::KeyboardInput { event, .. } => {
-                let modes = self
-                    .panes
-                    .get(&self.focused)
-                    .map_or(Default::default(), |t| {
-                        let m = t.modes();
-                        seance_input::TerminalModes {
-                            cursor_keys: m.cursor_keys,
-                            mouse_event: m.mouse_event,
-                            mouse_format_sgr: m.mouse_format_sgr,
-                        }
-                    });
+                let modes = self.terminal_modes();
                 let action = self.input.handle_key(&event, &self.modifiers, modes);
 
-                // Clear selection on keypress (except Cmd+C and modifiers)
+                // Clear selection on keypress (except copy/select-all/modifiers).
                 if event.state == ElementState::Pressed
                     && !matches!(action, Action::Copy | Action::SelectAll | Action::Ignore)
+                    && self.terminal.as_ref().is_some_and(|t| t.has_selection())
                 {
-                    let had_selection = self
-                        .panes
-                        .get(&self.focused)
-                        .is_some_and(|t| t.has_selection());
-                    if had_selection {
-                        if let Some(term) = self.panes.get_mut(&self.focused) {
-                            term.clear_selection();
-                        }
-                        if let Some(r) = &mut self.renderer {
-                            r.overlay_mut().selection = None;
-                        }
+                    if let Some(term) = &mut self.terminal {
+                        term.clear_selection();
+                    }
+                    if let Some(r) = &mut self.renderer {
+                        r.overlay_mut().selection = None;
                     }
                 }
+
                 match action {
                     Action::WritePty(data) => {
-                        if let Some(term) = self.panes.get(&self.focused) {
+                        if let Some(term) = &self.terminal {
                             term.write(&data);
                         }
                     }
@@ -230,7 +229,7 @@ impl ApplicationHandler for App {
                         event_loop.exit();
                     }
                     Action::Copy => {
-                        if let Some(term) = self.panes.get_mut(&self.focused) {
+                        if let Some(term) = &mut self.terminal {
                             if let Some(text) = term.selection_text()
                                 && let Ok(mut cb) = arboard::Clipboard::new()
                             {
@@ -247,10 +246,10 @@ impl ApplicationHandler for App {
                             && let Ok(text) = cb.get_text()
                         {
                             let bracketed = self
-                                .panes
-                                .get(&self.focused)
+                                .terminal
+                                .as_ref()
                                 .is_some_and(|t| t.modes().bracketed_paste);
-                            if let Some(term) = self.panes.get(&self.focused) {
+                            if let Some(term) = &self.terminal {
                                 if bracketed {
                                     term.write(b"\x1b[200~");
                                 }
@@ -262,7 +261,7 @@ impl ApplicationHandler for App {
                         }
                     }
                     Action::SelectAll => {
-                        if let Some(term) = self.panes.get_mut(&self.focused) {
+                        if let Some(term) = &mut self.terminal {
                             term.select_all();
                             let range = term.selection_range();
                             if let Some(r) = &mut self.renderer {
@@ -283,9 +282,6 @@ impl ApplicationHandler for App {
                         self.apply_font_size();
                     }
                     Action::Ignore => {}
-                    _ => {
-                        log::debug!("unhandled action: {action:?}");
-                    }
                 }
                 self.content_dirty = true;
                 self.request_redraw();
@@ -300,22 +296,12 @@ impl ApplicationHandler for App {
                     }
                 };
                 if lines != 0 {
-                    let modes = self
-                        .panes
-                        .get(&self.focused)
-                        .map_or(Default::default(), |t| {
-                            let m = t.modes();
-                            seance_input::TerminalModes {
-                                cursor_keys: m.cursor_keys,
-                                mouse_event: m.mouse_event,
-                                mouse_format_sgr: m.mouse_format_sgr,
-                            }
-                        });
+                    let modes = self.terminal_modes();
                     if let Some(data) = self.input.encode_mouse_wheel(lines, modes) {
-                        if let Some(term) = self.panes.get(&self.focused) {
+                        if let Some(term) = &self.terminal {
                             term.write(&data);
                         }
-                    } else if let Some(term) = self.panes.get_mut(&self.focused) {
+                    } else if let Some(term) = &mut self.terminal {
                         term.scroll_lines(-lines);
                     }
                     self.content_dirty = true;
@@ -331,13 +317,10 @@ impl ApplicationHandler for App {
                         .as_ref()
                         .map(|r| r.pixel_to_grid(position.x, position.y));
                     if let Some((col, row)) = grid_pos {
-                        if let Some(term) = self.panes.get_mut(&self.focused) {
+                        if let Some(term) = &mut self.terminal {
                             term.update_selection(col, row);
                         }
-                        let range = self
-                            .panes
-                            .get(&self.focused)
-                            .and_then(|t| t.selection_range());
+                        let range = self.terminal.as_ref().and_then(|t| t.selection_range());
                         if let Some(r) = &mut self.renderer {
                             r.overlay_mut().selection = range;
                         }
@@ -357,6 +340,7 @@ impl ApplicationHandler for App {
                                 .as_ref()
                                 .map(|r| r.pixel_to_grid(self.cursor_pos.x, self.cursor_pos.y));
                             if let Some((col, row)) = grid_pos {
+                                // Detect double/triple click.
                                 let dt = now.duration_since(self.last_click_time);
                                 if dt.as_millis() < 500
                                     && (col, row) == self.last_click_pos
@@ -368,7 +352,7 @@ impl ApplicationHandler for App {
                                 self.last_click_time = now;
                                 self.last_click_pos = (col, row);
 
-                                if let Some(term) = self.panes.get_mut(&self.focused) {
+                                if let Some(term) = &mut self.terminal {
                                     match self.click_count {
                                         1 => term.start_selection(col, row),
                                         2 => term.start_word_selection(col, row),
@@ -387,7 +371,8 @@ impl ApplicationHandler for App {
                         }
                         ElementState::Released => {
                             self.mouse_down = false;
-                            if let Some(term) = self.panes.get_mut(&self.focused)
+                            // Auto-copy selection to clipboard on mouse release.
+                            if let Some(term) = &mut self.terminal
                                 && let Some(text) = term.selection_text()
                                 && !text.is_empty()
                                 && let Ok(mut cb) = arboard::Clipboard::new()
@@ -408,14 +393,14 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if self.panes.is_empty() {
+        if self.terminal.is_none() {
             event_loop.exit();
             return;
         }
 
         self.poll_pty();
 
-        if self.panes.is_empty() {
+        if self.terminal.is_none() {
             event_loop.exit();
             return;
         }
@@ -434,6 +419,7 @@ impl ApplicationHandler for App {
 // Platform helpers
 // ---------------------------------------------------------------------------
 
+/// Configure the NSWindow for a borderless, transparent-titlebar appearance.
 #[cfg(target_os = "macos")]
 fn configure_macos_window(window: &Window) {
     use objc2::msg_send;

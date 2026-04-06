@@ -1,4 +1,9 @@
-//! Terminal renderer: ghostty font grid + renderer + wgpu pipeline.
+//! Terminal renderer: ghostty font grid + wgpu pipeline.
+//!
+//! Bridges the ghostty-renderer cell buffer generator with the wgpu GPU
+//! pipeline. Each frame, `update_frame` asks ghostty to rasterise the
+//! visible terminal content into cell arrays, then `render` uploads those
+//! arrays and draws three passes (background, cell bg, cell text).
 
 use std::cell::Cell;
 use std::ffi::CString;
@@ -14,6 +19,7 @@ pub use crate::gpu::uniforms::CursorShape;
 use crate::selection::GridPos;
 use crate::Terminal;
 
+/// Initial configuration for creating a [`TerminalRenderer`].
 pub struct RendererConfig {
     pub width: u32,
     pub height: u32,
@@ -21,6 +27,8 @@ pub struct RendererConfig {
     pub native_handle: *mut std::ffi::c_void,
 }
 
+/// Per-frame overlay state drawn on top of the terminal content:
+/// cursor shape/position and text selection highlight.
 pub struct Overlay {
     pub vt_cursor_visible: bool,
     pub cursor_shape: CursorShape,
@@ -43,6 +51,10 @@ impl Default for Overlay {
     }
 }
 
+/// GPU-accelerated terminal renderer.
+///
+/// Owns the ghostty font grid, cell buffer renderer, and wgpu state.
+/// Not `Send` — must stay on the main thread.
 pub struct TerminalRenderer {
     font_grid: Rc<gr::FontGrid>,
     renderer: gr::Renderer,
@@ -55,6 +67,7 @@ pub struct TerminalRenderer {
 }
 
 impl TerminalRenderer {
+    /// Create a new renderer for the given window.
     pub async fn new(window: Arc<Window>, config: RendererConfig) -> Option<Self> {
         let font_family = CString::new("JetBrainsMono Nerd Font").unwrap();
         let font_feature = CString::new("calt").unwrap();
@@ -98,8 +111,11 @@ impl TerminalRenderer {
         })
     }
 
+    /// Cell dimensions in pixels: `[width, height]`.
     pub fn cell_size(&self) -> [f32; 2] { self.cell_size }
 
+    /// Compute the terminal grid size (columns, rows) from the current
+    /// surface dimensions, subtracting padding.
     pub fn grid_size(&self) -> (u16, u16) {
         let [cw, ch] = self.cell_size;
         let pad = self.grid_padding.get();
@@ -110,6 +126,7 @@ impl TerminalRenderer {
         (cols, rows)
     }
 
+    /// Convert a pixel position to a grid cell (col, row).
     pub fn pixel_to_grid(&self, x: f64, y: f64) -> (u16, u16) {
         let pad = self.grid_padding.get();
         let col = ((x as f32 - pad[0]) / self.cell_size[0]).max(0.0) as u16;
@@ -117,8 +134,7 @@ impl TerminalRenderer {
         (col, row)
     }
 
-    pub fn font_grid(&self) -> &Rc<gr::FontGrid> { &self.font_grid }
-
+    /// Notify the renderer and GPU of a new surface size.
     pub fn resize_surface(&mut self, width: u32, height: u32, _scale: f64) {
         self.surface_width = width;
         self.surface_height = height;
@@ -126,58 +142,44 @@ impl TerminalRenderer {
         self.gpu.resize(winit::dpi::PhysicalSize::new(width, height));
     }
 
-    pub fn resize_gpu(&mut self, width: u32, height: u32) {
-        self.gpu.resize(winit::dpi::PhysicalSize::new(width, height));
-    }
-
-    pub fn resize_renderer(&mut self, width: u32, height: u32) {
-        self.renderer.resize(width, height);
-    }
-
+    /// Mutable access to the overlay state (cursor, selection).
     pub fn overlay_mut(&mut self) -> &mut Overlay { &mut self.overlay }
-    pub fn overlay(&self) -> &Overlay { &self.overlay }
 
+    /// Bind a terminal to this renderer so its content is drawn.
     pub fn attach(&self, terminal: &Terminal) {
         // Safety: raw_terminal_ptr() returns a valid GhosttyTerminal handle.
         unsafe { self.renderer.set_terminal_raw(terminal.raw_terminal_ptr()) };
     }
 
+    /// Rebuild the cell buffer from the current terminal state.
+    /// Also caches the grid padding for `grid_size` calculations.
     pub fn update_frame(&self) {
         self.renderer.update_frame(true);
         let fd = self.renderer.frame_snapshot().frame_data();
         self.grid_padding.set(fd.grid_padding);
     }
 
+    /// Upload cell data and render one frame to the surface.
     pub fn render(&mut self) -> bool {
         let snapshot = self.renderer.frame_snapshot();
         self.gpu.render_frame(&snapshot, &self.overlay)
     }
 
-    pub fn render_bg_only(&mut self) -> bool {
-        let snapshot = self.renderer.frame_snapshot();
-        self.gpu.render_frame_bg_only(&snapshot, &self.overlay)
-    }
-
+    /// Load a named theme from the ghostty resources directory.
     pub fn set_theme(&self, name: &str) -> bool {
         CString::new(name).ok().is_some_and(|c| self.renderer.load_theme(&c))
     }
 
-    pub fn set_theme_file(&self, path: &str) -> bool {
-        CString::new(path).ok().is_some_and(|c| self.renderer.load_theme_file(&c))
-    }
-
+    /// Change the font size and update cached cell metrics.
     pub fn set_font_size(&mut self, points: f32) {
         self.font_grid.set_size(points);
         let metrics = self.font_grid.metrics();
         self.cell_size = [metrics.cell_width, metrics.cell_height];
     }
-    pub fn set_background(&self, color: gr::Color) { self.renderer.set_background(color); }
-    pub fn set_foreground(&self, color: gr::Color) { self.renderer.set_foreground(color); }
-    pub fn set_background_opacity(&self, opacity: f32) { self.renderer.set_background_opacity(opacity); }
-    pub fn set_min_contrast(&self, contrast: f32) { self.renderer.set_min_contrast(contrast); }
-    pub fn set_palette(&self, palette: &[gr::Color; 256]) { self.renderer.set_palette(palette); }
 }
 
+/// Remove the CAMetalLayer that ghostty's renderer installs on the NSView.
+/// We use our own wgpu surface instead.
 #[cfg(target_os = "macos")]
 fn remove_ghostty_layer(window: &Window) {
     use objc2::msg_send;

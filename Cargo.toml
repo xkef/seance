@@ -4,7 +4,6 @@ members = [
     "crates/ghostty-renderer-sys",
     "crates/ghostty-renderer",
     "crates/seance-pty",
-    "crates/seance-layout",
     "crates/seance-input",
     "crates/seance-terminal",
     "crates/seance-app",

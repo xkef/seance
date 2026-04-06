@@ -10,17 +10,16 @@ use std::rc::Rc;
 
 use ghostty_renderer_sys as ffi;
 
+pub use ffi::GhosttyBlending as Blending;
 pub use ffi::GhosttyFontGridConfig as FontGridConfig;
-pub use ffi::GhosttyRendererConfig as RendererConfig;
 pub use ffi::GhosttyFontMetrics as FontMetrics;
 pub use ffi::GhosttyRendererCellText as CellText;
+pub use ffi::GhosttyRendererConfig as RendererConfig;
 pub use ffi::GhosttyRendererFrameData as FrameData;
-pub use ffi::GhosttyBlending as Blending;
-pub use ffi::GhosttyColorspace as Colorspace;
-pub use ffi::GhosttyPaddingColor as PaddingColor;
-pub use ffi::GhosttyRendererOptRGB as OptColor;
 pub use ffi::GhosttyRendererRGB as Color;
 
+/// Shared font system: atlas textures, glyph shaper, and cell metrics.
+/// Not `Send`/`Sync` — must stay on the thread that created it.
 pub struct FontGrid {
     raw: NonNull<c_void>,
     _not_send: PhantomData<*mut ()>,
@@ -73,6 +72,10 @@ impl Drop for FontGrid {
     }
 }
 
+/// Per-terminal cell buffer generator.
+///
+/// Given a terminal handle and font grid, produces arrays of cell background
+/// colors and text glyph instances ready for GPU upload.
 pub struct Renderer {
     raw: NonNull<c_void>,
     _grid: Rc<FontGrid>,
@@ -138,6 +141,7 @@ impl Drop for Renderer {
     }
 }
 
+/// A snapshot of the current frame's cell data and atlas textures.
 pub struct FrameSnapshot<'r> {
     renderer: &'r Renderer,
 }
@@ -174,6 +178,7 @@ impl<'r> FrameSnapshot<'r> {
 
 pub type CellBg = [u8; 4];
 
+/// A reference to an atlas texture (grayscale or color) with its dimensions.
 pub struct AtlasTexture<'a> {
     pub data: &'a [u8],
     pub size: u32,

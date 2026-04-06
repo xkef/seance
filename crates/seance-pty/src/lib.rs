@@ -1,3 +1,9 @@
+//! PTY (pseudo-terminal) spawning and I/O.
+//!
+//! Forks a child shell process connected to a PTY pair. The parent reads
+//! from / writes to the master fd; the child gets stdin/stdout/stderr
+//! redirected to the slave fd.
+
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd};
 

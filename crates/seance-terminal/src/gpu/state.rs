@@ -176,59 +176,7 @@ impl GpuState {
         }
     }
 
-    pub(crate) fn render_frame_bg_only(&mut self, snapshot: &FrameSnapshot<'_>, overlay: &Overlay) -> bool {
-        if self.surface_dirty {
-            self.surface.configure(&self.device, &self.config);
-            self.surface_dirty = false;
-        }
-
-        let output = match self.surface.get_current_texture() {
-            CurrentSurfaceTexture::Success(frame)
-            | CurrentSurfaceTexture::Suboptimal(frame) => frame,
-            other => {
-                log::debug!("surface not ready: {other:?}");
-                self.surface.configure(&self.device, &self.config);
-                return false;
-            }
-        };
-
-        let fd = snapshot.frame_data();
-        let uniforms = Uniforms::from_frame_data(&fd, self.size.width as f32, self.size.height as f32, overlay);
-        self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
-
-        let view = output.texture.create_view(&TextureViewDescriptor::default());
-        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("frame_bg_only"),
-        });
-
-        {
-            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("seance_bg_only"),
-                color_attachments: &[Some(RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: Operations {
-                        load: LoadOp::Clear(wgpu::Color::BLACK),
-                        store: StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-
-            pass.set_pipeline(&self.pipelines.bg_color);
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
-        true
-    }
-
+    /// Upload cell data and render one complete frame (bg + cell bg + text).
     pub(crate) fn render_frame(&mut self, snapshot: &FrameSnapshot<'_>, overlay: &Overlay) -> bool {
         if self.surface_dirty {
             self.surface.configure(&self.device, &self.config);

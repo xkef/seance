@@ -12,4 +12,4 @@ workspace = true
 libc.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.30", features = ["term", "signal", "process", "poll", "fs"] }
+nix = { version = "0.30", features = ["term", "signal", "process", "fs"] }

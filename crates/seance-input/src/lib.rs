@@ -1,39 +1,40 @@
+//! Keyboard and mouse input handling for séance.
+//!
+//! Translates winit key/mouse events into terminal-level actions using
+//! libghostty-vt's key and mouse encoders.
+
 mod keymap;
 
 use libghostty_vt::{key, mouse};
 use winit::event::{ElementState, KeyEvent};
-use winit::keyboard::{Key, NamedKey, PhysicalKey};
+use winit::keyboard::{Key, PhysicalKey};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
-    Normal,
-    Prefix,
-    Copy,
-}
-
+/// An action produced by the input handler in response to a key event.
 #[derive(Debug)]
 pub enum Action {
+    /// Raw bytes to write to the PTY.
     WritePty(Vec<u8>),
-    SplitHorizontal,
-    SplitVertical,
-    FocusNext,
-    FocusPrev,
-    ClosePane,
-    Zoom,
-    EnterCopyMode,
-    Detach,
+    /// Quit the application (Cmd+Q).
     Quit,
+    /// Close the current window (Cmd+W).
     CloseWindow,
+    /// Copy selection to clipboard (Cmd+C).
     Copy,
+    /// Paste from clipboard (Cmd+V).
     Paste,
+    /// Select all terminal content (Cmd+A).
     SelectAll,
+    /// Increase font size (Cmd+=).
     IncreaseFontSize,
+    /// Decrease font size (Cmd+-).
     DecreaseFontSize,
+    /// Reset font size to default (Cmd+0).
     ResetFontSize,
+    /// No action for this event.
     Ignore,
 }
 
-/// Terminal modes that affect input encoding.
+/// Terminal mode flags that affect input encoding.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TerminalModes {
     pub cursor_keys: bool,
@@ -41,8 +42,8 @@ pub struct TerminalModes {
     pub mouse_format_sgr: bool,
 }
 
+/// Translates winit events into terminal actions.
 pub struct InputHandler {
-    mode: Mode,
     key_encoder: key::Encoder<'static>,
     mouse_encoder: mouse::Encoder<'static>,
 }
@@ -50,7 +51,6 @@ pub struct InputHandler {
 impl Default for InputHandler {
     fn default() -> Self {
         Self {
-            mode: Mode::Normal,
             key_encoder: key::Encoder::new().expect("key encoder"),
             mouse_encoder: mouse::Encoder::new().expect("mouse encoder"),
         }
@@ -62,10 +62,7 @@ impl InputHandler {
         Self::default()
     }
 
-    pub fn mode(&self) -> Mode {
-        self.mode
-    }
-
+    /// Process a keyboard event and return the resulting action.
     pub fn handle_key(
         &mut self,
         event: &KeyEvent,
@@ -76,13 +73,34 @@ impl InputHandler {
             return Action::Ignore;
         }
 
-        match self.mode {
-            Mode::Normal => self.handle_normal(event, modifiers, term_modes),
-            Mode::Prefix => self.handle_prefix(event),
-            Mode::Copy => Action::Ignore,
+        let super_key = modifiers.state().super_key();
+
+        // Cmd shortcuts (macOS).
+        if super_key && let Key::Character(c) = &event.logical_key {
+            match c.as_str() {
+                "q" => return Action::Quit,
+                "w" => return Action::CloseWindow,
+                "c" => return Action::Copy,
+                "v" => return Action::Paste,
+                "a" => return Action::SelectAll,
+                "+" | "=" => return Action::IncreaseFontSize,
+                "-" => return Action::DecreaseFontSize,
+                "0" => return Action::ResetFontSize,
+                _ => {}
+            }
+        }
+
+        let bytes = self.encode_key(event, modifiers, term_modes);
+        if bytes.is_empty() {
+            Action::Ignore
+        } else {
+            Action::WritePty(bytes)
         }
     }
 
+    /// Encode a mouse wheel event as VT mouse sequences (if mouse tracking
+    /// is enabled). Returns `None` when the terminal should handle scrollback
+    /// internally instead.
     pub fn encode_mouse_wheel(&mut self, lines: i32, term_modes: TerminalModes) -> Option<Vec<u8>> {
         if term_modes.mouse_event == 0 {
             return None;
@@ -113,42 +131,6 @@ impl InputHandler {
         }
 
         if out.is_empty() { None } else { Some(out) }
-    }
-
-    fn handle_normal(
-        &mut self,
-        event: &KeyEvent,
-        modifiers: &winit::event::Modifiers,
-        term_modes: TerminalModes,
-    ) -> Action {
-        let ctrl = modifiers.state().control_key();
-        let super_key = modifiers.state().super_key();
-
-        if super_key && let Key::Character(c) = &event.logical_key {
-            match c.as_str() {
-                "q" => return Action::Quit,
-                "w" => return Action::CloseWindow,
-                "c" => return Action::Copy,
-                "v" => return Action::Paste,
-                "a" => return Action::SelectAll,
-                "+" | "=" => return Action::IncreaseFontSize,
-                "-" => return Action::DecreaseFontSize,
-                "0" => return Action::ResetFontSize,
-                _ => {}
-            }
-        }
-
-        if ctrl && let Key::Named(NamedKey::Space) = &event.logical_key {
-            self.mode = Mode::Prefix;
-            return Action::Ignore;
-        }
-
-        let bytes = self.encode_key(event, modifiers, term_modes);
-        if bytes.is_empty() {
-            Action::Ignore
-        } else {
-            Action::WritePty(bytes)
-        }
     }
 
     fn encode_key(
@@ -183,29 +165,5 @@ impl InputHandler {
         let mut buf = Vec::new();
         let _ = self.key_encoder.encode_to_vec(&key_event, &mut buf);
         buf
-    }
-
-    fn handle_prefix(&mut self, event: &KeyEvent) -> Action {
-        self.mode = Mode::Normal;
-        match &event.logical_key {
-            Key::Character(c) => match c.as_str() {
-                "|" | "\\" => Action::SplitHorizontal,
-                "-" | "_" => Action::SplitVertical,
-                "n" => Action::FocusNext,
-                "p" => Action::FocusPrev,
-                "x" => Action::ClosePane,
-                "z" => Action::Zoom,
-                "[" => {
-                    self.mode = Mode::Copy;
-                    Action::EnterCopyMode
-                }
-                "d" => Action::Detach,
-                _ => Action::Ignore,
-            },
-            Key::Named(NamedKey::Space) => {
-                Action::WritePty(b" ".to_vec())
-            }
-            _ => Action::Ignore,
-        }
     }
 }

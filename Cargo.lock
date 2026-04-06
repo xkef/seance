@@ -1870,7 +1870,6 @@ dependencies = [
  "pollster",
  "raw-window-handle",
  "seance-input",
- "seance-layout",
  "seance-terminal",
  "winit",
 ]
@@ -1882,10 +1881,6 @@ dependencies = [
  "libghostty-vt",
  "winit",
 ]
-
-[[package]]
-name = "seance-layout"
-version = "0.1.0"
 
 [[package]]
 name = "seance-pty"
