@@ -102,7 +102,7 @@ impl App {
             self.cell_size = r.cell_size();
             let (cols, rows) = r.grid_size();
             if let Some(term) = &mut self.terminal {
-                term.resize(cols, rows);
+                term.resize(cols, rows, size.width as u16, size.height as u16);
             }
         }
         self.content_dirty = true;
@@ -151,7 +151,7 @@ impl ApplicationHandler for App {
             .expect("failed to create renderer");
 
         let theme =
-            std::env::var("SEANCE_THEME").unwrap_or_else(|_| "catppuccin-frappe".to_string());
+            std::env::var("SEANCE_THEME").unwrap_or_else(|_| "Catppuccin Frappe".to_string());
         if !renderer.set_theme(&theme) {
             log::warn!("failed to load theme: {theme}");
         }
@@ -161,7 +161,8 @@ impl ApplicationHandler for App {
         self.renderer = Some(renderer);
         self.window = Some(window);
 
-        let term = Terminal::spawn(cols, rows).expect("failed to spawn terminal");
+        let term = Terminal::spawn(cols, rows, size.width as u16, size.height as u16)
+            .expect("failed to spawn terminal");
         if let Some(r) = &self.renderer {
             r.attach(&term);
         }
@@ -187,7 +188,7 @@ impl ApplicationHandler for App {
                     .map(|r| r.grid_size())
                     .unwrap_or((80, 24));
                 if let Some(term) = &mut self.terminal {
-                    term.resize(cols, rows);
+                    term.resize(cols, rows, new_size.width as u16, new_size.height as u16);
                 }
                 self.content_dirty = true;
                 self.draw();

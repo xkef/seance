@@ -30,8 +30,8 @@ pub struct Terminal {
 }
 
 impl Terminal {
-    /// Spawn a new shell in a PTY with the given grid dimensions.
-    pub fn spawn(cols: u16, rows: u16) -> Option<Self> {
+    /// Spawn a new shell in a PTY with the given grid and pixel dimensions.
+    pub fn spawn(cols: u16, rows: u16, pixel_width: u16, pixel_height: u16) -> Option<Self> {
         let mut vt = Box::new(
             VtTerminal::new(TerminalOptions {
                 cols,
@@ -53,8 +53,8 @@ impl Terminal {
             .openpty(PtySize {
                 rows,
                 cols,
-                pixel_width: 0,
-                pixel_height: 0,
+                pixel_width,
+                pixel_height,
             })
             .ok()?;
 
@@ -120,13 +120,13 @@ impl Terminal {
     }
 
     /// Resize both the VT grid and the PTY window.
-    pub fn resize(&mut self, cols: u16, rows: u16) {
+    pub fn resize(&mut self, cols: u16, rows: u16, pixel_width: u16, pixel_height: u16) {
         let _ = self.vt.resize(cols, rows, 0, 0);
         let _ = self.master.resize(PtySize {
             rows,
             cols,
-            pixel_width: 0,
-            pixel_height: 0,
+            pixel_width,
+            pixel_height,
         });
     }
 
