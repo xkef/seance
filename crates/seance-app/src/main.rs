@@ -15,7 +15,44 @@ use winit::window::{Window, WindowId};
 use seance_input::{Action, InputHandler};
 use seance_terminal::{RendererConfig, Terminal, TerminalRenderer};
 
+mod platform;
+
 const DEFAULT_FONT_SIZE: f32 = 14.0;
+
+struct MouseState {
+    cursor_pos: winit::dpi::PhysicalPosition<f64>,
+    is_down: bool,
+    click_count: u8,
+    last_click_time: Instant,
+    last_click_pos: (u16, u16),
+}
+
+impl Default for MouseState {
+    fn default() -> Self {
+        Self {
+            cursor_pos: winit::dpi::PhysicalPosition::new(0.0, 0.0),
+            is_down: false,
+            click_count: 0,
+            last_click_time: Instant::now(),
+            last_click_pos: (0, 0),
+        }
+    }
+}
+
+impl MouseState {
+    fn register_click(&mut self, col: u16, row: u16) -> u8 {
+        let now = Instant::now();
+        let dt = now.duration_since(self.last_click_time);
+        if dt.as_millis() < 500 && (col, row) == self.last_click_pos {
+            self.click_count = (self.click_count % 3) + 1;
+        } else {
+            self.click_count = 1;
+        }
+        self.last_click_time = now;
+        self.last_click_pos = (col, row);
+        self.click_count
+    }
+}
 
 /// Top-level application state.
 struct App {
@@ -27,13 +64,7 @@ struct App {
     cell_size: [f32; 2],
     font_size: f32,
     content_dirty: bool,
-
-    // Mouse selection state.
-    cursor_pos: winit::dpi::PhysicalPosition<f64>,
-    mouse_down: bool,
-    click_count: u8,
-    last_click_time: Instant,
-    last_click_pos: (u16, u16),
+    mouse: MouseState,
 }
 
 impl App {
@@ -47,11 +78,7 @@ impl App {
             cell_size: [0.0, 0.0],
             font_size: DEFAULT_FONT_SIZE,
             content_dirty: true,
-            cursor_pos: winit::dpi::PhysicalPosition::new(0.0, 0.0),
-            mouse_down: false,
-            click_count: 0,
-            last_click_time: Instant::now(),
-            last_click_pos: (0, 0),
+            mouse: MouseState::default(),
         }
     }
 
@@ -61,8 +88,6 @@ impl App {
         }
     }
 
-    /// Read pending PTY output and feed it to the VT emulator.
-    /// Returns true if new data arrived.
     fn poll_pty(&mut self) -> bool {
         let Some(term) = &mut self.terminal else {
             return false;
@@ -77,7 +102,6 @@ impl App {
         got_data
     }
 
-    /// Render one frame. Only rebuilds the cell buffer when content is dirty.
     fn draw(&mut self) {
         if self.terminal.is_none() {
             return;
@@ -93,7 +117,6 @@ impl App {
         }
     }
 
-    /// Apply the current `font_size` to the renderer and resize terminals.
     fn apply_font_size(&mut self) {
         if let (Some(r), Some(w)) = (&mut self.renderer, &self.window) {
             r.set_font_size(self.font_size);
@@ -109,11 +132,202 @@ impl App {
         self.request_redraw();
     }
 
-    /// Build a `TerminalModes` snapshot for the input encoder.
     fn terminal_modes(&self) -> seance_input::TerminalModes {
         self.terminal
             .as_ref()
             .map_or(Default::default(), |t| t.modes())
+    }
+
+    fn clear_selection(&mut self) {
+        if let Some(term) = &mut self.terminal {
+            term.clear_selection();
+        }
+        if let Some(r) = &mut self.renderer {
+            r.overlay_mut().selection = None;
+        }
+    }
+
+    fn sync_selection_to_overlay(&mut self) {
+        let range = self.terminal.as_ref().and_then(|t| t.selection_range());
+        if let Some(r) = &mut self.renderer {
+            r.overlay_mut().selection = range;
+        }
+    }
+
+    // -- Event handlers -------------------------------------------------------
+
+    fn on_resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+        if let (Some(r), Some(w)) = (&mut self.renderer, &self.window) {
+            r.resize_surface(new_size.width, new_size.height, w.scale_factor());
+        }
+        let (cols, rows) = self
+            .renderer
+            .as_ref()
+            .map(|r| r.grid_size())
+            .unwrap_or((80, 24));
+        if let Some(term) = &mut self.terminal {
+            term.resize(cols, rows, new_size.width as u16, new_size.height as u16);
+        }
+        self.content_dirty = true;
+        self.draw();
+    }
+
+    fn on_keyboard_input(&mut self, event_loop: &ActiveEventLoop, event: &winit::event::KeyEvent) {
+        let modes = self.terminal_modes();
+        let action = self.input.handle_key(event, &self.modifiers, modes);
+
+        if event.state == ElementState::Pressed
+            && !matches!(action, Action::Copy | Action::SelectAll | Action::Ignore)
+            && self.terminal.as_ref().is_some_and(|t| t.has_selection())
+        {
+            self.clear_selection();
+        }
+
+        self.execute_action(event_loop, action);
+        self.content_dirty = true;
+        self.request_redraw();
+    }
+
+    fn execute_action(&mut self, event_loop: &ActiveEventLoop, action: Action) {
+        match action {
+            Action::WritePty(data) => {
+                if let Some(term) = &self.terminal {
+                    term.write(&data);
+                }
+            }
+            Action::Quit | Action::CloseWindow => {
+                event_loop.exit();
+            }
+            Action::Copy => {
+                if let Some(term) = &mut self.terminal {
+                    if let Some(text) = term.selection_text()
+                        && let Ok(mut cb) = arboard::Clipboard::new()
+                    {
+                        let _ = cb.set_text(text);
+                    }
+                }
+                self.clear_selection();
+            }
+            Action::Paste => {
+                if let Ok(mut cb) = arboard::Clipboard::new()
+                    && let Ok(text) = cb.get_text()
+                {
+                    let bracketed = self
+                        .terminal
+                        .as_ref()
+                        .is_some_and(|t| t.modes().bracketed_paste);
+                    if let Some(term) = &self.terminal {
+                        if bracketed {
+                            term.write(b"\x1b[200~");
+                        }
+                        term.write(text.as_bytes());
+                        if bracketed {
+                            term.write(b"\x1b[201~");
+                        }
+                    }
+                }
+            }
+            Action::SelectAll => {
+                if let Some(term) = &mut self.terminal {
+                    term.select_all();
+                }
+                self.sync_selection_to_overlay();
+            }
+            Action::IncreaseFontSize => {
+                self.font_size = (self.font_size + 1.0).min(72.0);
+                self.apply_font_size();
+            }
+            Action::DecreaseFontSize => {
+                self.font_size = (self.font_size - 1.0).max(6.0);
+                self.apply_font_size();
+            }
+            Action::ResetFontSize => {
+                self.font_size = DEFAULT_FONT_SIZE;
+                self.apply_font_size();
+            }
+            Action::Ignore => {}
+        }
+    }
+
+    fn on_mouse_wheel(&mut self, delta: winit::event::MouseScrollDelta) {
+        let lines = match delta {
+            winit::event::MouseScrollDelta::LineDelta(_, y) => y as i32,
+            winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                let ch = self.cell_size[1].max(1.0);
+                (pos.y / ch as f64) as i32
+            }
+        };
+        if lines == 0 {
+            return;
+        }
+        let modes = self.terminal_modes();
+        if let Some(data) = self.input.encode_mouse_wheel(lines, modes) {
+            if let Some(term) = &self.terminal {
+                term.write(&data);
+            }
+        } else if let Some(term) = &mut self.terminal {
+            term.scroll_lines(-lines);
+        }
+        self.content_dirty = true;
+        self.request_redraw();
+    }
+
+    fn on_cursor_moved(&mut self, position: winit::dpi::PhysicalPosition<f64>) {
+        self.mouse.cursor_pos = position;
+        if !self.mouse.is_down {
+            return;
+        }
+        let grid_pos = self
+            .renderer
+            .as_ref()
+            .map(|r| r.pixel_to_grid(position.x, position.y));
+        if let Some((col, row)) = grid_pos {
+            if let Some(term) = &mut self.terminal {
+                term.update_selection(col, row);
+            }
+            self.sync_selection_to_overlay();
+            self.content_dirty = true;
+            self.request_redraw();
+        }
+    }
+
+    fn on_mouse_input(&mut self, state: ElementState, button: MouseButton) {
+        if button != MouseButton::Left {
+            return;
+        }
+        match state {
+            ElementState::Pressed => {
+                let grid_pos = self
+                    .renderer
+                    .as_ref()
+                    .map(|r| r.pixel_to_grid(self.mouse.cursor_pos.x, self.mouse.cursor_pos.y));
+                if let Some((col, row)) = grid_pos {
+                    let clicks = self.mouse.register_click(col, row);
+                    if let Some(term) = &mut self.terminal {
+                        match clicks {
+                            1 => term.start_selection(col, row),
+                            2 => term.start_word_selection(col, row),
+                            3 => term.start_line_selection(row),
+                            _ => {}
+                        }
+                    }
+                    self.sync_selection_to_overlay();
+                }
+                self.mouse.is_down = true;
+                self.content_dirty = true;
+                self.request_redraw();
+            }
+            ElementState::Released => {
+                self.mouse.is_down = false;
+                if let Some(term) = &mut self.terminal
+                    && let Some(text) = term.selection_text()
+                    && !text.is_empty()
+                    && let Ok(mut cb) = arboard::Clipboard::new()
+                {
+                    let _ = cb.set_text(text);
+                }
+            }
+        }
     }
 }
 
@@ -135,7 +349,7 @@ impl ApplicationHandler for App {
         );
 
         #[cfg(target_os = "macos")]
-        configure_macos_window(&window);
+        platform::configure_window(&window);
 
         let size = window.inner_size();
         let scale = window.scale_factor();
@@ -144,7 +358,7 @@ impl ApplicationHandler for App {
             width: size.width,
             height: size.height,
             scale,
-            native_handle: get_native_handle(&window),
+            native_handle: platform::native_view_handle(&window),
         };
 
         let renderer = pollster::block_on(TerminalRenderer::new(window.clone(), config))
@@ -177,211 +391,15 @@ impl ApplicationHandler for App {
     ) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-
-            WindowEvent::Resized(new_size) => {
-                if let (Some(r), Some(w)) = (&mut self.renderer, &self.window) {
-                    r.resize_surface(new_size.width, new_size.height, w.scale_factor());
-                }
-                let (cols, rows) = self
-                    .renderer
-                    .as_ref()
-                    .map(|r| r.grid_size())
-                    .unwrap_or((80, 24));
-                if let Some(term) = &mut self.terminal {
-                    term.resize(cols, rows, new_size.width as u16, new_size.height as u16);
-                }
-                self.content_dirty = true;
-                self.draw();
-            }
-
-            WindowEvent::ModifiersChanged(mods) => {
-                self.modifiers = mods;
-            }
-
+            WindowEvent::Resized(size) => self.on_resize(size),
+            WindowEvent::ModifiersChanged(mods) => self.modifiers = mods,
             WindowEvent::KeyboardInput { event, .. } => {
-                let modes = self.terminal_modes();
-                let action = self.input.handle_key(&event, &self.modifiers, modes);
-
-                // Clear selection on keypress (except copy/select-all/modifiers).
-                if event.state == ElementState::Pressed
-                    && !matches!(action, Action::Copy | Action::SelectAll | Action::Ignore)
-                    && self.terminal.as_ref().is_some_and(|t| t.has_selection())
-                {
-                    if let Some(term) = &mut self.terminal {
-                        term.clear_selection();
-                    }
-                    if let Some(r) = &mut self.renderer {
-                        r.overlay_mut().selection = None;
-                    }
-                }
-
-                match action {
-                    Action::WritePty(data) => {
-                        if let Some(term) = &self.terminal {
-                            term.write(&data);
-                        }
-                    }
-                    Action::Quit | Action::CloseWindow => {
-                        event_loop.exit();
-                    }
-                    Action::Copy => {
-                        if let Some(term) = &mut self.terminal {
-                            if let Some(text) = term.selection_text()
-                                && let Ok(mut cb) = arboard::Clipboard::new()
-                            {
-                                let _ = cb.set_text(text);
-                            }
-                            term.clear_selection();
-                        }
-                        if let Some(r) = &mut self.renderer {
-                            r.overlay_mut().selection = None;
-                        }
-                    }
-                    Action::Paste => {
-                        if let Ok(mut cb) = arboard::Clipboard::new()
-                            && let Ok(text) = cb.get_text()
-                        {
-                            let bracketed = self
-                                .terminal
-                                .as_ref()
-                                .is_some_and(|t| t.modes().bracketed_paste);
-                            if let Some(term) = &self.terminal {
-                                if bracketed {
-                                    term.write(b"\x1b[200~");
-                                }
-                                term.write(text.as_bytes());
-                                if bracketed {
-                                    term.write(b"\x1b[201~");
-                                }
-                            }
-                        }
-                    }
-                    Action::SelectAll => {
-                        if let Some(term) = &mut self.terminal {
-                            term.select_all();
-                            let range = term.selection_range();
-                            if let Some(r) = &mut self.renderer {
-                                r.overlay_mut().selection = range;
-                            }
-                        }
-                    }
-                    Action::IncreaseFontSize => {
-                        self.font_size = (self.font_size + 1.0).min(72.0);
-                        self.apply_font_size();
-                    }
-                    Action::DecreaseFontSize => {
-                        self.font_size = (self.font_size - 1.0).max(6.0);
-                        self.apply_font_size();
-                    }
-                    Action::ResetFontSize => {
-                        self.font_size = DEFAULT_FONT_SIZE;
-                        self.apply_font_size();
-                    }
-                    Action::Ignore => {}
-                }
-                self.content_dirty = true;
-                self.request_redraw();
+                self.on_keyboard_input(event_loop, &event);
             }
-
-            WindowEvent::MouseWheel { delta, .. } => {
-                let lines = match delta {
-                    winit::event::MouseScrollDelta::LineDelta(_, y) => y as i32,
-                    winit::event::MouseScrollDelta::PixelDelta(pos) => {
-                        let ch = self.cell_size[1].max(1.0);
-                        (pos.y / ch as f64) as i32
-                    }
-                };
-                if lines != 0 {
-                    let modes = self.terminal_modes();
-                    if let Some(data) = self.input.encode_mouse_wheel(lines, modes) {
-                        if let Some(term) = &self.terminal {
-                            term.write(&data);
-                        }
-                    } else if let Some(term) = &mut self.terminal {
-                        term.scroll_lines(-lines);
-                    }
-                    self.content_dirty = true;
-                    self.request_redraw();
-                }
-            }
-
-            WindowEvent::CursorMoved { position, .. } => {
-                self.cursor_pos = position;
-                if self.mouse_down {
-                    let grid_pos = self
-                        .renderer
-                        .as_ref()
-                        .map(|r| r.pixel_to_grid(position.x, position.y));
-                    if let Some((col, row)) = grid_pos {
-                        if let Some(term) = &mut self.terminal {
-                            term.update_selection(col, row);
-                        }
-                        let range = self.terminal.as_ref().and_then(|t| t.selection_range());
-                        if let Some(r) = &mut self.renderer {
-                            r.overlay_mut().selection = range;
-                        }
-                        self.content_dirty = true;
-                        self.request_redraw();
-                    }
-                }
-            }
-
-            WindowEvent::MouseInput { state, button, .. } => {
-                if button == MouseButton::Left {
-                    match state {
-                        ElementState::Pressed => {
-                            let now = Instant::now();
-                            let grid_pos = self
-                                .renderer
-                                .as_ref()
-                                .map(|r| r.pixel_to_grid(self.cursor_pos.x, self.cursor_pos.y));
-                            if let Some((col, row)) = grid_pos {
-                                // Detect double/triple click.
-                                let dt = now.duration_since(self.last_click_time);
-                                if dt.as_millis() < 500 && (col, row) == self.last_click_pos {
-                                    self.click_count = (self.click_count % 3) + 1;
-                                } else {
-                                    self.click_count = 1;
-                                }
-                                self.last_click_time = now;
-                                self.last_click_pos = (col, row);
-
-                                if let Some(term) = &mut self.terminal {
-                                    match self.click_count {
-                                        1 => term.start_selection(col, row),
-                                        2 => term.start_word_selection(col, row),
-                                        3 => term.start_line_selection(row),
-                                        _ => {}
-                                    }
-                                    let range = term.selection_range();
-                                    if let Some(r) = &mut self.renderer {
-                                        r.overlay_mut().selection = range;
-                                    }
-                                }
-                            }
-                            self.mouse_down = true;
-                            self.content_dirty = true;
-                            self.request_redraw();
-                        }
-                        ElementState::Released => {
-                            self.mouse_down = false;
-                            // Auto-copy selection to clipboard on mouse release.
-                            if let Some(term) = &mut self.terminal
-                                && let Some(text) = term.selection_text()
-                                && !text.is_empty()
-                                && let Ok(mut cb) = arboard::Clipboard::new()
-                            {
-                                let _ = cb.set_text(text);
-                            }
-                        }
-                    }
-                }
-            }
-
-            WindowEvent::RedrawRequested => {
-                self.draw();
-            }
-
+            WindowEvent::MouseWheel { delta, .. } => self.on_mouse_wheel(delta),
+            WindowEvent::CursorMoved { position, .. } => self.on_cursor_moved(position),
+            WindowEvent::MouseInput { state, button, .. } => self.on_mouse_input(state, button),
+            WindowEvent::RedrawRequested => self.draw(),
             _ => {}
         }
     }
@@ -407,58 +425,6 @@ impl ApplicationHandler for App {
             std::time::Duration::from_millis(4),
         ));
     }
-}
-
-// ---------------------------------------------------------------------------
-// Platform helpers
-// ---------------------------------------------------------------------------
-
-/// Configure the NSWindow for a borderless, transparent-titlebar appearance.
-#[cfg(target_os = "macos")]
-fn configure_macos_window(window: &Window) {
-    use objc2::msg_send;
-    use objc2::runtime::AnyObject;
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-
-    let handle = window.window_handle().expect("no window handle");
-    let nsview = match handle.as_raw() {
-        RawWindowHandle::AppKit(h) => h.ns_view.as_ptr(),
-        _ => return,
-    };
-    unsafe {
-        let view: *mut AnyObject = nsview.cast();
-        let nswindow: *mut AnyObject = msg_send![view, window];
-        if nswindow.is_null() {
-            return;
-        }
-        let mask: usize = 1 | 2 | 4 | 8 | (1 << 15);
-        let _: () = msg_send![nswindow, setStyleMask: mask];
-        let _: () = msg_send![nswindow, setTitlebarAppearsTransparent: true];
-        let _: () = msg_send![nswindow, setTitleVisibility: 1_isize];
-        let _: () = msg_send![nswindow, setMovableByWindowBackground: true];
-
-        for i in 0_isize..3 {
-            let button: *mut AnyObject = msg_send![nswindow, standardWindowButton: i];
-            if !button.is_null() {
-                let _: () = msg_send![button, setHidden: true];
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn get_native_handle(window: &Window) -> *mut std::ffi::c_void {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    let handle = window.window_handle().expect("no window handle");
-    match handle.as_raw() {
-        RawWindowHandle::AppKit(h) => h.ns_view.as_ptr(),
-        _ => panic!("expected AppKit window handle"),
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn get_native_handle(_window: &Window) -> *mut std::ffi::c_void {
-    std::ptr::null_mut()
 }
 
 fn main() {
