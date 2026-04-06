@@ -1,5 +1,6 @@
 //! Terminal renderer: ghostty font grid + renderer + wgpu pipeline.
 
+use std::cell::Cell;
 use std::ffi::CString;
 use std::sync::Arc;
 
@@ -46,6 +47,7 @@ pub struct TerminalRenderer {
     renderer: gr::Renderer,
     gpu: GpuState,
     cell_size: [f32; 2],
+    grid_padding: Cell<[f32; 4]>,
     surface_width: u32,
     surface_height: u32,
     overlay: Overlay,
@@ -90,6 +92,7 @@ impl TerminalRenderer {
             surface_height: config.height,
             gpu,
             cell_size,
+            grid_padding: Cell::new([0.0; 4]),
             overlay: Overlay::default(),
         })
     }
@@ -98,9 +101,19 @@ impl TerminalRenderer {
 
     pub fn grid_size(&self) -> (u16, u16) {
         let [cw, ch] = self.cell_size;
-        let cols = (self.surface_width as f32 / cw).max(1.0) as u16;
-        let rows = (self.surface_height as f32 / ch).max(1.0) as u16;
+        let pad = self.grid_padding.get();
+        let usable_w = (self.surface_width as f32 - pad[0] - pad[2]).max(cw);
+        let usable_h = (self.surface_height as f32 - pad[1] - pad[3]).max(ch);
+        let cols = (usable_w / cw).max(1.0) as u16;
+        let rows = (usable_h / ch).max(1.0) as u16;
         (cols, rows)
+    }
+
+    pub fn pixel_to_grid(&self, x: f64, y: f64) -> (u16, u16) {
+        let pad = self.grid_padding.get();
+        let col = ((x as f32 - pad[0]) / self.cell_size[0]).max(0.0) as u16;
+        let row = ((y as f32 - pad[1]) / self.cell_size[1]).max(0.0) as u16;
+        (col, row)
     }
 
     pub fn font_grid(&self) -> &Arc<gr::FontGrid> { &self.font_grid }
@@ -129,6 +142,8 @@ impl TerminalRenderer {
 
     pub fn update_frame(&self) {
         self.renderer.update_frame(true);
+        let fd = self.renderer.frame_snapshot().frame_data();
+        self.grid_padding.set(fd.grid_padding);
     }
 
     pub fn render(&mut self) -> bool {
@@ -149,7 +164,11 @@ impl TerminalRenderer {
         CString::new(path).ok().map_or(false, |c| self.renderer.load_theme_file(&c))
     }
 
-    pub fn set_font_size(&self, points: f32) { self.font_grid.set_size(points); }
+    pub fn set_font_size(&mut self, points: f32) {
+        self.font_grid.set_size(points);
+        let metrics = self.font_grid.metrics();
+        self.cell_size = [metrics.cell_width, metrics.cell_height];
+    }
     pub fn set_background(&self, color: gr::Color) { self.renderer.set_background(color); }
     pub fn set_foreground(&self, color: gr::Color) { self.renderer.set_foreground(color); }
     pub fn set_background_opacity(&self, opacity: f32) { self.renderer.set_background_opacity(opacity); }

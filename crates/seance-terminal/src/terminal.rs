@@ -20,6 +20,7 @@ pub struct TerminalModes {
     pub mouse_event: i32,
     pub mouse_format_sgr: bool,
     pub synchronized_output: bool,
+    pub bracketed_paste: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -165,6 +166,7 @@ impl Terminal {
             mouse_event: if self.vt.is_mouse_tracking().unwrap_or(false) { 1000 } else { 0 },
             mouse_format_sgr: self.vt.mode(Mode::SGR_MOUSE).unwrap_or(false),
             synchronized_output: self.vt.mode(Mode::SYNC_OUTPUT).unwrap_or(false),
+            bracketed_paste: self.vt.mode(Mode::BRACKETED_PASTE).unwrap_or(false),
         }
     }
 

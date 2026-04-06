@@ -22,6 +22,14 @@ pub enum Action {
     Zoom,
     EnterCopyMode,
     Detach,
+    Quit,
+    CloseWindow,
+    Copy,
+    Paste,
+    SelectAll,
+    IncreaseFontSize,
+    DecreaseFontSize,
+    ResetFontSize,
     Ignore,
 }
 
@@ -114,6 +122,23 @@ impl InputHandler {
         term_modes: TerminalModes,
     ) -> Action {
         let ctrl = modifiers.state().control_key();
+        let super_key = modifiers.state().super_key();
+
+        if super_key {
+            if let Key::Character(c) = &event.logical_key {
+                match c.as_str() {
+                    "q" => return Action::Quit,
+                    "w" => return Action::CloseWindow,
+                    "c" => return Action::Copy,
+                    "v" => return Action::Paste,
+                    "a" => return Action::SelectAll,
+                    "+" | "=" => return Action::IncreaseFontSize,
+                    "-" => return Action::DecreaseFontSize,
+                    "0" => return Action::ResetFontSize,
+                    _ => {}
+                }
+            }
+        }
 
         if ctrl {
             if let Key::Named(NamedKey::Space) = &event.logical_key {

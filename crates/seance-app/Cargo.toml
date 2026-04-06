@@ -13,6 +13,7 @@ path = "src/main.rs"
 seance-terminal = { path = "../seance-terminal" }
 seance-layout = { path = "../seance-layout" }
 seance-input = { path = "../seance-input" }
+arboard = "3"
 pollster = "0.4"
 log.workspace = true
 env_logger.workspace = true

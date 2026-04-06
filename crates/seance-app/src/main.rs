@@ -1,14 +1,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use winit::application::ApplicationHandler;
-use winit::event::{Modifiers, WindowEvent};
+use winit::event::{ElementState, Modifiers, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
 use seance_input::{Action, InputHandler};
 use seance_layout::{LayoutTree, PaneId};
 use seance_terminal::{RendererConfig, Terminal, TerminalRenderer};
+
+const DEFAULT_FONT_SIZE: f32 = 14.0;
 
 struct App {
     window: Option<Arc<Window>>,
@@ -19,7 +22,13 @@ struct App {
     input: InputHandler,
     modifiers: Modifiers,
     cell_size: [f32; 2],
+    font_size: f32,
     content_dirty: bool,
+    cursor_pos: winit::dpi::PhysicalPosition<f64>,
+    mouse_down: bool,
+    click_count: u8,
+    last_click_time: Instant,
+    last_click_pos: (u16, u16),
 }
 
 impl App {
@@ -33,7 +42,13 @@ impl App {
             input: InputHandler::new(),
             modifiers: Modifiers::default(),
             cell_size: [0.0, 0.0],
+            font_size: DEFAULT_FONT_SIZE,
             content_dirty: true,
+            cursor_pos: winit::dpi::PhysicalPosition::new(0.0, 0.0),
+            mouse_down: false,
+            click_count: 0,
+            last_click_time: Instant::now(),
+            last_click_pos: (0, 0),
         }
     }
 
@@ -45,8 +60,18 @@ impl App {
 
     fn poll_pty(&mut self) -> bool {
         let mut got_data = false;
-        for term in self.panes.values_mut() {
+        let mut dead = Vec::new();
+        for (&id, term) in self.panes.iter_mut() {
             got_data |= term.poll();
+            if !term.is_alive() {
+                dead.push(id);
+            }
+        }
+        for id in dead {
+            self.panes.remove(&id);
+        }
+        if got_data {
+            self.content_dirty = true;
         }
         got_data
     }
@@ -55,9 +80,8 @@ impl App {
         if self.panes.is_empty() {
             return;
         }
-        let got_data = self.poll_pty();
 
-        if got_data || self.content_dirty {
+        if self.content_dirty {
             self.content_dirty = false;
             if let Some(r) = &self.renderer {
                 r.update_frame();
@@ -67,6 +91,23 @@ impl App {
         if let Some(r) = &mut self.renderer {
             r.render();
         }
+    }
+
+    fn apply_font_size(&mut self) {
+        if let (Some(r), Some(w)) = (&mut self.renderer, &self.window) {
+            r.set_font_size(self.font_size);
+            let size = w.inner_size();
+            r.resize_surface(size.width, size.height, w.scale_factor());
+            self.cell_size = r.cell_size();
+            self.layout
+                .set_cell_size(self.cell_size[0], self.cell_size[1]);
+            let (cols, rows) = r.grid_size();
+            for term in self.panes.values_mut() {
+                term.resize(cols, rows);
+            }
+        }
+        self.content_dirty = true;
+        self.request_redraw();
     }
 }
 
@@ -98,6 +139,12 @@ impl ApplicationHandler for App {
 
         let renderer = pollster::block_on(TerminalRenderer::new(window.clone(), config))
             .expect("failed to create renderer");
+
+        let theme = std::env::var("SEANCE_THEME")
+            .unwrap_or_else(|_| "catppuccin-frappe".to_string());
+        if !renderer.set_theme(&theme) {
+            log::warn!("failed to load theme: {theme}");
+        }
 
         self.cell_size = renderer.cell_size();
         self.layout
@@ -155,11 +202,85 @@ impl ApplicationHandler for App {
                         }
                     });
                 let action = self.input.handle_key(&event, &self.modifiers, modes);
+
+                // Clear selection on keypress (except Cmd+C and modifiers)
+                if event.state == ElementState::Pressed
+                    && !matches!(action, Action::Copy | Action::SelectAll | Action::Ignore)
+                {
+                    let had_selection = self
+                        .panes
+                        .get(&self.focused)
+                        .map_or(false, |t| t.has_selection());
+                    if had_selection {
+                        if let Some(term) = self.panes.get_mut(&self.focused) {
+                            term.clear_selection();
+                        }
+                        if let Some(r) = &mut self.renderer {
+                            r.overlay_mut().selection = None;
+                        }
+                    }
+                }
                 match action {
                     Action::WritePty(data) => {
                         if let Some(term) = self.panes.get(&self.focused) {
                             term.write(&data);
                         }
+                    }
+                    Action::Quit | Action::CloseWindow => {
+                        event_loop.exit();
+                    }
+                    Action::Copy => {
+                        if let Some(term) = self.panes.get_mut(&self.focused) {
+                            if let Some(text) = term.selection_text() {
+                                if let Ok(mut cb) = arboard::Clipboard::new() {
+                                    let _ = cb.set_text(text);
+                                }
+                            }
+                            term.clear_selection();
+                        }
+                        if let Some(r) = &mut self.renderer {
+                            r.overlay_mut().selection = None;
+                        }
+                    }
+                    Action::Paste => {
+                        if let Ok(mut cb) = arboard::Clipboard::new() {
+                            if let Ok(text) = cb.get_text() {
+                                let bracketed = self
+                                    .panes
+                                    .get(&self.focused)
+                                    .map_or(false, |t| t.modes().bracketed_paste);
+                                if let Some(term) = self.panes.get(&self.focused) {
+                                    if bracketed {
+                                        term.write(b"\x1b[200~");
+                                    }
+                                    term.write(text.as_bytes());
+                                    if bracketed {
+                                        term.write(b"\x1b[201~");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Action::SelectAll => {
+                        if let Some(term) = self.panes.get_mut(&self.focused) {
+                            term.select_all();
+                            let range = term.selection_range();
+                            if let Some(r) = &mut self.renderer {
+                                r.overlay_mut().selection = range;
+                            }
+                        }
+                    }
+                    Action::IncreaseFontSize => {
+                        self.font_size = (self.font_size + 1.0).min(72.0);
+                        self.apply_font_size();
+                    }
+                    Action::DecreaseFontSize => {
+                        self.font_size = (self.font_size - 1.0).max(6.0);
+                        self.apply_font_size();
+                    }
+                    Action::ResetFontSize => {
+                        self.font_size = DEFAULT_FONT_SIZE;
+                        self.apply_font_size();
                     }
                     Action::Ignore => {}
                     _ => {
@@ -202,13 +323,113 @@ impl ApplicationHandler for App {
                 }
             }
 
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor_pos = position;
+                if self.mouse_down {
+                    let grid_pos = self
+                        .renderer
+                        .as_ref()
+                        .map(|r| r.pixel_to_grid(position.x, position.y));
+                    if let Some((col, row)) = grid_pos {
+                        if let Some(term) = self.panes.get_mut(&self.focused) {
+                            term.update_selection(col, row);
+                        }
+                        let range = self
+                            .panes
+                            .get(&self.focused)
+                            .and_then(|t| t.selection_range());
+                        if let Some(r) = &mut self.renderer {
+                            r.overlay_mut().selection = range;
+                        }
+                        self.content_dirty = true;
+                        self.request_redraw();
+                    }
+                }
+            }
+
+            WindowEvent::MouseInput { state, button, .. } => {
+                if button == MouseButton::Left {
+                    match state {
+                        ElementState::Pressed => {
+                            let now = Instant::now();
+                            let grid_pos = self
+                                .renderer
+                                .as_ref()
+                                .map(|r| r.pixel_to_grid(self.cursor_pos.x, self.cursor_pos.y));
+                            if let Some((col, row)) = grid_pos {
+                                let dt = now.duration_since(self.last_click_time);
+                                if dt.as_millis() < 500
+                                    && (col, row) == self.last_click_pos
+                                {
+                                    self.click_count = (self.click_count % 3) + 1;
+                                } else {
+                                    self.click_count = 1;
+                                }
+                                self.last_click_time = now;
+                                self.last_click_pos = (col, row);
+
+                                if let Some(term) = self.panes.get_mut(&self.focused) {
+                                    match self.click_count {
+                                        1 => term.start_selection(col, row),
+                                        2 => term.start_word_selection(col, row),
+                                        3 => term.start_line_selection(row),
+                                        _ => {}
+                                    }
+                                    let range = term.selection_range();
+                                    if let Some(r) = &mut self.renderer {
+                                        r.overlay_mut().selection = range;
+                                    }
+                                }
+                            }
+                            self.mouse_down = true;
+                            self.content_dirty = true;
+                            self.request_redraw();
+                        }
+                        ElementState::Released => {
+                            self.mouse_down = false;
+                            // Auto-copy selection to clipboard on mouse release
+                            if let Some(term) = self.panes.get_mut(&self.focused) {
+                                if let Some(text) = term.selection_text() {
+                                    if !text.is_empty() {
+                                        if let Ok(mut cb) = arboard::Clipboard::new() {
+                                            let _ = cb.set_text(text);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             WindowEvent::RedrawRequested => {
                 self.draw();
-                self.request_redraw();
             }
 
             _ => {}
         }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.panes.is_empty() {
+            event_loop.exit();
+            return;
+        }
+
+        self.poll_pty();
+
+        if self.panes.is_empty() {
+            event_loop.exit();
+            return;
+        }
+
+        if self.content_dirty {
+            self.request_redraw();
+        }
+
+        event_loop.set_control_flow(winit::event_loop::ControlFlow::wait_duration(
+            std::time::Duration::from_millis(4),
+        ));
     }
 }
 
