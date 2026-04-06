@@ -8,7 +8,7 @@ use winit::window::{Window, WindowId};
 
 use seance_input::{Action, InputHandler};
 use seance_layout::{LayoutTree, PaneId};
-use seance_terminal::{RendererConfig, ScrollAction, Terminal, TerminalRenderer};
+use seance_terminal::{RendererConfig, Terminal, TerminalRenderer};
 
 struct App {
     window: Option<Arc<Window>>,
@@ -195,7 +195,7 @@ impl ApplicationHandler for App {
                             term.write(&data);
                         }
                     } else if let Some(term) = self.panes.get_mut(&self.focused) {
-                        term.scroll(ScrollAction::Lines(-lines));
+                        term.scroll_lines(-lines);
                     }
                     self.content_dirty = true;
                     self.request_redraw();

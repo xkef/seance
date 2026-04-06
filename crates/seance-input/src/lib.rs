@@ -1,5 +1,8 @@
+mod keymap;
+
+use libghostty_vt::{key, mouse};
 use winit::event::{ElementState, KeyEvent};
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::{Key, NamedKey, PhysicalKey};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -32,11 +35,17 @@ pub struct TerminalModes {
 
 pub struct InputHandler {
     mode: Mode,
+    key_encoder: key::Encoder<'static>,
+    mouse_encoder: mouse::Encoder<'static>,
 }
 
 impl Default for InputHandler {
     fn default() -> Self {
-        Self { mode: Mode::Normal }
+        Self {
+            mode: Mode::Normal,
+            key_encoder: key::Encoder::new().expect("key encoder"),
+            mouse_encoder: mouse::Encoder::new().expect("mouse encoder"),
+        }
     }
 }
 
@@ -66,22 +75,36 @@ impl InputHandler {
         }
     }
 
-    pub fn encode_mouse_wheel(&self, lines: i32, term_modes: TerminalModes) -> Option<Vec<u8>> {
+    pub fn encode_mouse_wheel(&mut self, lines: i32, term_modes: TerminalModes) -> Option<Vec<u8>> {
         if term_modes.mouse_event == 0 {
             return None;
         }
+
+        self.mouse_encoder.set_tracking_mode(mouse::TrackingMode::Normal);
+        if term_modes.mouse_format_sgr {
+            self.mouse_encoder.set_format(mouse::Format::Sgr);
+        } else {
+            self.mouse_encoder.set_format(mouse::Format::X10);
+        }
+
         let mut out = Vec::new();
         let count = lines.unsigned_abs();
+        let button = if lines > 0 {
+            mouse::Button::Four
+        } else {
+            mouse::Button::Five
+        };
+
         for _ in 0..count {
-            if term_modes.mouse_format_sgr {
-                let button = if lines > 0 { 64 } else { 65 };
-                out.extend_from_slice(format!("\x1b[<{};1;1M", button).as_bytes());
-            } else {
-                let button: u8 = if lines > 0 { 64 + 32 } else { 65 + 32 };
-                out.extend_from_slice(&[b'\x1b', b'[', b'M', button, b'!', b'!']);
-            }
+            let mut event = mouse::Event::new().ok()?;
+            event
+                .set_action(mouse::Action::Press)
+                .set_button(Some(button))
+                .set_position(mouse::Position { x: 0.0, y: 0.0 });
+            self.mouse_encoder.encode_to_vec(&event, &mut out).ok()?;
         }
-        Some(out)
+
+        if out.is_empty() { None } else { Some(out) }
     }
 
     fn handle_normal(
@@ -99,12 +122,46 @@ impl InputHandler {
             }
         }
 
-        let bytes = key_to_bytes(event, modifiers, term_modes);
+        let bytes = self.encode_key(event, modifiers, term_modes);
         if bytes.is_empty() {
             Action::Ignore
         } else {
             Action::WritePty(bytes)
         }
+    }
+
+    fn encode_key(
+        &mut self,
+        event: &KeyEvent,
+        modifiers: &winit::event::Modifiers,
+        term_modes: TerminalModes,
+    ) -> Vec<u8> {
+        self.key_encoder
+            .set_cursor_key_application(term_modes.cursor_keys);
+
+        let physical_key = match event.physical_key {
+            PhysicalKey::Code(code) => keymap::map_keycode(code),
+            _ => None,
+        };
+        let Some(gk) = physical_key else {
+            return Vec::new();
+        };
+
+        let Ok(mut key_event) = key::Event::new() else {
+            return Vec::new();
+        };
+        key_event
+            .set_key(gk)
+            .set_action(keymap::map_action(event.state))
+            .set_mods(keymap::map_mods(modifiers));
+
+        if let Some(text) = &event.text {
+            key_event.set_utf8(Some(text.as_str()));
+        }
+
+        let mut buf = Vec::new();
+        let _ = self.key_encoder.encode_to_vec(&key_event, &mut buf);
+        buf
     }
 
     fn handle_prefix(&mut self, event: &KeyEvent) -> Action {
@@ -129,60 +186,5 @@ impl InputHandler {
             }
             _ => Action::Ignore,
         }
-    }
-}
-
-fn key_to_bytes(
-    event: &KeyEvent,
-    modifiers: &winit::event::Modifiers,
-    term_modes: TerminalModes,
-) -> Vec<u8> {
-    let ctrl = modifiers.state().control_key();
-
-    // Application cursor mode (DECCKM) changes the CSI introducer
-    // from `[` to `O` for arrow/home/end keys.
-    let csi = if term_modes.cursor_keys { b'O' } else { b'[' };
-
-    match &event.logical_key {
-        Key::Named(named) => match named {
-            NamedKey::Enter => b"\r".to_vec(),
-            NamedKey::Backspace => b"\x7f".to_vec(),
-            NamedKey::Tab => b"\t".to_vec(),
-            NamedKey::Escape => b"\x1b".to_vec(),
-            NamedKey::Space => b" ".to_vec(),
-            NamedKey::ArrowUp => vec![b'\x1b', csi, b'A'],
-            NamedKey::ArrowDown => vec![b'\x1b', csi, b'B'],
-            NamedKey::ArrowRight => vec![b'\x1b', csi, b'C'],
-            NamedKey::ArrowLeft => vec![b'\x1b', csi, b'D'],
-            NamedKey::Home => vec![b'\x1b', csi, b'H'],
-            NamedKey::End => vec![b'\x1b', csi, b'F'],
-            NamedKey::Delete => b"\x1b[3~".to_vec(),
-            NamedKey::PageUp => b"\x1b[5~".to_vec(),
-            NamedKey::PageDown => b"\x1b[6~".to_vec(),
-            NamedKey::F1 => b"\x1bOP".to_vec(),
-            NamedKey::F2 => b"\x1bOQ".to_vec(),
-            NamedKey::F3 => b"\x1bOR".to_vec(),
-            NamedKey::F4 => b"\x1bOS".to_vec(),
-            NamedKey::F5 => b"\x1b[15~".to_vec(),
-            NamedKey::F6 => b"\x1b[17~".to_vec(),
-            NamedKey::F7 => b"\x1b[18~".to_vec(),
-            NamedKey::F8 => b"\x1b[19~".to_vec(),
-            NamedKey::F9 => b"\x1b[20~".to_vec(),
-            NamedKey::F10 => b"\x1b[21~".to_vec(),
-            NamedKey::F11 => b"\x1b[23~".to_vec(),
-            NamedKey::F12 => b"\x1b[24~".to_vec(),
-            _ => Vec::new(),
-        },
-        Key::Character(c) => {
-            if ctrl {
-                if let Some(ch) = c.chars().next() {
-                    if ch.is_ascii_lowercase() {
-                        return vec![ch as u8 - b'a' + 1];
-                    }
-                }
-            }
-            c.as_bytes().to_vec()
-        }
-        _ => Vec::new(),
     }
 }

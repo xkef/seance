@@ -9,6 +9,7 @@ members = [
     "crates/seance-terminal",
     "crates/seance-app",
 ]
+exclude = ["libghostty-rs"]
 
 [workspace.package]
 edition = "2024"
@@ -19,4 +20,4 @@ license = "MIT OR Apache-2.0"
 log = "0.4"
 env_logger = "0.11"
 libc = "0.2"
-libghostty-vt-sys = { git = "https://github.com/Uzaaft/libghostty-rs.git" }
+libghostty-vt = { path = "libghostty-rs/crates/libghostty-vt" }

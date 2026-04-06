@@ -6,4 +6,5 @@ license.workspace = true
 description = "Input handling and modal key system for seance"
 
 [dependencies]
+libghostty-vt.workspace = true
 winit = "0.30"

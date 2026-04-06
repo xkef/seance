@@ -702,6 +702,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "int-enum"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e366a1634cccc76b4cfd3e7580de9b605e4d93f1edac48d786c1f867c0def495"
+dependencies = [
+ "proc-macro2",
+ "proc-macro2-diagnostics",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -835,9 +847,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48f5d2a454e16a5ea0f4ced81bd44e4cfc7bd3a507b61887c99fd3538b28e4af"
 
 [[package]]
+name = "libghostty-vt"
+version = "0.1.1"
+dependencies = [
+ "bitflags 2.11.0",
+ "int-enum",
+ "libghostty-vt-sys",
+]
+
+[[package]]
 name = "libghostty-vt-sys"
 version = "0.1.1"
-source = "git+https://github.com/Uzaaft/libghostty-rs.git#811cbdd85a99b40a63424a9d247c4f3653c11924"
 
 [[package]]
 name = "libloading"
@@ -1441,6 +1461,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "proc-macro2-diagnostics"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af066a9c399a26e020ada66a034357a868728e72cd426f3adcd35f80d88d88c8"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+ "version_check",
+]
+
+[[package]]
 name = "profiling"
 version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1656,6 +1688,7 @@ dependencies = [
 name = "seance-input"
 version = "0.1.0"
 dependencies = [
+ "libghostty-vt",
  "winit",
 ]
 
@@ -1677,8 +1710,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "ghostty-renderer",
- "ghostty-renderer-sys",
- "libghostty-vt-sys",
+ "libghostty-vt",
  "log",
  "objc2 0.5.2",
  "raw-window-handle",

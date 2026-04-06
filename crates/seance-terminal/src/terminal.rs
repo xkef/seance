@@ -1,12 +1,14 @@
 //! High-level terminal: VT emulator + PTY + search + selection.
 //!
-//! Uses libghostty-vt-sys for terminal emulation. The raw GhosttyTerminal
+//! Uses libghostty-vt for terminal emulation. The raw GhosttyTerminal
 //! handle is passed to the renderer via `raw_terminal_ptr()`.
 
+use std::cell::RefCell;
 use std::ffi::c_void;
-use std::ptr::NonNull;
+use std::rc::Rc;
 
-use libghostty_vt_sys as ffi;
+use libghostty_vt::terminal::{Mode, ScrollViewport};
+use libghostty_vt::{Terminal as VtTerminal, TerminalOptions};
 use seance_pty::Pty;
 
 use crate::search::SearchState;
@@ -27,81 +29,37 @@ pub struct CursorState {
     pub visible: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum ScrollAction {
-    Lines(i32),
-    Top,
-    Bottom,
-    PageUp,
-    PageDown,
-}
-
-struct CallbackCtx {
-    response_buf: Vec<u8>,
-}
-
 pub struct Terminal {
-    raw: NonNull<ffi::TerminalImpl>,
-    ctx: Box<CallbackCtx>,
+    vt: Box<VtTerminal<'static, 'static>>,
+    response_buf: Rc<RefCell<Vec<u8>>>,
     pty: Pty,
     dirty: bool,
     search: SearchState,
     selection: Option<Selection>,
 }
 
-const MODE_DECCKM: ffi::Mode = 1;
-const MODE_SGR_MOUSE: ffi::Mode = 1006;
-const MODE_SYNC_OUTPUT: ffi::Mode = 2026;
-
-unsafe extern "C" fn pty_write_callback(
-    _terminal: ffi::Terminal,
-    userdata: *mut c_void,
-    data: *const u8,
-    len: usize,
-) {
-    unsafe {
-        let ctx = &mut *(userdata as *mut CallbackCtx);
-        let slice = std::slice::from_raw_parts(data, len);
-        ctx.response_buf.extend_from_slice(slice);
-    }
-}
-
 impl Terminal {
     pub fn spawn(cols: u16, rows: u16) -> Option<Self> {
-        let mut raw: ffi::Terminal = std::ptr::null_mut();
-        let opts = ffi::TerminalOptions {
-            cols,
-            rows,
-            max_scrollback: 10_000,
-        };
-        let result = unsafe { ffi::ghostty_terminal_new(std::ptr::null(), &mut raw, opts) };
-        if result != ffi::Result::SUCCESS {
-            return None;
-        }
-        let raw = NonNull::new(raw)?;
+        let mut vt = Box::new(
+            VtTerminal::new(TerminalOptions {
+                cols,
+                rows,
+                max_scrollback: 10_000,
+            })
+            .ok()?,
+        );
 
-        let ctx = Box::new(CallbackCtx {
-            response_buf: Vec::new(),
-        });
-
-        unsafe {
-            let ctx_ptr: *const c_void = (&*ctx as *const CallbackCtx).cast();
-            ffi::ghostty_terminal_set(
-                raw.as_ptr(),
-                ffi::TerminalOption::USERDATA,
-                ctx_ptr,
-            );
-            ffi::ghostty_terminal_set(
-                raw.as_ptr(),
-                ffi::TerminalOption::WRITE_PTY,
-                pty_write_callback as *const c_void,
-            );
-        }
+        let response_buf: Rc<RefCell<Vec<u8>>> = Rc::new(RefCell::new(Vec::new()));
+        let buf = response_buf.clone();
+        vt.on_pty_write(move |_term, data| {
+            buf.borrow_mut().extend_from_slice(data);
+        })
+        .ok()?;
 
         let pty = Pty::spawn(seance_pty::Size { cols, rows }).ok()?;
         Some(Self {
-            raw,
-            ctx,
+            vt,
+            response_buf,
             pty,
             dirty: false,
             search: SearchState::new(),
@@ -115,16 +73,14 @@ impl Terminal {
         loop {
             match self.pty.read(&mut buf) {
                 Ok(n) if n > 0 => {
-                    unsafe {
-                        ffi::ghostty_terminal_vt_write(self.raw.as_ptr(), buf.as_ptr(), n);
-                    }
+                    self.vt.vt_write(&buf[..n]);
                     got_data = true;
                 }
                 _ => break,
             }
         }
-        if !self.ctx.response_buf.is_empty() {
-            let responses: Vec<u8> = std::mem::take(&mut self.ctx.response_buf);
+        let responses = self.response_buf.take();
+        if !responses.is_empty() {
             let _ = self.pty.write_all(&responses);
         }
         if got_data {
@@ -142,7 +98,7 @@ impl Terminal {
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
-        unsafe { ffi::ghostty_terminal_resize(self.raw.as_ptr(), cols, rows, 0, 0) };
+        let _ = self.vt.resize(cols, rows, 0, 0);
         let _ = self.pty.resize(seance_pty::Size { cols, rows });
     }
 
@@ -151,106 +107,64 @@ impl Terminal {
     }
 
     pub fn resize_vt(&mut self, cols: u16, rows: u16) {
-        unsafe { ffi::ghostty_terminal_resize(self.raw.as_ptr(), cols, rows, 0, 0) };
+        let _ = self.vt.resize(cols, rows, 0, 0);
     }
 
     pub fn size(&self) -> (u16, u16) {
-        let mut cols: u16 = 0;
-        let mut rows: u16 = 0;
-        unsafe {
-            ffi::ghostty_terminal_get(self.raw.as_ptr(), ffi::TerminalData::COLS, (&mut cols as *mut u16).cast());
-            ffi::ghostty_terminal_get(self.raw.as_ptr(), ffi::TerminalData::ROWS, (&mut rows as *mut u16).cast());
-        }
+        let cols = self.vt.cols().unwrap_or(80);
+        let rows = self.vt.rows().unwrap_or(24);
         (cols, rows)
     }
 
     pub fn cursor(&self) -> CursorState {
-        let mut col: u16 = 0;
-        let mut row: u16 = 0;
-        let mut visible: bool = true;
-        unsafe {
-            ffi::ghostty_terminal_get(self.raw.as_ptr(), ffi::TerminalData::CURSOR_X, (&mut col as *mut u16).cast());
-            ffi::ghostty_terminal_get(self.raw.as_ptr(), ffi::TerminalData::CURSOR_Y, (&mut row as *mut u16).cast());
-            ffi::ghostty_terminal_get(self.raw.as_ptr(), ffi::TerminalData::CURSOR_VISIBLE, (&mut visible as *mut bool).cast());
+        CursorState {
+            col: self.vt.cursor_x().unwrap_or(0),
+            row: self.vt.cursor_y().unwrap_or(0),
+            visible: self.vt.is_cursor_visible().unwrap_or(true),
         }
-        CursorState { col, row, visible }
     }
 
     pub fn title(&self) -> Option<String> {
-        let mut s = ffi::String { ptr: std::ptr::null(), len: 0 };
-        let result = unsafe {
-            ffi::ghostty_terminal_get(self.raw.as_ptr(), ffi::TerminalData::TITLE, (&mut s as *mut ffi::String).cast())
-        };
-        if result != ffi::Result::SUCCESS || s.len == 0 || s.ptr.is_null() {
-            return None;
-        }
-        let bytes = unsafe { std::slice::from_raw_parts(s.ptr, s.len) };
-        Some(String::from_utf8_lossy(bytes).into_owned())
+        let t = self.vt.title().ok()?;
+        if t.is_empty() { None } else { Some(t.to_owned()) }
     }
 
-    pub fn scroll(&mut self, action: ScrollAction) {
-        let sv = match action {
-            ScrollAction::Lines(delta) => {
-                let mut v = ffi::TerminalScrollViewport::default();
-                v.tag = ffi::TerminalScrollViewportTag::DELTA;
-                v.value.delta = delta as isize;
-                v
-            }
-            ScrollAction::Top => {
-                let mut v = ffi::TerminalScrollViewport::default();
-                v.tag = ffi::TerminalScrollViewportTag::TOP;
-                v
-            }
-            ScrollAction::Bottom => {
-                let mut v = ffi::TerminalScrollViewport::default();
-                v.tag = ffi::TerminalScrollViewportTag::BOTTOM;
-                v
-            }
-            ScrollAction::PageUp => {
-                let (_, rows) = self.size();
-                let mut v = ffi::TerminalScrollViewport::default();
-                v.tag = ffi::TerminalScrollViewportTag::DELTA;
-                v.value.delta = -(rows as isize);
-                v
-            }
-            ScrollAction::PageDown => {
-                let (_, rows) = self.size();
-                let mut v = ffi::TerminalScrollViewport::default();
-                v.tag = ffi::TerminalScrollViewportTag::DELTA;
-                v.value.delta = rows as isize;
-                v
-            }
-        };
-        unsafe { ffi::ghostty_terminal_scroll_viewport(self.raw.as_ptr(), sv) };
+    pub fn scroll(&mut self, sv: ScrollViewport) {
+        self.vt.scroll_viewport(sv);
     }
 
-    pub fn scroll_to_top(&mut self) { self.scroll(ScrollAction::Top); }
-    pub fn scroll_to_bottom(&mut self) { self.scroll(ScrollAction::Bottom); }
+    pub fn scroll_lines(&mut self, delta: i32) {
+        self.vt.scroll_viewport(ScrollViewport::Delta(delta as isize));
+    }
+
+    pub fn scroll_page_up(&mut self) {
+        let (_, rows) = self.size();
+        self.vt.scroll_viewport(ScrollViewport::Delta(-(rows as isize)));
+    }
+
+    pub fn scroll_page_down(&mut self) {
+        let (_, rows) = self.size();
+        self.vt.scroll_viewport(ScrollViewport::Delta(rows as isize));
+    }
+
+    pub fn scroll_to_top(&mut self) {
+        self.vt.scroll_viewport(ScrollViewport::Top);
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
+        self.vt.scroll_viewport(ScrollViewport::Bottom);
+    }
 
     pub fn scrollback_rows(&self) -> usize {
-        let mut rows: usize = 0;
-        unsafe {
-            ffi::ghostty_terminal_get(self.raw.as_ptr(), ffi::TerminalData::SCROLLBACK_ROWS, (&mut rows as *mut usize).cast());
-        }
-        rows
-    }
-
-    fn mode_get(&self, mode: ffi::Mode) -> bool {
-        let mut value = false;
-        unsafe { ffi::ghostty_terminal_mode_get(self.raw.as_ptr(), mode, &mut value) };
-        value
+        self.vt.scrollback_rows().unwrap_or(0)
     }
 
     pub fn modes(&self) -> TerminalModes {
-        let mut mouse_tracking = false;
-        unsafe {
-            ffi::ghostty_terminal_get(self.raw.as_ptr(), ffi::TerminalData::MOUSE_TRACKING, (&mut mouse_tracking as *mut bool).cast());
-        }
         TerminalModes {
-            cursor_keys: self.mode_get(MODE_DECCKM),
-            mouse_event: if mouse_tracking { 1000 } else { 0 },
-            mouse_format_sgr: self.mode_get(MODE_SGR_MOUSE),
-            synchronized_output: self.mode_get(MODE_SYNC_OUTPUT),
+            cursor_keys: self.vt.mode(Mode::DECCKM).unwrap_or(false),
+            mouse_event: if self.vt.is_mouse_tracking().unwrap_or(false) { 1000 } else { 0 },
+            mouse_format_sgr: self.vt.mode(Mode::SGR_MOUSE).unwrap_or(false),
+            synchronized_output: self.vt.mode(Mode::SYNC_OUTPUT).unwrap_or(false),
         }
     }
 
@@ -319,14 +233,7 @@ impl Terminal {
         }
     }
 
-    /// The raw GhosttyTerminal handle for passing to the renderer.
     pub(crate) fn raw_terminal_ptr(&self) -> *mut c_void {
-        self.raw.as_ptr().cast()
-    }
-}
-
-impl Drop for Terminal {
-    fn drop(&mut self) {
-        unsafe { ffi::ghostty_terminal_free(self.raw.as_ptr()) };
+        self.vt.as_raw().cast()
     }
 }

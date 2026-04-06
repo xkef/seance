@@ -7,8 +7,7 @@ description = "High-level terminal emulator with GPU rendering, search, and sele
 
 [dependencies]
 ghostty-renderer = { path = "../ghostty-renderer" }
-ghostty-renderer-sys = { path = "../ghostty-renderer-sys" }
-libghostty-vt-sys.workspace = true
+libghostty-vt.workspace = true
 seance-pty = { path = "../seance-pty" }
 wgpu = "29"
 winit = "0.30"

@@ -13,4 +13,5 @@ pub use ghostty_renderer::{Blending, Color, Colorspace, OptColor};
 pub use renderer::{CursorShape, Overlay, RendererConfig, TerminalRenderer};
 pub use search::SearchMatch;
 pub use selection::GridPos;
-pub use terminal::{CursorState, ScrollAction, Terminal, TerminalModes};
+pub use libghostty_vt::terminal::ScrollViewport;
+pub use terminal::{CursorState, Terminal, TerminalModes};
