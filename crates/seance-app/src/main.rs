@@ -187,11 +187,6 @@ impl ApplicationHandler for App {
                     .as_ref()
                     .map(|r| r.grid_size())
                     .unwrap_or((80, 24));
-                self.cell_size = self
-                    .renderer
-                    .as_ref()
-                    .map(|r| r.cell_size())
-                    .unwrap_or([8.0, 16.0]);
                 if let Some(term) = &mut self.terminal {
                     term.resize(cols, rows, new_size.width as u16, new_size.height as u16);
                 }
