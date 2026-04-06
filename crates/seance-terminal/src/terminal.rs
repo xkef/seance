@@ -1,15 +1,17 @@
 //! High-level terminal: VT emulator + PTY + selection.
 //!
-//! Uses libghostty-vt for terminal emulation. The raw GhosttyTerminal
-//! handle is passed to the renderer via `raw_terminal_ptr()`.
+//! Uses libghostty-vt for terminal emulation and portable-pty for PTY
+//! management. The raw GhosttyTerminal handle is passed to the renderer
+//! via `raw_terminal_ptr()`.
 
 use std::cell::RefCell;
 use std::ffi::c_void;
+use std::io::{Read, Write};
 use std::rc::Rc;
 
 use libghostty_vt::terminal::{Mode, ScrollViewport};
 use libghostty_vt::{Terminal as VtTerminal, TerminalOptions};
-use seance_pty::Pty;
+use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
 use crate::selection::{self, GridPos, Selection, SelectionGranularity};
 
@@ -27,7 +29,10 @@ pub struct TerminalModes {
 pub struct Terminal {
     vt: Box<VtTerminal<'static, 'static>>,
     response_buf: Rc<RefCell<Vec<u8>>>,
-    pty: Pty,
+    reader: Box<dyn Read + Send>,
+    writer: RefCell<Box<dyn Write + Send>>,
+    master: Box<dyn MasterPty + Send>,
+    child: Box<dyn Child + Send + Sync>,
     dirty: bool,
     selection: Option<Selection>,
 }
@@ -51,11 +56,38 @@ impl Terminal {
         })
         .ok()?;
 
-        let pty = Pty::spawn(seance_pty::Size { cols, rows }).ok()?;
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .ok()?;
+
+        let cmd = CommandBuilder::new_default_prog();
+        let child = pair.slave.spawn_command(cmd).ok()?;
+        let reader = pair.master.try_clone_reader().ok()?;
+        let writer = pair.master.take_writer().ok()?;
+
+        // Set the master fd to non-blocking so poll() doesn't block the
+        // event loop. The cloned reader inherits the non-blocking flag.
+        #[cfg(unix)]
+        if let Some(fd) = pair.master.as_raw_fd() {
+            unsafe {
+                let flags = libc::fcntl(fd, libc::F_GETFL);
+                libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+            }
+        }
+
         Some(Self {
             vt,
             response_buf,
-            pty,
+            reader,
+            writer: RefCell::new(writer),
+            master: pair.master,
+            child,
             dirty: false,
             selection: None,
         })
@@ -67,7 +99,7 @@ impl Terminal {
         let mut buf = [0u8; 4096];
         let mut got_data = false;
         loop {
-            match self.pty.read(&mut buf) {
+            match self.reader.read(&mut buf) {
                 Ok(n) if n > 0 => {
                     self.vt.vt_write(&buf[..n]);
                     got_data = true;
@@ -77,7 +109,7 @@ impl Terminal {
         }
         let responses = self.response_buf.take();
         if !responses.is_empty() {
-            let _ = self.pty.write_all(&responses);
+            let _ = self.writer.borrow_mut().write_all(&responses);
         }
         if got_data {
             self.dirty = true;
@@ -87,18 +119,23 @@ impl Terminal {
 
     /// Write raw bytes to the PTY (keyboard input, paste, etc.).
     pub fn write(&self, data: &[u8]) {
-        let _ = self.pty.write_all(data);
+        let _ = self.writer.borrow_mut().write_all(data);
     }
 
     /// Check whether the shell process is still running.
     pub fn is_alive(&mut self) -> bool {
-        self.pty.is_alive()
+        matches!(self.child.try_wait(), Ok(None))
     }
 
     /// Resize both the VT grid and the PTY window.
     pub fn resize(&mut self, cols: u16, rows: u16) {
         let _ = self.vt.resize(cols, rows, 0, 0);
-        let _ = self.pty.resize(seance_pty::Size { cols, rows });
+        let _ = self.master.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
     }
 
     /// Scroll the viewport by `delta` lines (negative = up).
