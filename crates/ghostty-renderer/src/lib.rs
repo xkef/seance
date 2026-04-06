@@ -28,7 +28,10 @@ pub struct FontGrid {
 impl FontGrid {
     pub fn new(config: &FontGridConfig) -> Option<Self> {
         let raw = unsafe { ffi::ghostty_font_grid_new(config) };
-        NonNull::new(raw).map(|raw| Self { raw, _not_send: PhantomData })
+        NonNull::new(raw).map(|raw| Self {
+            raw,
+            _not_send: PhantomData,
+        })
     }
 
     pub fn metrics(&self) -> FontMetrics {
@@ -44,9 +47,16 @@ impl FontGrid {
             ffi::ghostty_font_grid_atlas_grayscale(self.raw.as_ptr(), &mut size, &mut modified)
         };
         let len = (size as usize) * (size as usize);
-        let data = if len == 0 || ptr.is_null() { &[] }
-            else { unsafe { std::slice::from_raw_parts(ptr, len) } };
-        AtlasTexture { data, size, modified }
+        let data = if len == 0 || ptr.is_null() {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(ptr, len) }
+        };
+        AtlasTexture {
+            data,
+            size,
+            modified,
+        }
     }
 
     pub fn atlas_color(&self) -> AtlasTexture<'_> {
@@ -56,9 +66,16 @@ impl FontGrid {
             ffi::ghostty_font_grid_atlas_color(self.raw.as_ptr(), &mut size, &mut modified)
         };
         let len = (size as usize) * (size as usize) * 4;
-        let data = if len == 0 || ptr.is_null() { &[] }
-            else { unsafe { std::slice::from_raw_parts(ptr, len) } };
-        AtlasTexture { data, size, modified }
+        let data = if len == 0 || ptr.is_null() {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(ptr, len) }
+        };
+        AtlasTexture {
+            data,
+            size,
+            modified,
+        }
     }
 
     pub fn set_size(&self, points: f32) {
@@ -85,7 +102,11 @@ pub struct Renderer {
 impl Renderer {
     pub fn new(grid: Rc<FontGrid>, config: &RendererConfig) -> Option<Self> {
         let raw = unsafe { ffi::ghostty_renderer_new(grid.raw.as_ptr(), config) };
-        NonNull::new(raw).map(|raw| Self { raw, _grid: grid, _not_send: PhantomData })
+        NonNull::new(raw).map(|raw| Self {
+            raw,
+            _grid: grid,
+            _not_send: PhantomData,
+        })
     }
 
     /// # Safety
@@ -115,11 +136,15 @@ impl Renderer {
     }
 
     pub fn set_background(&self, color: Color) {
-        unsafe { ffi::ghostty_renderer_set_background(self.raw.as_ptr(), color.r, color.g, color.b) };
+        unsafe {
+            ffi::ghostty_renderer_set_background(self.raw.as_ptr(), color.r, color.g, color.b)
+        };
     }
 
     pub fn set_foreground(&self, color: Color) {
-        unsafe { ffi::ghostty_renderer_set_foreground(self.raw.as_ptr(), color.r, color.g, color.b) };
+        unsafe {
+            ffi::ghostty_renderer_set_foreground(self.raw.as_ptr(), color.r, color.g, color.b)
+        };
     }
 
     pub fn set_background_opacity(&self, opacity: f32) {
@@ -150,14 +175,19 @@ impl<'r> FrameSnapshot<'r> {
     pub fn bg_cells(&self) -> &[CellBg] {
         let mut count: u32 = 0;
         let ptr = unsafe { ffi::ghostty_renderer_bg_cells(self.renderer.raw.as_ptr(), &mut count) };
-        if count == 0 || ptr.is_null() { return &[]; }
+        if count == 0 || ptr.is_null() {
+            return &[];
+        }
         unsafe { std::slice::from_raw_parts(ptr.cast(), count as usize) }
     }
 
     pub fn text_cells(&self) -> &[CellText] {
         let mut count: u32 = 0;
-        let ptr = unsafe { ffi::ghostty_renderer_text_cells(self.renderer.raw.as_ptr(), &mut count) };
-        if count == 0 || ptr.is_null() { return &[]; }
+        let ptr =
+            unsafe { ffi::ghostty_renderer_text_cells(self.renderer.raw.as_ptr(), &mut count) };
+        if count == 0 || ptr.is_null() {
+            return &[];
+        }
         unsafe { std::slice::from_raw_parts(ptr, count as usize) }
     }
 

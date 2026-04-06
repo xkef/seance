@@ -103,14 +103,19 @@ impl Terminal {
 
     /// Scroll the viewport by `delta` lines (negative = up).
     pub fn scroll_lines(&mut self, delta: i32) {
-        self.vt.scroll_viewport(ScrollViewport::Delta(delta as isize));
+        self.vt
+            .scroll_viewport(ScrollViewport::Delta(delta as isize));
     }
 
     /// Query the current terminal mode flags.
     pub fn modes(&self) -> TerminalModes {
         TerminalModes {
             cursor_keys: self.vt.mode(Mode::DECCKM).unwrap_or(false),
-            mouse_event: if self.vt.is_mouse_tracking().unwrap_or(false) { 1000 } else { 0 },
+            mouse_event: if self.vt.is_mouse_tracking().unwrap_or(false) {
+                1000
+            } else {
+                0
+            },
             mouse_format_sgr: self.vt.mode(Mode::SGR_MOUSE).unwrap_or(false),
             synchronized_output: self.vt.mode(Mode::SYNC_OUTPUT).unwrap_or(false),
             bracketed_paste: self.vt.mode(Mode::BRACKETED_PASTE).unwrap_or(false),
@@ -157,11 +162,17 @@ impl Terminal {
             let mut expanded = sel.clone();
             if let Some(line) = lines.get(start.row as usize) {
                 let (ws, _) = selection::word_boundaries(line, start.col);
-                expanded.update(GridPos { col: ws, row: start.row });
+                expanded.update(GridPos {
+                    col: ws,
+                    row: start.row,
+                });
             }
             if let Some(line) = lines.get(end.row as usize) {
                 let (_, we) = selection::word_boundaries(line, end.col);
-                expanded.update(GridPos { col: we, row: end.row });
+                expanded.update(GridPos {
+                    col: we,
+                    row: end.row,
+                });
             }
             return Some(expanded.extract_text(&lines, cols));
         }
@@ -187,7 +198,10 @@ impl Terminal {
         let rows = self.vt.rows().unwrap_or(24);
         self.selection = Some(Selection::new_line(GridPos { col: 0, row: 0 }));
         if let Some(sel) = &mut self.selection {
-            sel.update(GridPos { col: cols.saturating_sub(1), row: rows.saturating_sub(1) });
+            sel.update(GridPos {
+                col: cols.saturating_sub(1),
+                row: rows.saturating_sub(1),
+            });
         }
     }
 

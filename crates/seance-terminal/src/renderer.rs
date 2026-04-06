@@ -14,10 +14,10 @@ use winit::window::Window;
 
 use ghostty_renderer as gr;
 
+use crate::Terminal;
 use crate::gpu::GpuState;
 pub use crate::gpu::uniforms::CursorShape;
 use crate::selection::GridPos;
-use crate::Terminal;
 
 /// Initial configuration for creating a [`TerminalRenderer`].
 pub struct RendererConfig {
@@ -112,7 +112,9 @@ impl TerminalRenderer {
     }
 
     /// Cell dimensions in pixels: `[width, height]`.
-    pub fn cell_size(&self) -> [f32; 2] { self.cell_size }
+    pub fn cell_size(&self) -> [f32; 2] {
+        self.cell_size
+    }
 
     /// Compute the terminal grid size (columns, rows) from the current
     /// surface dimensions, subtracting padding.
@@ -139,11 +141,14 @@ impl TerminalRenderer {
         self.surface_width = width;
         self.surface_height = height;
         self.renderer.resize(width, height);
-        self.gpu.resize(winit::dpi::PhysicalSize::new(width, height));
+        self.gpu
+            .resize(winit::dpi::PhysicalSize::new(width, height));
     }
 
     /// Mutable access to the overlay state (cursor, selection).
-    pub fn overlay_mut(&mut self) -> &mut Overlay { &mut self.overlay }
+    pub fn overlay_mut(&mut self) -> &mut Overlay {
+        &mut self.overlay
+    }
 
     /// Bind a terminal to this renderer so its content is drawn.
     pub fn attach(&self, terminal: &Terminal) {
@@ -167,7 +172,9 @@ impl TerminalRenderer {
 
     /// Load a named theme from the ghostty resources directory.
     pub fn set_theme(&self, name: &str) -> bool {
-        CString::new(name).ok().is_some_and(|c| self.renderer.load_theme(&c))
+        CString::new(name)
+            .ok()
+            .is_some_and(|c| self.renderer.load_theme(&c))
     }
 
     /// Change the font size and update cached cell metrics.

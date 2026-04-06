@@ -2,14 +2,14 @@
 
 use std::sync::Arc;
 
-use wgpu::*;
 use wgpu::util::DeviceExt;
+use wgpu::*;
 
 use ghostty_renderer::FrameSnapshot;
 
-use crate::renderer::Overlay;
 use super::pipeline::Pipelines;
 use super::uniforms::Uniforms;
+use crate::renderer::Overlay;
 
 /// Manages the wgpu device, surface, pipelines, and per-frame GPU resources.
 pub(crate) struct GpuState {
@@ -63,8 +63,7 @@ impl GpuState {
                                 for i in 0..count {
                                     let sub: *mut AnyObject =
                                         msg_send![sublayers, objectAtIndex: i];
-                                    let is_metal: bool =
-                                        msg_send![sub, isKindOfClass: metal_class];
+                                    let is_metal: bool = msg_send![sub, isKindOfClass: metal_class];
                                     if is_metal {
                                         let _: () =
                                             msg_send![sub, setPresentsWithTransaction: true];
@@ -184,8 +183,9 @@ impl GpuState {
         }
 
         let output = match self.surface.get_current_texture() {
-            CurrentSurfaceTexture::Success(frame)
-            | CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            CurrentSurfaceTexture::Success(frame) | CurrentSurfaceTexture::Suboptimal(frame) => {
+                frame
+            }
             other => {
                 log::debug!("surface not ready: {other:?}");
                 self.surface.configure(&self.device, &self.config);
@@ -194,8 +194,14 @@ impl GpuState {
         };
 
         let fd = snapshot.frame_data();
-        let uniforms = Uniforms::from_frame_data(&fd, self.size.width as f32, self.size.height as f32, overlay);
-        self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        let uniforms = Uniforms::from_frame_data(
+            &fd,
+            self.size.width as f32,
+            self.size.height as f32,
+            overlay,
+        );
+        self.queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         let bg_cells = snapshot.bg_cells();
         if !bg_cells.is_empty() {
@@ -220,10 +226,14 @@ impl GpuState {
 
         self.ensure_atlas_bind_group();
 
-        let view = output.texture.create_view(&TextureViewDescriptor::default());
-        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("frame"),
-        });
+        let view = output
+            .texture
+            .create_view(&TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("frame"),
+            });
 
         {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
@@ -277,14 +287,19 @@ impl GpuState {
 
     fn upload_bg_cells(&mut self, data: &[u8]) {
         let needed = data.len() as u64;
-        let recreate = self.bg_cells_buffer.as_ref().is_none_or(|b| b.size() < needed);
+        let recreate = self
+            .bg_cells_buffer
+            .as_ref()
+            .is_none_or(|b| b.size() < needed);
 
         if recreate {
-            let buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("bg_cells"),
-                contents: data,
-                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-            });
+            let buffer = self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("bg_cells"),
+                    contents: data,
+                    usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+                });
             let bind_group = self.device.create_bind_group(&BindGroupDescriptor {
                 label: Some("bg_cells_bg"),
                 layout: &self.pipelines.bg_cells_bgl,
@@ -296,24 +311,29 @@ impl GpuState {
             self.bg_cells_buffer = Some(buffer);
             self.bg_cells_bind_group = Some(bind_group);
         } else {
-            self.queue.write_buffer(self.bg_cells_buffer.as_ref().unwrap(), 0, data);
+            self.queue
+                .write_buffer(self.bg_cells_buffer.as_ref().unwrap(), 0, data);
         }
     }
 
     fn upload_text_instances(&mut self, data: &[u8]) {
         let needed = data.len() as u64;
-        let recreate = self.text_instance_buffer.as_ref().is_none_or(|b| b.size() < needed);
+        let recreate = self
+            .text_instance_buffer
+            .as_ref()
+            .is_none_or(|b| b.size() < needed);
 
         if recreate {
-            self.text_instance_buffer = Some(
-                self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            self.text_instance_buffer = Some(self.device.create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
                     label: Some("text_instances"),
                     contents: data,
                     usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-                }),
-            );
+                },
+            ));
         } else {
-            self.queue.write_buffer(self.text_instance_buffer.as_ref().unwrap(), 0, data);
+            self.queue
+                .write_buffer(self.text_instance_buffer.as_ref().unwrap(), 0, data);
         }
     }
 
@@ -337,7 +357,9 @@ impl GpuState {
             depth_or_array_layers: 1,
         };
 
-        let need_new = existing.as_ref().is_none_or(|t| t.width() != size || t.height() != size);
+        let need_new = existing
+            .as_ref()
+            .is_none_or(|t| t.width() != size || t.height() != size);
 
         if need_new {
             *existing = Some(device.create_texture(&TextureDescriptor {
@@ -372,9 +394,13 @@ impl GpuState {
 
     fn upload_atlas_grayscale(&mut self, data: &[u8], size: u32) {
         let resized = Self::write_atlas(
-            &self.device, &self.queue,
+            &self.device,
+            &self.queue,
             &mut self.atlas_grayscale_texture,
-            data, size, TextureFormat::R8Unorm, "atlas_grayscale",
+            data,
+            size,
+            TextureFormat::R8Unorm,
+            "atlas_grayscale",
         );
         if resized {
             self.atlas_bind_group = None;
@@ -383,9 +409,13 @@ impl GpuState {
 
     fn upload_atlas_color(&mut self, data: &[u8], size: u32) {
         let resized = Self::write_atlas(
-            &self.device, &self.queue,
+            &self.device,
+            &self.queue,
             &mut self.atlas_color_texture,
-            data, size, TextureFormat::Bgra8Unorm, "atlas_color",
+            data,
+            size,
+            TextureFormat::Bgra8Unorm,
+            "atlas_color",
         );
         if resized {
             self.atlas_bind_group = None;
@@ -402,7 +432,11 @@ impl GpuState {
             None => {
                 let t = self.device.create_texture(&TextureDescriptor {
                     label: Some("placeholder_grayscale"),
-                    size: Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                    size: Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: TextureDimension::D2,
@@ -419,7 +453,11 @@ impl GpuState {
             None => {
                 let t = self.device.create_texture(&TextureDescriptor {
                     label: Some("placeholder_color"),
-                    size: Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                    size: Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: TextureDimension::D2,

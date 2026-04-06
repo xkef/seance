@@ -106,7 +106,8 @@ impl InputHandler {
             return None;
         }
 
-        self.mouse_encoder.set_tracking_mode(mouse::TrackingMode::Normal);
+        self.mouse_encoder
+            .set_tracking_mode(mouse::TrackingMode::Normal);
         if term_modes.mouse_format_sgr {
             self.mouse_encoder.set_format(mouse::Format::Sgr);
         } else {

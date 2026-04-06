@@ -155,8 +155,8 @@ impl ApplicationHandler for App {
         let renderer = pollster::block_on(TerminalRenderer::new(window.clone(), config))
             .expect("failed to create renderer");
 
-        let theme = std::env::var("SEANCE_THEME")
-            .unwrap_or_else(|_| "catppuccin-frappe".to_string());
+        let theme =
+            std::env::var("SEANCE_THEME").unwrap_or_else(|_| "catppuccin-frappe".to_string());
         if !renderer.set_theme(&theme) {
             log::warn!("failed to load theme: {theme}");
         }
@@ -342,9 +342,7 @@ impl ApplicationHandler for App {
                             if let Some((col, row)) = grid_pos {
                                 // Detect double/triple click.
                                 let dt = now.duration_since(self.last_click_time);
-                                if dt.as_millis() < 500
-                                    && (col, row) == self.last_click_pos
-                                {
+                                if dt.as_millis() < 500 && (col, row) == self.last_click_pos {
                                     self.click_count = (self.click_count % 3) + 1;
                                 } else {
                                     self.click_count = 1;

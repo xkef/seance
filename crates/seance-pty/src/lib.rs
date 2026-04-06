@@ -7,7 +7,7 @@
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd};
 
-use nix::pty::{openpty, Winsize};
+use nix::pty::{Winsize, openpty};
 use nix::unistd::{self, ForkResult, Pid};
 
 #[derive(Debug, Clone, Copy)]
@@ -139,7 +139,7 @@ fn setup_slave(slave: OwnedFd) {
 }
 
 fn set_nonblocking(fd: &OwnedFd) -> io::Result<()> {
-    use nix::fcntl::{fcntl, FcntlArg, OFlag};
+    use nix::fcntl::{FcntlArg, OFlag, fcntl};
     let flags = fcntl(fd, FcntlArg::F_GETFL).map_err(io_err)?;
     let flags = OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK;
     fcntl(fd, FcntlArg::F_SETFL(flags)).map_err(io_err)?;

@@ -4,8 +4,8 @@
 //! - [`TerminalRenderer`] — GPU renderer (font atlas + wgpu pipeline)
 
 mod gpu;
-pub mod selection;
 mod renderer;
+pub mod selection;
 mod terminal;
 
 pub use renderer::{CursorShape, Overlay, RendererConfig, TerminalRenderer};
