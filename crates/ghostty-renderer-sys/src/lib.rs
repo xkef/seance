@@ -189,10 +189,7 @@ unsafe extern "C" {
     pub fn ghostty_renderer_set_terminal(renderer: GhosttyRenderer, terminal: *mut c_void);
     pub fn ghostty_renderer_resize(renderer: GhosttyRenderer, width: u32, height: u32);
     pub fn ghostty_renderer_update_frame(renderer: GhosttyRenderer, cursor_blink_visible: bool);
-    pub fn ghostty_renderer_bg_cells(
-        renderer: GhosttyRenderer,
-        count: *mut u32,
-    ) -> *const [u8; 4];
+    pub fn ghostty_renderer_bg_cells(renderer: GhosttyRenderer, count: *mut u32) -> *const [u8; 4];
     pub fn ghostty_renderer_text_cells(
         renderer: GhosttyRenderer,
         count: *mut u32,

@@ -29,40 +29,40 @@ const _: () = assert!(size_of::<Uniforms>() == 256);
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub(crate) struct Uniforms {
     // --- block 0: projection (64 bytes) ---
-    pub projection: [[f32; 4]; 4],     // offset 0
+    pub projection: [[f32; 4]; 4], // offset 0
 
     // --- block 1: grid layout (32 bytes) ---
-    pub cell_size: [f32; 2],           // offset 64
-    pub grid_size: [u32; 2],           // offset 72
-    pub grid_padding: [f32; 4],        // offset 80  (align 16)
+    pub cell_size: [f32; 2],    // offset 64
+    pub grid_size: [u32; 2],    // offset 72
+    pub grid_padding: [f32; 4], // offset 80  (align 16)
 
     // --- block 2: colors + contrast (32 bytes) ---
-    pub bg_color: [f32; 4],            // offset 96  (align 16)
-    pub min_contrast: f32,             // offset 112
-    pub cursor_visible: u32,           // offset 116  (0 = hidden, 1 = visible)
-    pub cursor_pos: [u32; 2],          // offset 120  (align 8)
+    pub bg_color: [f32; 4],   // offset 96  (align 16)
+    pub min_contrast: f32,    // offset 112
+    pub cursor_visible: u32,  // offset 116  (0 = hidden, 1 = visible)
+    pub cursor_pos: [u32; 2], // offset 120  (align 8)
 
     // --- block 3: VT cursor color (16 bytes) ---
-    pub cursor_color: [f32; 4],        // offset 128  (align 16)
+    pub cursor_color: [f32; 4], // offset 128  (align 16)
 
     // --- block 4: VT cursor + overlay cursor (16 bytes) ---
-    pub cursor_wide: u32,              // offset 144
-    pub overlay_shape: u32,            // offset 148  (CursorShape as u32)
-    pub overlay_pos: [u32; 2],         // offset 152  (align 8)
+    pub cursor_wide: u32,      // offset 144
+    pub overlay_shape: u32,    // offset 148  (CursorShape as u32)
+    pub overlay_pos: [u32; 2], // offset 152  (align 8)
 
     // --- block 5: overlay cursor color (16 bytes) ---
-    pub overlay_color: [f32; 4],       // offset 160  (align 16)
+    pub overlay_color: [f32; 4], // offset 160  (align 16)
 
     // --- block 6: selection range (16 bytes) ---
-    pub selection_start: [u32; 2],     // offset 176  (col, row)
-    pub selection_end: [u32; 2],       // offset 184  (col, row)
+    pub selection_start: [u32; 2], // offset 176  (col, row)
+    pub selection_end: [u32; 2],   // offset 184  (col, row)
 
     // --- block 7: selection color (16 bytes) ---
-    pub selection_color: [f32; 4],     // offset 192  (align 16)
+    pub selection_color: [f32; 4], // offset 192  (align 16)
 
     // --- block 8: selection active flag + padding (48 bytes to 256) ---
-    pub selection_active: u32,         // offset 208
-    pub _pad: [u32; 11],              // offset 212  (pad to 256, align 16)
+    pub selection_active: u32, // offset 208
+    pub _pad: [u32; 11],       // offset 212  (pad to 256, align 16)
 }
 
 impl Uniforms {
@@ -75,8 +75,11 @@ impl Uniforms {
         overlay: &Overlay,
     ) -> Self {
         let (sel_start, sel_end, sel_active) = match &overlay.selection {
-            Some((start, end)) => ([start.col as u32, start.row as u32],
-                                   [end.col as u32, end.row as u32], 1u32),
+            Some((start, end)) => (
+                [start.col as u32, start.row as u32],
+                [end.col as u32, end.row as u32],
+                1u32,
+            ),
             None => ([0u32; 2], [0u32; 2], 0u32),
         };
 

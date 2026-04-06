@@ -6,12 +6,7 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-            manifest
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .join("ghostty")
+            manifest.parent().unwrap().parent().unwrap().join("ghostty")
         });
 
     let lib_dir = ghostty_dir.join("zig-out/lib");
