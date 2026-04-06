@@ -61,6 +61,8 @@ pub struct TerminalRenderer {
     gpu: GpuState,
     cell_size: [f32; 2],
     grid_padding: Cell<[f32; 4]>,
+    grid_cols: Cell<u16>,
+    grid_rows: Cell<u16>,
     surface_width: u32,
     surface_height: u32,
     overlay: Overlay,
@@ -99,6 +101,9 @@ impl TerminalRenderer {
         remove_ghostty_layer(&window);
         let gpu = GpuState::new(window).await;
 
+        let initial_cols = (config.width as f32 / cell_size[0]).max(1.0) as u16;
+        let initial_rows = (config.height as f32 / cell_size[1]).max(1.0) as u16;
+
         Some(Self {
             font_grid,
             renderer,
@@ -107,6 +112,8 @@ impl TerminalRenderer {
             gpu,
             cell_size,
             grid_padding: Cell::new([0.0; 4]),
+            grid_cols: Cell::new(initial_cols),
+            grid_rows: Cell::new(initial_rows),
             overlay: Overlay::default(),
         })
     }
@@ -116,16 +123,13 @@ impl TerminalRenderer {
         self.cell_size
     }
 
-    /// Compute the terminal grid size (columns, rows) from the current
-    /// surface dimensions, subtracting padding.
+    /// The terminal grid size (columns, rows).
+    ///
+    /// After the first `update_frame()`, this returns ghostty's computed
+    /// grid dimensions from `FrameData`. Before that, it falls back to
+    /// a simple `surface_size / cell_size` estimate.
     pub fn grid_size(&self) -> (u16, u16) {
-        let [cw, ch] = self.cell_size;
-        let pad = self.grid_padding.get();
-        let usable_w = (self.surface_width as f32 - pad[0] - pad[2]).max(cw);
-        let usable_h = (self.surface_height as f32 - pad[1] - pad[3]).max(ch);
-        let cols = (usable_w / cw).max(1.0) as u16;
-        let rows = (usable_h / ch).max(1.0) as u16;
-        (cols, rows)
+        (self.grid_cols.get(), self.grid_rows.get())
     }
 
     /// Convert a pixel position to a grid cell (col, row).
@@ -137,6 +141,9 @@ impl TerminalRenderer {
     }
 
     /// Notify the renderer and GPU of a new surface size.
+    ///
+    /// Updates ghostty's internal layout. The caller should follow up with
+    /// `update_frame()` to refresh the cached grid dimensions.
     pub fn resize_surface(&mut self, width: u32, height: u32, _scale: f64) {
         self.surface_width = width;
         self.surface_height = height;
@@ -157,11 +164,13 @@ impl TerminalRenderer {
     }
 
     /// Rebuild the cell buffer from the current terminal state.
-    /// Also caches the grid padding for `grid_size` calculations.
+    /// Caches grid dimensions and padding from ghostty's FrameData.
     pub fn update_frame(&self) {
         self.renderer.update_frame(true);
         let fd = self.renderer.frame_snapshot().frame_data();
         self.grid_padding.set(fd.grid_padding);
+        self.grid_cols.set(fd.grid_cols);
+        self.grid_rows.set(fd.grid_rows);
     }
 
     /// Upload cell data and render one frame to the surface.

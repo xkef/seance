@@ -182,11 +182,20 @@ impl ApplicationHandler for App {
                 if let (Some(r), Some(w)) = (&mut self.renderer, &self.window) {
                     r.resize_surface(new_size.width, new_size.height, w.scale_factor());
                 }
+                // Ask ghostty to recompute the grid for the new pixel size.
+                if let Some(r) = &self.renderer {
+                    r.update_frame();
+                }
                 let (cols, rows) = self
                     .renderer
                     .as_ref()
                     .map(|r| r.grid_size())
                     .unwrap_or((80, 24));
+                self.cell_size = self
+                    .renderer
+                    .as_ref()
+                    .map(|r| r.cell_size())
+                    .unwrap_or([8.0, 16.0]);
                 if let Some(term) = &mut self.terminal {
                     term.resize(cols, rows, new_size.width as u16, new_size.height as u16);
                 }
