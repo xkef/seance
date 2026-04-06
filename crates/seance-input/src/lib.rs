@@ -34,12 +34,17 @@ pub enum Action {
     Ignore,
 }
 
-/// Terminal mode flags that affect input encoding.
+/// Terminal mode flags queried from the VT emulator.
+///
+/// Shared between the input encoder (which needs cursor_keys, mouse modes)
+/// and the app layer (which needs bracketed_paste for paste handling).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TerminalModes {
     pub cursor_keys: bool,
     pub mouse_event: i32,
     pub mouse_format_sgr: bool,
+    pub synchronized_output: bool,
+    pub bracketed_paste: bool,
 }
 
 /// Translates winit events into terminal actions.

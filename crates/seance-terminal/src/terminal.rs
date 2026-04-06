@@ -9,21 +9,13 @@ use std::ffi::c_void;
 use std::io::{Read, Write};
 use std::rc::Rc;
 
+use libghostty_vt::render::{CellIterator, RowIterator};
 use libghostty_vt::terminal::{Mode, ScrollViewport};
-use libghostty_vt::{Terminal as VtTerminal, TerminalOptions};
+use libghostty_vt::{RenderState, Terminal as VtTerminal, TerminalOptions};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use seance_input::TerminalModes;
 
-use crate::selection::{self, GridPos, Selection, SelectionGranularity};
-
-/// Terminal mode flags queried by the input encoder.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct TerminalModes {
-    pub cursor_keys: bool,
-    pub mouse_event: i32,
-    pub mouse_format_sgr: bool,
-    pub synchronized_output: bool,
-    pub bracketed_paste: bool,
-}
+use crate::selection::{GridPos, Selection, SelectionGranularity};
 
 /// A terminal session: VT emulator, PTY, and text selection state.
 pub struct Terminal {
@@ -183,37 +175,71 @@ impl Terminal {
         }
     }
 
-    /// Extract the selected text. Returns `None` if no selection is active.
-    ///
-    /// Word selections are expanded to word boundaries. The text is built
-    /// from the VT screen content (currently a placeholder — requires
-    /// `dump_screen` implementation).
+    /// Extract the selected text using libghostty-vt's RenderState API.
+    /// Returns `None` if no selection is active.
     pub fn selection_text(&mut self) -> Option<String> {
-        let cols = self.vt.cols().unwrap_or(80);
-        // TODO: use libghostty-vt RenderState row/cell iteration
-        let screen = String::new();
-        let lines: Vec<&str> = screen.lines().collect();
         let sel = self.selection.as_ref()?;
-        if sel.granularity() == SelectionGranularity::Word {
-            let (start, end) = sel.ordered_range();
-            let mut expanded = sel.clone();
-            if let Some(line) = lines.get(start.row as usize) {
-                let (ws, _) = selection::word_boundaries(line, start.col);
-                expanded.update(GridPos {
-                    col: ws,
-                    row: start.row,
-                });
+        let (start, end) = sel.ordered_range();
+        let granularity = sel.granularity();
+        let cols = self.vt.cols().unwrap_or(80);
+
+        let mut render_state = RenderState::new().ok()?;
+        let snapshot = render_state.update(&self.vt).ok()?;
+        let mut rows = RowIterator::new().ok()?;
+        let mut cells = CellIterator::new().ok()?;
+
+        let mut result = String::new();
+        let mut row_iter = rows.update(&snapshot).ok()?;
+        let mut row_idx: u16 = 0;
+
+        while let Some(row) = row_iter.next() {
+            if row_idx > end.row {
+                break;
             }
-            if let Some(line) = lines.get(end.row as usize) {
-                let (_, we) = selection::word_boundaries(line, end.col);
-                expanded.update(GridPos {
-                    col: we,
-                    row: end.row,
-                });
+            if row_idx >= start.row {
+                let col_start = match granularity {
+                    SelectionGranularity::Line => 0,
+                    _ if row_idx == start.row => start.col,
+                    _ => 0,
+                };
+                let col_end = match granularity {
+                    SelectionGranularity::Line => cols.saturating_sub(1),
+                    _ if row_idx == end.row => end.col,
+                    _ => cols.saturating_sub(1),
+                };
+
+                if !result.is_empty() {
+                    result.push('\n');
+                }
+
+                let mut cell_iter = cells.update(row).ok()?;
+                let mut col_idx: u16 = 0;
+                while let Some(cell) = cell_iter.next() {
+                    if col_idx >= col_start && col_idx <= col_end {
+                        let graphemes = cell.graphemes().ok()?;
+                        if graphemes.is_empty() {
+                            result.push(' ');
+                        } else {
+                            for ch in graphemes {
+                                result.push(ch);
+                            }
+                        }
+                    }
+                    col_idx += 1;
+                }
+
+                // Trim trailing whitespace from each line.
+                let trimmed_len = result.trim_end().len();
+                result.truncate(trimmed_len);
             }
-            return Some(expanded.extract_text(&lines, cols));
+            row_idx += 1;
         }
-        Some(sel.extract_text(&lines, cols))
+
+        if result.is_empty() {
+            None
+        } else {
+            Some(result)
+        }
     }
 
     pub fn has_selection(&self) -> bool {

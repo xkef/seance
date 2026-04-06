@@ -111,14 +111,9 @@ impl App {
 
     /// Build a `TerminalModes` snapshot for the input encoder.
     fn terminal_modes(&self) -> seance_input::TerminalModes {
-        self.terminal.as_ref().map_or(Default::default(), |t| {
-            let m = t.modes();
-            seance_input::TerminalModes {
-                cursor_keys: m.cursor_keys,
-                mouse_event: m.mouse_event,
-                mouse_format_sgr: m.mouse_format_sgr,
-            }
-        })
+        self.terminal
+            .as_ref()
+            .map_or(Default::default(), |t| t.modes())
     }
 }
 

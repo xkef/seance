@@ -1944,6 +1944,7 @@ dependencies = [
  "objc2 0.5.2",
  "portable-pty",
  "raw-window-handle",
+ "seance-input",
  "wgpu",
  "winit",
 ]

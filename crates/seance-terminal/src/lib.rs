@@ -9,5 +9,6 @@ pub mod selection;
 mod terminal;
 
 pub use renderer::{CursorShape, Overlay, RendererConfig, TerminalRenderer};
+pub use seance_input::TerminalModes;
 pub use selection::GridPos;
-pub use terminal::{Terminal, TerminalModes};
+pub use terminal::Terminal;
