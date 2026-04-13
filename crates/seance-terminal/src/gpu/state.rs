@@ -1,17 +1,14 @@
-//! GPU state: wgpu surface, device, buffers, and frame rendering.
-
 use std::sync::Arc;
 
 use wgpu::util::DeviceExt;
 use wgpu::*;
 
-use ghostty_renderer::FrameSnapshot;
-
 use super::pipeline::Pipelines;
 use super::uniforms::Uniforms;
+use crate::font::GlyphCache;
+use crate::font::cell_builder::{CellText, FrameInfo};
 use crate::renderer::Overlay;
 
-/// Manages the wgpu device, surface, pipelines, and per-frame GPU resources.
 pub(crate) struct GpuState {
     surface: Surface<'static>,
     device: Device,
@@ -38,10 +35,6 @@ impl GpuState {
         let instance = Instance::default();
         let surface = instance.create_surface(window.clone()).unwrap();
 
-        // Tell the CAMetalLayer to present frames as part of the
-        // CoreAnimation transaction. Without this, macOS stretches
-        // the previous frame to fill the new window size during live
-        // resize, causing visible font distortion.
         #[cfg(target_os = "macos")]
         {
             use objc2::msg_send;
@@ -53,22 +46,20 @@ impl GpuState {
                 unsafe {
                     let view: *mut AnyObject = h.ns_view.as_ptr().cast();
                     let layer: *mut AnyObject = msg_send![view, layer];
-                    if !layer.is_null() {
-                        // wgpu's CAMetalLayer is a sublayer of the view's
-                        // backing layer, not the layer itself.
-                        if let Some(metal_class) = AnyClass::get("CAMetalLayer") {
-                            let sublayers: *mut AnyObject = msg_send![layer, sublayers];
-                            if !sublayers.is_null() {
-                                let count: usize = msg_send![sublayers, count];
-                                for i in 0..count {
-                                    let sub: *mut AnyObject =
-                                        msg_send![sublayers, objectAtIndex: i];
-                                    let is_metal: bool = msg_send![sub, isKindOfClass: metal_class];
-                                    if is_metal {
-                                        let _: () =
-                                            msg_send![sub, setPresentsWithTransaction: true];
-                                        break;
-                                    }
+                    if !layer.is_null()
+                        && let Some(metal_class) = AnyClass::get("CAMetalLayer")
+                    {
+                        let sublayers: *mut AnyObject = msg_send![layer, sublayers];
+                        if !sublayers.is_null() {
+                            let count: usize = msg_send![sublayers, count];
+                            for i in 0..count {
+                                let sub: *mut AnyObject =
+                                    msg_send![sublayers, objectAtIndex: i];
+                                let is_metal: bool = msg_send![sub, isKindOfClass: metal_class];
+                                if is_metal {
+                                    let _: () =
+                                        msg_send![sub, setPresentsWithTransaction: true];
+                                    break;
                                 }
                             }
                         }
@@ -98,9 +89,6 @@ impl GpuState {
             .expect("failed to create device");
 
         let caps = surface.get_capabilities(&adapter);
-        // Use a non-sRGB format so alpha blending happens in gamma/sRGB
-        // space ("native" blending). This matches Ghostty's default on
-        // macOS and produces the expected text weight.
         let format = caps
             .formats
             .iter()
@@ -175,8 +163,14 @@ impl GpuState {
         }
     }
 
-    /// Upload cell data and render one complete frame (bg + cell bg + text).
-    pub(crate) fn render_frame(&mut self, snapshot: &FrameSnapshot<'_>, overlay: &Overlay) -> bool {
+    pub(crate) fn render_frame(
+        &mut self,
+        frame_info: &FrameInfo,
+        bg_cells: &[[u8; 4]],
+        text_cells: &[CellText],
+        glyph_cache: &GlyphCache,
+        overlay: &Overlay,
+    ) -> bool {
         if self.surface_dirty {
             self.surface.configure(&self.device, &self.config);
             self.surface_dirty = false;
@@ -193,9 +187,8 @@ impl GpuState {
             }
         };
 
-        let fd = snapshot.frame_data();
-        let uniforms = Uniforms::from_frame_data(
-            &fd,
+        let uniforms = Uniforms::from_frame_info(
+            frame_info,
             self.size.width as f32,
             self.size.height as f32,
             overlay,
@@ -203,25 +196,23 @@ impl GpuState {
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        let bg_cells = snapshot.bg_cells();
         if !bg_cells.is_empty() {
             let bg_data = bytemuck::cast_slice::<[u8; 4], u8>(bg_cells);
             self.upload_bg_cells(bg_data);
         }
 
-        let text_cells = snapshot.text_cells();
         self.text_instance_count = text_cells.len() as u32;
         if !text_cells.is_empty() {
             self.upload_text_instances(bytemuck::cast_slice(text_cells));
         }
 
-        let gs = snapshot.atlas_grayscale();
-        if gs.size > 0 {
-            self.upload_atlas_grayscale(gs.data, gs.size);
+        let (gs_data, gs_size) = glyph_cache.atlas.grayscale_data();
+        if gs_size > 0 {
+            self.upload_atlas_grayscale(gs_data, gs_size);
         }
-        let color = snapshot.atlas_color();
-        if color.size > 0 {
-            self.upload_atlas_color(color.data, color.size);
+        let (color_data, color_size) = glyph_cache.atlas.color_data();
+        if color_size > 0 {
+            self.upload_atlas_color(color_data, color_size);
         }
 
         self.ensure_atlas_bind_group();
@@ -253,12 +244,10 @@ impl GpuState {
                 multiview_mask: None,
             });
 
-            // Pass 1: background color
             pass.set_pipeline(&self.pipelines.bg_color);
             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             pass.draw(0..3, 0..1);
 
-            // Pass 2: cell backgrounds
             if let Some(bg_bg) = &self.bg_cells_bind_group {
                 pass.set_pipeline(&self.pipelines.cell_bg);
                 pass.set_bind_group(0, &self.uniform_bind_group, &[]);
@@ -266,7 +255,6 @@ impl GpuState {
                 pass.draw(0..3, 0..1);
             }
 
-            // Pass 3: cell text (instanced quads)
             let have_inst = self.text_instance_buffer.is_some();
             let have_atlas = self.atlas_bind_group.is_some();
             let have_bg = self.bg_cells_bind_group.is_some();
@@ -348,7 +336,7 @@ impl GpuState {
     ) -> bool {
         let bpp: u32 = match format {
             TextureFormat::R8Unorm => 1,
-            TextureFormat::Bgra8Unorm => 4,
+            TextureFormat::Rgba8Unorm => 4,
             _ => panic!("unsupported atlas format"),
         };
         let tex_size = Extent3d {
@@ -414,7 +402,7 @@ impl GpuState {
             &mut self.atlas_color_texture,
             data,
             size,
-            TextureFormat::Bgra8Unorm,
+            TextureFormat::Rgba8Unorm,
             "atlas_color",
         );
         if resized {
@@ -461,7 +449,7 @@ impl GpuState {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: TextureDimension::D2,
-                    format: TextureFormat::Bgra8Unorm,
+                    format: TextureFormat::Rgba8Unorm,
                     usage: TextureUsages::TEXTURE_BINDING,
                     view_formats: &[],
                 });

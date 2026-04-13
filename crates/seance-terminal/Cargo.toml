@@ -6,7 +6,9 @@ license.workspace = true
 description = "High-level terminal emulator with GPU rendering, search, and selection"
 
 [dependencies]
-ghostty-renderer = { path = "../ghostty-renderer" }
+cosmic-text = "0.18"
+etagere = "0.2"
+rustc-hash = "2"
 libc.workspace = true
 libghostty-vt.workspace = true
 portable-pty = "0.9"

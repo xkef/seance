@@ -1,12 +1,9 @@
-//! Terminal emulator with GPU rendering and text selection.
-//!
-//! - [`Terminal`] — VT emulator + PTY + selection (one per pane)
-//! - [`TerminalRenderer`] — GPU renderer (font atlas + wgpu pipeline)
-
+mod font;
 mod gpu;
 mod renderer;
 pub mod selection;
 mod terminal;
+mod theme;
 
 pub use renderer::{CursorShape, Overlay, RendererConfig, TerminalRenderer};
 pub use seance_input::TerminalModes;

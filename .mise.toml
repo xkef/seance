@@ -1,3 +1,9 @@
 [tools]
 rust = "1.94"
-zig = "0.15"  # required by libghostty-rs build
+zig = "latest"
+
+[env]
+# Prepend tools/ to PATH so Zig finds our xcrun wrapper.
+# This works around macOS 26 SDK dropping arm64 from .tbd files.
+# See tools/xcrun and tools/setup-sysroot.sh for details.
+_.path = ["{{config_root}}/tools"]

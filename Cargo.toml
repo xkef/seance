@@ -1,13 +1,10 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/ghostty-renderer-sys",
-    "crates/ghostty-renderer",
     "crates/seance-input",
     "crates/seance-terminal",
     "crates/seance-app",
 ]
-exclude = ["libghostty-rs"]
 
 [workspace.package]
 edition = "2024"
@@ -21,4 +18,4 @@ collapsible_if = "warn"
 log = "0.4"
 env_logger = "0.11"
 libc = "0.2"
-libghostty-vt = { path = "libghostty-rs/crates/libghostty-vt" }
+libghostty-vt = "0.1"

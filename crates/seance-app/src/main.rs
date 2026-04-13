@@ -1,9 +1,3 @@
-//! Séance — a GPU-accelerated terminal emulator built on libghostty.
-//!
-//! Single-window application using winit for the event loop and wgpu for
-//! rendering. PTY polling is decoupled from the render path: `about_to_wait`
-//! drives I/O at ~250 Hz, and redraws are requested only when content changes.
-
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -54,7 +48,6 @@ impl MouseState {
     }
 }
 
-/// Top-level application state.
 struct App {
     window: Option<Arc<Window>>,
     renderer: Option<TerminalRenderer>,
@@ -108,8 +101,8 @@ impl App {
         }
         if self.content_dirty {
             self.content_dirty = false;
-            if let Some(r) = &self.renderer {
-                r.update_frame();
+            if let (Some(r), Some(t)) = (&mut self.renderer, &mut self.terminal) {
+                r.update_frame(t);
             }
         }
         if let Some(r) = &mut self.renderer {
@@ -154,8 +147,6 @@ impl App {
         }
     }
 
-    // -- Event handlers -------------------------------------------------------
-
     fn on_resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if let (Some(r), Some(w)) = (&mut self.renderer, &self.window) {
             r.resize_surface(new_size.width, new_size.height, w.scale_factor());
@@ -199,12 +190,11 @@ impl App {
                 event_loop.exit();
             }
             Action::Copy => {
-                if let Some(term) = &mut self.terminal {
-                    if let Some(text) = term.selection_text()
-                        && let Ok(mut cb) = arboard::Clipboard::new()
-                    {
-                        let _ = cb.set_text(text);
-                    }
+                if let Some(term) = &mut self.terminal
+                    && let Some(text) = term.selection_text()
+                    && let Ok(mut cb) = arboard::Clipboard::new()
+                {
+                    let _ = cb.set_text(text);
                 }
                 self.clear_selection();
             }
@@ -331,17 +321,13 @@ impl App {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Event loop
-// ---------------------------------------------------------------------------
-
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
         }
 
-        let attrs = Window::default_attributes().with_title("séance");
+        let attrs = Window::default_attributes().with_title("seance");
         let window = Arc::new(
             event_loop
                 .create_window(attrs)
@@ -358,17 +344,10 @@ impl ApplicationHandler for App {
             width: size.width,
             height: size.height,
             scale,
-            native_handle: platform::native_view_handle(&window),
         };
 
         let renderer = pollster::block_on(TerminalRenderer::new(window.clone(), config))
             .expect("failed to create renderer");
-
-        let theme =
-            std::env::var("SEANCE_THEME").unwrap_or_else(|_| "Catppuccin Frappe".to_string());
-        if !renderer.set_theme(&theme) {
-            log::warn!("failed to load theme: {theme}");
-        }
 
         self.cell_size = renderer.cell_size();
         let (cols, rows) = renderer.grid_size();
@@ -377,9 +356,6 @@ impl ApplicationHandler for App {
 
         let term = Terminal::spawn(cols, rows, size.width as u16, size.height as u16)
             .expect("failed to spawn terminal");
-        if let Some(r) = &self.renderer {
-            r.attach(&term);
-        }
         self.terminal = Some(term);
     }
 
@@ -429,16 +405,6 @@ impl ApplicationHandler for App {
 
 fn main() {
     env_logger::init();
-
-    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let resources = manifest
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("ghostty/zig-out/share/ghostty");
-    unsafe { std::env::set_var("GHOSTTY_RESOURCES_DIR", &resources) };
-
     let event_loop = EventLoop::new().expect("failed to create event loop");
     let mut app = App::new();
     event_loop.run_app(&mut app).expect("event loop failed");

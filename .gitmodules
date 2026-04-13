@@ -1,7 +1,0 @@
-[submodule "ghostty"]
-	path = ghostty
-	url = https://github.com/xkef/ghostty.git
-	branch = libghostty-renderer-terminal-api
-[submodule "libghostty-rs"]
-	path = libghostty-rs
-	url = https://github.com/xkef/libghostty-rs.git

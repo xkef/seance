@@ -1,18 +1,13 @@
 //! High-level terminal: VT emulator + PTY + selection.
-//!
-//! Uses libghostty-vt for terminal emulation and portable-pty for PTY
-//! management. The raw GhosttyTerminal handle is passed to the renderer
-//! via `raw_terminal_ptr()`.
 
 use std::cell::RefCell;
-use std::ffi::c_void;
 use std::io::{Read, Write};
 use std::rc::Rc;
 
 use libghostty_vt::render::{CellIterator, RowIterator};
 use libghostty_vt::terminal::{Mode, ScrollViewport};
 use libghostty_vt::{RenderState, Terminal as VtTerminal, TerminalOptions};
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use seance_input::TerminalModes;
 
 use crate::selection::{GridPos, Selection, SelectionGranularity};
@@ -268,8 +263,7 @@ impl Terminal {
         }
     }
 
-    /// Raw libghostty terminal pointer for the renderer.
-    pub(crate) fn raw_terminal_ptr(&self) -> *mut c_void {
-        self.vt.as_raw().cast()
+    pub(crate) fn vt_mut(&mut self) -> &mut VtTerminal<'static, 'static> {
+        &mut self.vt
     }
 }

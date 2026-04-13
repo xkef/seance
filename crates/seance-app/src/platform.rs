@@ -1,9 +1,5 @@
-//! Platform-specific window configuration.
-
-use winit::window::Window;
-
 #[cfg(target_os = "macos")]
-pub fn configure_window(window: &Window) {
+pub fn configure_window(window: &winit::window::Window) {
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -32,19 +28,4 @@ pub fn configure_window(window: &Window) {
             }
         }
     }
-}
-
-#[cfg(target_os = "macos")]
-pub fn native_view_handle(window: &Window) -> *mut std::ffi::c_void {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    let handle = window.window_handle().expect("no window handle");
-    match handle.as_raw() {
-        RawWindowHandle::AppKit(h) => h.ns_view.as_ptr(),
-        _ => panic!("expected AppKit window handle"),
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn native_view_handle(_window: &Window) -> *mut std::ffi::c_void {
-    std::ptr::null_mut()
 }
