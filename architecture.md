@@ -8,7 +8,7 @@ Shell (zsh/bash)
      │ PTY (pseudo-terminal)
      ▼
 ┌─────────────┐    raw bytes     ┌──────────────┐
-│  Terminal    │ ◄──────────────► │ libghostty-vt│
+│  Terminal   │ ◄──────────────► │ libghostty-vt│
 │  (PTY I/O)  │    VT parsing    │  (C via Zig) │
 └──────┬──────┘                  └──────────────┘
        │
@@ -21,7 +21,7 @@ Shell (zsh/bash)
        │
        │ CellBg[], CellText[], atlas textures
        ▼
-┌──────────────┐   3 render passes    ┌───────────┐
+┌──────────────┐   3 render passes   ┌───────────┐
 │   GpuState   │ ──────────────────► │   wgpu    │
 │  (upload +   │   bg_color          │  surface  │
 │   draw)      │   cell_bg           │           │
