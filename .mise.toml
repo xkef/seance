@@ -1,6 +1,6 @@
 [tools]
 rust = "1.94"
-zig = "latest"
+zig = "0.15.2"
 
 [env]
 # Prepend tools/ to PATH so Zig finds our xcrun wrapper.

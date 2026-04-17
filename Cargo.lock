@@ -578,12 +578,11 @@ checksum = "dea2df4cf52843e0452895c455a1a2cfbb842a1e7329671acf418fdc53ed4c59"
 
 [[package]]
 name = "etagere"
-version = "0.2.15"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc89bf99e5dc15954a60f707c1e09d7540e5cd9af85fa75caa0b510bc08c5342"
+checksum = "7ecb5c40d5683a270e077688f53a99eac51c1cb1ae5ba63b55590370cb3536bf"
 dependencies = [
  "euclid",
- "svg_fmt",
 ]
 
 [[package]]
@@ -2037,7 +2036,7 @@ dependencies = [
  "arboard",
  "env_logger",
  "log",
- "objc2 0.5.2",
+ "objc2 0.6.4",
  "pollster",
  "raw-window-handle",
  "seance-input",
@@ -2063,7 +2062,7 @@ dependencies = [
  "libc",
  "libghostty-vt",
  "log",
- "objc2 0.5.2",
+ "objc2 0.6.4",
  "portable-pty",
  "raw-window-handle",
  "rustc-hash 2.1.2",
@@ -2260,12 +2259,6 @@ name = "strict-num"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6637bab7722d379c8b41ba849228d680cc12d0a45ba1fa2b48f2a30577a06731"
-
-[[package]]
-name = "svg_fmt"
-version = "0.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0193cc4331cfd2f3d2011ef287590868599a2f33c3e69bc22c1a3d3acf9e02fb"
 
 [[package]]
 name = "swash"

@@ -58,6 +58,7 @@ impl CellBuilder {
     ) -> bool {
         let Some(frame) = self.build_frame_inner(vt, cache, surface_width, surface_height, theme)
         else {
+            eprintln!("build_frame_inner returned None");
             return false;
         };
         self.last_frame = Some(frame);

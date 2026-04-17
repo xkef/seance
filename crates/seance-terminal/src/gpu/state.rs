@@ -47,7 +47,7 @@ impl GpuState {
                     let view: *mut AnyObject = h.ns_view.as_ptr().cast();
                     let layer: *mut AnyObject = msg_send![view, layer];
                     if !layer.is_null()
-                        && let Some(metal_class) = AnyClass::get("CAMetalLayer")
+                        && let Some(metal_class) = AnyClass::get(c"CAMetalLayer")
                     {
                         let sublayers: *mut AnyObject = msg_send![layer, sublayers];
                         if !sublayers.is_null() {

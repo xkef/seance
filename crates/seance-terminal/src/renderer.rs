@@ -108,15 +108,14 @@ impl TerminalRenderer {
             self.surface_height,
             &self.theme,
         );
-        if ok
-            && let Some(fi) = self.cell_builder.last_frame()
-        {
+        if ok && let Some(fi) = self.cell_builder.last_frame() {
             self.grid_padding.set(fi.grid_padding);
         }
     }
 
     pub fn render(&mut self) -> bool {
         let Some(fi) = self.cell_builder.last_frame() else {
+            eprintln!("render: no last_frame");
             return false;
         };
         self.gpu.render_frame(

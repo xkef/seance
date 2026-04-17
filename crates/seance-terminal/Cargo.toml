@@ -7,7 +7,7 @@ description = "High-level terminal emulator with GPU rendering, search, and sele
 
 [dependencies]
 cosmic-text = "0.18"
-etagere = "0.2"
+etagere = "0.3"
 rustc-hash = "2"
 libc.workspace = true
 libghostty-vt.workspace = true
@@ -22,5 +22,5 @@ log.workspace = true
 workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.5"
+objc2 = "0.6"
 raw-window-handle = "0.6"
