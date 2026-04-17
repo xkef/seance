@@ -1,7 +1,7 @@
 #[cfg(target_os = "macos")]
 pub fn configure_window(window: &winit::window::Window) {
     use objc2::msg_send;
-    use objc2::runtime::AnyObject;
+    use objc2::runtime::{AnyClass, AnyObject};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     let handle = window.window_handle().expect("no window handle");
@@ -25,6 +25,14 @@ pub fn configure_window(window: &winit::window::Window) {
             let button: *mut AnyObject = msg_send![nswindow, standardWindowButton: i];
             if !button.is_null() {
                 let _: () = msg_send![button, setHidden: true];
+            }
+        }
+
+        if let Some(app_class) = AnyClass::get(c"NSApplication") {
+            let app: *mut AnyObject = msg_send![app_class, sharedApplication];
+            if !app.is_null() {
+                let _: () = msg_send![app, activateIgnoringOtherApps: true];
+                let _: () = msg_send![nswindow, makeKeyAndOrderFront: app];
             }
         }
     }

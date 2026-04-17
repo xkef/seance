@@ -57,6 +57,7 @@ struct App {
     cell_size: [f32; 2],
     font_size: f32,
     content_dirty: bool,
+    occluded: bool,
     mouse: MouseState,
 }
 
@@ -71,6 +72,7 @@ impl App {
             cell_size: [0.0, 0.0],
             font_size: DEFAULT_FONT_SIZE,
             content_dirty: true,
+            occluded: false,
             mouse: MouseState::default(),
         }
     }
@@ -96,7 +98,7 @@ impl App {
     }
 
     fn draw(&mut self) {
-        if self.terminal.is_none() {
+        if self.occluded || self.terminal.is_none() {
             return;
         }
         if self.content_dirty {
@@ -375,6 +377,13 @@ impl ApplicationHandler for App {
             WindowEvent::MouseWheel { delta, .. } => self.on_mouse_wheel(delta),
             WindowEvent::CursorMoved { position, .. } => self.on_cursor_moved(position),
             WindowEvent::MouseInput { state, button, .. } => self.on_mouse_input(state, button),
+            WindowEvent::Occluded(is_occluded) => {
+                self.occluded = is_occluded;
+                if !is_occluded {
+                    self.content_dirty = true;
+                    self.request_redraw();
+                }
+            }
             WindowEvent::RedrawRequested => self.draw(),
             _ => {}
         }
@@ -393,7 +402,7 @@ impl ApplicationHandler for App {
             return;
         }
 
-        if self.content_dirty {
+        if self.content_dirty && !self.occluded {
             self.request_redraw();
         }
 
@@ -405,7 +414,13 @@ impl ApplicationHandler for App {
 
 fn main() {
     env_logger::init();
-    let event_loop = EventLoop::new().expect("failed to create event loop");
+    let mut builder = EventLoop::builder();
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+        builder.with_activation_policy(ActivationPolicy::Regular);
+    }
+    let event_loop = builder.build().expect("failed to create event loop");
     let mut app = App::new();
     event_loop.run_app(&mut app).expect("event loop failed");
 }

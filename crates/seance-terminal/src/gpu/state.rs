@@ -180,9 +180,13 @@ impl GpuState {
             CurrentSurfaceTexture::Success(frame) | CurrentSurfaceTexture::Suboptimal(frame) => {
                 frame
             }
-            other => {
-                log::debug!("surface not ready: {other:?}");
+            CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => return false,
+            CurrentSurfaceTexture::Outdated | CurrentSurfaceTexture::Lost => {
                 self.surface.configure(&self.device, &self.config);
+                return false;
+            }
+            other => {
+                log::warn!("surface acquire failed: {other:?}");
                 return false;
             }
         };
