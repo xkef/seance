@@ -1,5 +1,6 @@
-use crate::font::cell_builder::FrameInfo;
-use crate::renderer::Overlay;
+use crate::renderer::RenderInputs;
+use crate::text::FrameInfo;
+use crate::theme::Theme;
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -42,9 +43,10 @@ impl Uniforms {
         fi: &FrameInfo,
         surface_width: f32,
         surface_height: f32,
-        overlay: &Overlay,
+        inputs: &RenderInputs,
+        theme: &Theme,
     ) -> Self {
-        let (sel_start, sel_end, sel_active) = match &overlay.selection {
+        let (sel_start, sel_end, sel_active) = match &inputs.selection {
             Some((start, end)) => (
                 [start.col as u32, start.row as u32],
                 [end.col as u32, end.row as u32],
@@ -60,16 +62,16 @@ impl Uniforms {
             grid_padding: fi.grid_padding,
             bg_color: u8x4_to_f32(fi.bg_color),
             min_contrast: fi.min_contrast,
-            cursor_visible: if overlay.vt_cursor_visible { 1 } else { 0 },
+            cursor_visible: if inputs.vt_cursor_visible { 1 } else { 0 },
             cursor_pos: [fi.cursor_pos[0] as u32, fi.cursor_pos[1] as u32],
             cursor_color: u8x4_to_f32(fi.cursor_color),
             cursor_wide: if fi.cursor_wide { 1 } else { 0 },
-            overlay_shape: overlay.cursor_shape as u32,
-            overlay_pos: [overlay.cursor_pos.col as u32, overlay.cursor_pos.row as u32],
-            overlay_color: overlay.cursor_color,
+            overlay_shape: inputs.cursor_shape as u32,
+            overlay_pos: [inputs.cursor_pos.col as u32, inputs.cursor_pos.row as u32],
+            overlay_color: theme.overlay_cursor_color,
             selection_start: sel_start,
             selection_end: sel_end,
-            selection_color: overlay.selection_color,
+            selection_color: theme.selection_bg,
             selection_active: sel_active,
             _pad: [0; 11],
         }

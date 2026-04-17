@@ -8,8 +8,8 @@ use libghostty_vt::render::{CellIterator, RowIterator};
 use libghostty_vt::terminal::{Mode, ScrollViewport};
 use libghostty_vt::{RenderState, Terminal as VtTerminal, TerminalOptions};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
-use seance_input::TerminalModes;
 
+use crate::modes::TerminalModes;
 use crate::selection::{GridPos, Selection, SelectionGranularity};
 
 /// A terminal session: VT emulator, PTY, and text selection state.
@@ -263,7 +263,11 @@ impl Terminal {
         }
     }
 
-    pub(crate) fn vt_mut(&mut self) -> &mut VtTerminal<'static, 'static> {
+    /// Expose the underlying VT emulator to the renderer.
+    ///
+    /// Temporary surface used by the phase-3 renderer; the phase-4
+    /// `FrameSource` trait will replace this with a narrower view.
+    pub fn vt_mut(&mut self) -> &mut VtTerminal<'static, 'static> {
         &mut self.vt
     }
 }

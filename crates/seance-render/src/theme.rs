@@ -4,6 +4,7 @@ pub struct Theme {
     pub fg: [u8; 3],
     pub cursor: [u8; 4],
     pub selection_bg: [f32; 4],
+    pub overlay_cursor_color: [f32; 4],
     pub palette: [[u8; 3]; 256],
 }
 
@@ -37,21 +38,21 @@ impl Default for Theme {
             fg: [198, 208, 245],
             cursor: [242, 213, 207, 255],
             selection_bg: [0.3, 0.5, 0.8, 0.4],
+            overlay_cursor_color: [1.0, 1.0, 1.0, 1.0],
             palette,
         }
     }
 }
 
 impl Theme {
-    pub fn resolve_color(&self, color: &libghostty_vt::style::StyleColor) -> Option<[u8; 3]> {
-        use libghostty_vt::style::StyleColor;
-        match color {
-            StyleColor::None => None,
-            StyleColor::Palette(idx) => {
-                let i = idx.0 as usize;
-                if i < 256 { Some(self.palette[i]) } else { None }
-            }
-            StyleColor::Rgb(c) => Some([c.r, c.g, c.b]),
+    /// Resolve a VT-reported color into concrete RGB, or `None` when
+    /// the cell wants the theme default.
+    pub fn resolve_color(&self, color: &seance_vt::CellColor) -> Option<[u8; 3]> {
+        use seance_vt::CellColor;
+        match *color {
+            CellColor::Default => None,
+            CellColor::Palette(idx) => Some(self.palette[idx as usize]),
+            CellColor::Rgb(r, g, b) => Some([r, g, b]),
         }
     }
 }

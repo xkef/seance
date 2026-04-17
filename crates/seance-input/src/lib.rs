@@ -1,53 +1,27 @@
 //! Keyboard and mouse input handling for séance.
 //!
-//! Translates winit key/mouse events into terminal-level actions using
-//! libghostty-vt's key and mouse encoders.
+//! Pure translation layer: winit events → VT escape sequences via
+//! libghostty-vt's key and mouse encoders. App-level keybinds (Cmd+Q,
+//! clipboard, font size) are the app's concern and are matched
+//! upstream before reaching the encoder.
 
 mod keymap;
 
 use libghostty_vt::{key, mouse};
+use seance_vt::TerminalModes;
 use winit::event::{ElementState, KeyEvent};
-use winit::keyboard::{Key, PhysicalKey};
+use winit::keyboard::PhysicalKey;
 
-/// An action produced by the input handler in response to a key event.
+/// The result of encoding a VT-bound key event.
 #[derive(Debug)]
-pub enum Action {
+pub enum VtInput {
     /// Raw bytes to write to the PTY.
-    WritePty(Vec<u8>),
-    /// Quit the application (Cmd+Q).
-    Quit,
-    /// Close the current window (Cmd+W).
-    CloseWindow,
-    /// Copy selection to clipboard (Cmd+C).
-    Copy,
-    /// Paste from clipboard (Cmd+V).
-    Paste,
-    /// Select all terminal content (Cmd+A).
-    SelectAll,
-    /// Increase font size (Cmd+=).
-    IncreaseFontSize,
-    /// Decrease font size (Cmd+-).
-    DecreaseFontSize,
-    /// Reset font size to default (Cmd+0).
-    ResetFontSize,
-    /// No action for this event.
+    Write(Vec<u8>),
+    /// The event produced nothing to forward to the PTY.
     Ignore,
 }
 
-/// Terminal mode flags queried from the VT emulator.
-///
-/// Shared between the input encoder (which needs cursor_keys, mouse modes)
-/// and the app layer (which needs bracketed_paste for paste handling).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct TerminalModes {
-    pub cursor_keys: bool,
-    pub mouse_event: i32,
-    pub mouse_format_sgr: bool,
-    pub synchronized_output: bool,
-    pub bracketed_paste: bool,
-}
-
-/// Translates winit events into terminal actions.
+/// Translates winit events into VT bytes via libghostty-vt.
 pub struct InputHandler {
     key_encoder: key::Encoder<'static>,
     mouse_encoder: mouse::Encoder<'static>,
@@ -67,39 +41,22 @@ impl InputHandler {
         Self::default()
     }
 
-    /// Process a keyboard event and return the resulting action.
+    /// Encode a key event as VT bytes (cursor keys, function keys, etc.).
     pub fn handle_key(
         &mut self,
         event: &KeyEvent,
         modifiers: &winit::event::Modifiers,
         term_modes: TerminalModes,
-    ) -> Action {
+    ) -> VtInput {
         if event.state != ElementState::Pressed {
-            return Action::Ignore;
-        }
-
-        let super_key = modifiers.state().super_key();
-
-        // Cmd shortcuts (macOS).
-        if super_key && let Key::Character(c) = &event.logical_key {
-            match c.as_str() {
-                "q" => return Action::Quit,
-                "w" => return Action::CloseWindow,
-                "c" => return Action::Copy,
-                "v" => return Action::Paste,
-                "a" => return Action::SelectAll,
-                "+" | "=" => return Action::IncreaseFontSize,
-                "-" => return Action::DecreaseFontSize,
-                "0" => return Action::ResetFontSize,
-                _ => {}
-            }
+            return VtInput::Ignore;
         }
 
         let bytes = self.encode_key(event, modifiers, term_modes);
         if bytes.is_empty() {
-            Action::Ignore
+            VtInput::Ignore
         } else {
-            Action::WritePty(bytes)
+            VtInput::Write(bytes)
         }
     }
 

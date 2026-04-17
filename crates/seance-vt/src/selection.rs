@@ -4,7 +4,7 @@
 //! The terminal's screen content is queried to extract selected text.
 
 /// A position in the terminal grid.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GridPos {
     pub col: u16,
     pub row: u16,

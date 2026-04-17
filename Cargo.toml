@@ -2,7 +2,8 @@
 resolver = "3"
 members = [
     "crates/seance-input",
-    "crates/seance-terminal",
+    "crates/seance-vt",
+    "crates/seance-render",
     "crates/seance-app",
 ]
 

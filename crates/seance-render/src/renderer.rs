@@ -1,45 +1,49 @@
 use std::cell::Cell;
 use std::sync::Arc;
 
+use seance_vt::{FrameSource, GridPos};
 use winit::window::Window;
 
-use crate::Terminal;
-use crate::font::{CellBuilder, GlyphCache};
 use crate::gpu::GpuState;
 pub use crate::gpu::uniforms::CursorShape;
-use crate::selection::GridPos;
+use crate::text::CellBuilder;
+use crate::text::backend::TextBackend;
+use crate::text::cosmic::CosmicTextBackend;
 use crate::theme::Theme;
 
 pub struct RendererConfig {
     pub width: u32,
     pub height: u32,
     pub scale: f64,
+    pub font_family: String,
+    pub font_size: f32,
 }
 
-pub struct Overlay {
+/// Per-frame dynamic state the app supplies to the renderer.
+///
+/// Replaces the former `Overlay` struct: the renderer no longer holds
+/// mutable state the app mutates from outside. Colors stay on the theme.
+#[derive(Debug, Clone)]
+pub struct RenderInputs {
     pub vt_cursor_visible: bool,
     pub cursor_shape: CursorShape,
     pub cursor_pos: GridPos,
-    pub cursor_color: [f32; 4],
     pub selection: Option<(GridPos, GridPos)>,
-    pub selection_color: [f32; 4],
 }
 
-impl Default for Overlay {
+impl Default for RenderInputs {
     fn default() -> Self {
         Self {
             vt_cursor_visible: true,
             cursor_shape: CursorShape::Hidden,
             cursor_pos: GridPos { col: 0, row: 0 },
-            cursor_color: [1.0, 1.0, 1.0, 1.0],
             selection: None,
-            selection_color: [0.3, 0.5, 0.8, 0.4],
         }
     }
 }
 
 pub struct TerminalRenderer {
-    glyph_cache: GlyphCache,
+    backend: Box<dyn TextBackend>,
     cell_builder: CellBuilder,
     gpu: GpuState,
     theme: Theme,
@@ -47,19 +51,22 @@ pub struct TerminalRenderer {
     grid_padding: Cell<[f32; 4]>,
     surface_width: u32,
     surface_height: u32,
-    overlay: Overlay,
 }
 
 impl TerminalRenderer {
     pub async fn new(window: Arc<Window>, config: RendererConfig) -> Option<Self> {
-        let glyph_cache = GlyphCache::new("JetBrainsMono Nerd Font", 14.0, config.scale);
-        let metrics = glyph_cache.font.metrics();
+        let backend: Box<dyn TextBackend> = Box::new(CosmicTextBackend::new(
+            &config.font_family,
+            config.font_size,
+            config.scale,
+        ));
+        let metrics = backend.metrics();
         let cell_size = [metrics.cell_width, metrics.cell_height];
 
         let gpu = GpuState::new(window).await;
 
         Some(Self {
-            glyph_cache,
+            backend,
             cell_builder: CellBuilder::new(),
             gpu,
             theme: Theme::default(),
@@ -67,7 +74,6 @@ impl TerminalRenderer {
             grid_padding: Cell::new([0.0; 4]),
             surface_width: config.width,
             surface_height: config.height,
-            overlay: Overlay::default(),
         })
     }
 
@@ -96,14 +102,10 @@ impl TerminalRenderer {
             .resize(winit::dpi::PhysicalSize::new(width, height));
     }
 
-    pub fn overlay_mut(&mut self) -> &mut Overlay {
-        &mut self.overlay
-    }
-
-    pub fn update_frame(&mut self, terminal: &mut Terminal) {
+    pub fn update_frame(&mut self, source: &mut dyn FrameSource) {
         let ok = self.cell_builder.build_frame(
-            terminal.vt_mut(),
-            &mut self.glyph_cache,
+            source,
+            self.backend.as_mut(),
             self.surface_width,
             self.surface_height,
             &self.theme,
@@ -113,23 +115,25 @@ impl TerminalRenderer {
         }
     }
 
-    pub fn render(&mut self) -> bool {
+    pub fn render(&mut self, inputs: &RenderInputs) -> bool {
         let Some(fi) = self.cell_builder.last_frame() else {
-            eprintln!("render: no last_frame");
+            log::warn!("render: no last_frame");
             return false;
         };
         self.gpu.render_frame(
             fi,
             self.cell_builder.bg_cells(),
             self.cell_builder.text_cells(),
-            &self.glyph_cache,
-            &self.overlay,
+            self.cell_builder.atlas(),
+            inputs,
+            &self.theme,
         )
     }
 
     pub fn set_font_size(&mut self, points: f32) {
-        self.glyph_cache.set_font_size(points);
-        let metrics = self.glyph_cache.font.metrics();
+        self.backend.set_font_size(points);
+        self.cell_builder.reset_glyphs();
+        let metrics = self.backend.metrics();
         self.cell_size = [metrics.cell_width, metrics.cell_height];
     }
 }

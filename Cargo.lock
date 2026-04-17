@@ -2040,7 +2040,8 @@ dependencies = [
  "pollster",
  "raw-window-handle",
  "seance-input",
- "seance-terminal",
+ "seance-render",
+ "seance-vt",
  "winit",
 ]
 
@@ -2049,26 +2050,33 @@ name = "seance-input"
 version = "0.1.0"
 dependencies = [
  "libghostty-vt",
+ "seance-vt",
  "winit",
 ]
 
 [[package]]
-name = "seance-terminal"
+name = "seance-render"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
  "cosmic-text",
  "etagere",
- "libc",
- "libghostty-vt",
  "log",
  "objc2 0.6.4",
- "portable-pty",
  "raw-window-handle",
  "rustc-hash 2.1.2",
- "seance-input",
+ "seance-vt",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "seance-vt"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "libghostty-vt",
+ "portable-pty",
 ]
 
 [[package]]

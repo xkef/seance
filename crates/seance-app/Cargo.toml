@@ -10,8 +10,9 @@ name = "seance"
 path = "src/main.rs"
 
 [dependencies]
-seance-terminal = { path = "../seance-terminal" }
 seance-input = { path = "../seance-input" }
+seance-render = { path = "../seance-render" }
+seance-vt = { path = "../seance-vt" }
 arboard = "3"
 pollster = "0.4"
 log.workspace = true

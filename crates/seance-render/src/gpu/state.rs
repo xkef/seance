@@ -5,9 +5,9 @@ use wgpu::*;
 
 use super::pipeline::Pipelines;
 use super::uniforms::Uniforms;
-use crate::font::GlyphCache;
-use crate::font::cell_builder::{CellText, FrameInfo};
-use crate::renderer::Overlay;
+use crate::renderer::RenderInputs;
+use crate::text::{CellText, FrameInfo, GlyphAtlas};
+use crate::theme::Theme;
 
 pub(crate) struct GpuState {
     surface: Surface<'static>,
@@ -53,12 +53,10 @@ impl GpuState {
                         if !sublayers.is_null() {
                             let count: usize = msg_send![sublayers, count];
                             for i in 0..count {
-                                let sub: *mut AnyObject =
-                                    msg_send![sublayers, objectAtIndex: i];
+                                let sub: *mut AnyObject = msg_send![sublayers, objectAtIndex: i];
                                 let is_metal: bool = msg_send![sub, isKindOfClass: metal_class];
                                 if is_metal {
-                                    let _: () =
-                                        msg_send![sub, setPresentsWithTransaction: true];
+                                    let _: () = msg_send![sub, setPresentsWithTransaction: true];
                                     break;
                                 }
                             }
@@ -168,8 +166,9 @@ impl GpuState {
         frame_info: &FrameInfo,
         bg_cells: &[[u8; 4]],
         text_cells: &[CellText],
-        glyph_cache: &GlyphCache,
-        overlay: &Overlay,
+        atlas: &GlyphAtlas,
+        inputs: &RenderInputs,
+        theme: &Theme,
     ) -> bool {
         if self.surface_dirty {
             self.surface.configure(&self.device, &self.config);
@@ -195,7 +194,8 @@ impl GpuState {
             frame_info,
             self.size.width as f32,
             self.size.height as f32,
-            overlay,
+            inputs,
+            theme,
         );
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -210,11 +210,11 @@ impl GpuState {
             self.upload_text_instances(bytemuck::cast_slice(text_cells));
         }
 
-        let (gs_data, gs_size) = glyph_cache.atlas.grayscale_data();
+        let (gs_data, gs_size) = atlas.grayscale_data();
         if gs_size > 0 {
             self.upload_atlas_grayscale(gs_data, gs_size);
         }
-        let (color_data, color_size) = glyph_cache.atlas.color_data();
+        let (color_data, color_size) = atlas.color_data();
         if color_size > 0 {
             self.upload_atlas_color(color_data, color_size);
         }

@@ -6,12 +6,19 @@ use winit::event::{ElementState, Modifiers, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
-use seance_input::{Action, InputHandler};
-use seance_terminal::{RendererConfig, Terminal, TerminalRenderer};
+use seance_input::{InputHandler, VtInput};
+use seance_render::{RenderInputs, RendererConfig, TerminalRenderer};
+use seance_vt::{LibGhosttyFrameSource, Terminal};
 
+mod command;
+mod keybinds;
 mod platform;
 
+use command::AppCommand;
+use keybinds::Keybinds;
+
 const DEFAULT_FONT_SIZE: f32 = 14.0;
+const DEFAULT_FONT_FAMILY: &str = "JetBrainsMono Nerd Font";
 
 struct MouseState {
     cursor_pos: winit::dpi::PhysicalPosition<f64>,
@@ -53,6 +60,8 @@ struct App {
     renderer: Option<TerminalRenderer>,
     terminal: Option<Terminal>,
     input: InputHandler,
+    keybinds: Keybinds,
+    render_inputs: RenderInputs,
     modifiers: Modifiers,
     cell_size: [f32; 2],
     font_size: f32,
@@ -68,6 +77,8 @@ impl App {
             renderer: None,
             terminal: None,
             input: InputHandler::new(),
+            keybinds: Keybinds::new(),
+            render_inputs: RenderInputs::default(),
             modifiers: Modifiers::default(),
             cell_size: [0.0, 0.0],
             font_size: DEFAULT_FONT_SIZE,
@@ -104,11 +115,12 @@ impl App {
         if self.content_dirty {
             self.content_dirty = false;
             if let (Some(r), Some(t)) = (&mut self.renderer, &mut self.terminal) {
-                r.update_frame(t);
+                let mut source = LibGhosttyFrameSource::new(t);
+                r.update_frame(&mut source);
             }
         }
         if let Some(r) = &mut self.renderer {
-            r.render();
+            r.render(&self.render_inputs);
         }
     }
 
@@ -127,7 +139,7 @@ impl App {
         self.request_redraw();
     }
 
-    fn terminal_modes(&self) -> seance_input::TerminalModes {
+    fn terminal_modes(&self) -> seance_vt::TerminalModes {
         self.terminal
             .as_ref()
             .map_or(Default::default(), |t| t.modes())
@@ -137,16 +149,11 @@ impl App {
         if let Some(term) = &mut self.terminal {
             term.clear_selection();
         }
-        if let Some(r) = &mut self.renderer {
-            r.overlay_mut().selection = None;
-        }
+        self.render_inputs.selection = None;
     }
 
     fn sync_selection_to_overlay(&mut self) {
-        let range = self.terminal.as_ref().and_then(|t| t.selection_range());
-        if let Some(r) = &mut self.renderer {
-            r.overlay_mut().selection = range;
-        }
+        self.render_inputs.selection = self.terminal.as_ref().and_then(|t| t.selection_range());
     }
 
     fn on_resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -166,32 +173,47 @@ impl App {
     }
 
     fn on_keyboard_input(&mut self, event_loop: &ActiveEventLoop, event: &winit::event::KeyEvent) {
+        if let Some(cmd) = self.keybinds.match_event(event, &self.modifiers) {
+            self.on_pressed_clear_selection(&cmd);
+            self.execute_app_command(event_loop, cmd);
+            self.content_dirty = true;
+            self.request_redraw();
+            return;
+        }
+
         let modes = self.terminal_modes();
-        let action = self.input.handle_key(event, &self.modifiers, modes);
+        let input = self.input.handle_key(event, &self.modifiers, modes);
 
         if event.state == ElementState::Pressed
-            && !matches!(action, Action::Copy | Action::SelectAll | Action::Ignore)
+            && !matches!(input, VtInput::Ignore)
             && self.terminal.as_ref().is_some_and(|t| t.has_selection())
         {
             self.clear_selection();
         }
 
-        self.execute_action(event_loop, action);
+        if let VtInput::Write(bytes) = input
+            && let Some(term) = &self.terminal
+        {
+            term.write(&bytes);
+        }
         self.content_dirty = true;
         self.request_redraw();
     }
 
-    fn execute_action(&mut self, event_loop: &ActiveEventLoop, action: Action) {
-        match action {
-            Action::WritePty(data) => {
-                if let Some(term) = &self.terminal {
-                    term.write(&data);
-                }
-            }
-            Action::Quit | Action::CloseWindow => {
-                event_loop.exit();
-            }
-            Action::Copy => {
+    /// Clear selection when a non-selection-preserving app command fires.
+    fn on_pressed_clear_selection(&mut self, cmd: &AppCommand) {
+        if matches!(cmd, AppCommand::Copy | AppCommand::SelectAll) {
+            return;
+        }
+        if self.terminal.as_ref().is_some_and(|t| t.has_selection()) {
+            self.clear_selection();
+        }
+    }
+
+    fn execute_app_command(&mut self, event_loop: &ActiveEventLoop, cmd: AppCommand) {
+        match cmd {
+            AppCommand::Quit | AppCommand::CloseWindow => event_loop.exit(),
+            AppCommand::Copy => {
                 if let Some(term) = &mut self.terminal
                     && let Some(text) = term.selection_text()
                     && let Ok(mut cb) = arboard::Clipboard::new()
@@ -200,7 +222,7 @@ impl App {
                 }
                 self.clear_selection();
             }
-            Action::Paste => {
+            AppCommand::Paste => {
                 if let Ok(mut cb) = arboard::Clipboard::new()
                     && let Ok(text) = cb.get_text()
                 {
@@ -219,25 +241,21 @@ impl App {
                     }
                 }
             }
-            Action::SelectAll => {
+            AppCommand::SelectAll => {
                 if let Some(term) = &mut self.terminal {
                     term.select_all();
                 }
                 self.sync_selection_to_overlay();
             }
-            Action::IncreaseFontSize => {
-                self.font_size = (self.font_size + 1.0).min(72.0);
+            AppCommand::FontSizeDelta(delta) => {
+                let next = self.font_size + delta as f32;
+                self.font_size = next.clamp(6.0, 72.0);
                 self.apply_font_size();
             }
-            Action::DecreaseFontSize => {
-                self.font_size = (self.font_size - 1.0).max(6.0);
-                self.apply_font_size();
-            }
-            Action::ResetFontSize => {
+            AppCommand::FontSizeReset => {
                 self.font_size = DEFAULT_FONT_SIZE;
                 self.apply_font_size();
             }
-            Action::Ignore => {}
         }
     }
 
@@ -346,6 +364,8 @@ impl ApplicationHandler for App {
             width: size.width,
             height: size.height,
             scale,
+            font_family: DEFAULT_FONT_FAMILY.to_string(),
+            font_size: DEFAULT_FONT_SIZE,
         };
 
         let renderer = pollster::block_on(TerminalRenderer::new(window.clone(), config))

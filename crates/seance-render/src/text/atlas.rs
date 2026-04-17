@@ -13,6 +13,7 @@ struct AtlasPlane {
     bpp: u32,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct AtlasEntry {
     pub pos: [u32; 2],
     pub size: [u32; 2],
@@ -78,10 +79,6 @@ impl GlyphAtlas {
 
     pub fn color_data(&self) -> (&[u8], u32) {
         (&self.color.data, self.color.size)
-    }
-
-    pub fn is_dirty(&self) -> bool {
-        self.grayscale.dirty || self.color.dirty
     }
 
     pub fn clear_dirty(&mut self) {
