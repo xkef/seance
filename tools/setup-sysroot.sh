@@ -7,6 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SYSROOT="$SCRIPT_DIR/sysroot"
 SDK_PATH="$(/usr/bin/xcrun --show-sdk-path)"
 ZIG_LIBC="$(zig env 2>/dev/null | grep lib_dir | head -1 | sed 's/.*"\(.*\)".*/\1/')/libc/darwin/libSystem.tbd"
+SDK_STAMP="$SYSROOT/.sdk-path"
 
 if [ ! -f "$ZIG_LIBC" ]; then
     echo "error: cannot find Zig's libSystem.tbd at $ZIG_LIBC" >&2
@@ -24,5 +25,6 @@ ln -sf "$SDK_PATH/usr/lib"/* "$SYSROOT/usr/lib/" 2>/dev/null || true
 # Replace libSystem.tbd with Zig's version (includes arm64-macos).
 rm -f "$SYSROOT/usr/lib/libSystem.tbd"
 cp "$ZIG_LIBC" "$SYSROOT/usr/lib/libSystem.tbd"
+printf '%s\n' "$SDK_PATH" > "$SDK_STAMP"
 
 echo "sysroot created at $SYSROOT"
