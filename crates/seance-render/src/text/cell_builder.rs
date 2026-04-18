@@ -96,7 +96,13 @@ impl CellBuilder {
         theme: &Theme,
     ) {
         let m = backend.metrics();
-        let geom = geometry(source, m.cell_width, m.cell_height, surface_width, surface_height);
+        let geom = geometry(
+            source,
+            m.cell_width,
+            m.cell_height,
+            surface_width,
+            surface_height,
+        );
         let cursor = source.cursor();
 
         walk_grid(source, &geom, theme, &mut self.bg_cells, &mut self.requests);
@@ -304,7 +310,11 @@ mod tests {
                 visitor.cell(
                     i / self.cols,
                     i % self.cols,
-                    CellView { text, fg: *fg, bg: *bg },
+                    CellView {
+                        text,
+                        fg: *fg,
+                        bg: *bg,
+                    },
                 );
             }
         }
@@ -318,7 +328,11 @@ mod tests {
             ("", CellColor::Default, CellColor::Default),
             ("B", CellColor::Rgb(10, 20, 30), CellColor::Default),
         ];
-        let mut source = FakeFrame { cols: 3, rows: 1, cells: &cells };
+        let mut source = FakeFrame {
+            cols: 3,
+            rows: 1,
+            cells: &cells,
+        };
         let geom = FrameGeometry {
             cell_width: 10.0,
             cell_height: 20.0,

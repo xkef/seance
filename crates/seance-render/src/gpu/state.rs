@@ -224,8 +224,9 @@ impl GpuState {
 
     fn acquire_surface_texture(&mut self) -> Option<SurfaceTexture> {
         match self.surface.get_current_texture() {
-            CurrentSurfaceTexture::Success(frame)
-            | CurrentSurfaceTexture::Suboptimal(frame) => Some(frame),
+            CurrentSurfaceTexture::Success(frame) | CurrentSurfaceTexture::Suboptimal(frame) => {
+                Some(frame)
+            }
             CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => None,
             CurrentSurfaceTexture::Outdated | CurrentSurfaceTexture::Lost => {
                 self.surface.configure(&self.device, &self.config);
@@ -254,14 +255,15 @@ impl GpuState {
         if !bg_cells.is_empty() {
             let data = bytemuck::cast_slice(bg_cells);
             if self.bg_cells.upload(&self.device, &self.queue, data) {
-                self.bg_cells.bind_group = Some(self.device.create_bind_group(&BindGroupDescriptor {
-                    label: Some("bg_cells_bg"),
-                    layout: &self.pipelines.bg_cells_bgl,
-                    entries: &[BindGroupEntry {
-                        binding: 0,
-                        resource: self.bg_cells.buffer.as_ref().unwrap().as_entire_binding(),
-                    }],
-                }));
+                self.bg_cells.bind_group =
+                    Some(self.device.create_bind_group(&BindGroupDescriptor {
+                        label: Some("bg_cells_bg"),
+                        layout: &self.pipelines.bg_cells_bgl,
+                        entries: &[BindGroupEntry {
+                            binding: 0,
+                            resource: self.bg_cells.buffer.as_ref().unwrap().as_entire_binding(),
+                        }],
+                    }));
             }
         }
 
@@ -308,7 +310,11 @@ impl GpuState {
         if self.atlas_bind_group.is_some() {
             return;
         }
-        let grayscale = atlas_view(&self.device, self.atlas_grayscale.as_ref(), ATLAS_GRAYSCALE_FORMAT);
+        let grayscale = atlas_view(
+            &self.device,
+            self.atlas_grayscale.as_ref(),
+            ATLAS_GRAYSCALE_FORMAT,
+        );
         let color = atlas_view(&self.device, self.atlas_color.as_ref(), ATLAS_COLOR_FORMAT);
         self.atlas_bind_group = Some(self.device.create_bind_group(&BindGroupDescriptor {
             label: Some("atlas_bg"),
@@ -404,7 +410,9 @@ fn write_atlas_plane(
         height: size,
         depth_or_array_layers: 1,
     };
-    let needs_new = slot.as_ref().is_none_or(|t| t.width() != size || t.height() != size);
+    let needs_new = slot
+        .as_ref()
+        .is_none_or(|t| t.width() != size || t.height() != size);
     if needs_new {
         *slot = Some(device.create_texture(&TextureDescriptor {
             label: Some(label),

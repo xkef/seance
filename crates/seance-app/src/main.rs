@@ -142,7 +142,12 @@ impl App {
         self.cell_size = r.cell_size();
         let (cols, rows) = r.grid_size();
         if let Some(term) = &mut self.terminal {
-            term.resize(cols, rows, pixel_size.width as u16, pixel_size.height as u16);
+            term.resize(
+                cols,
+                rows,
+                pixel_size.width as u16,
+                pixel_size.height as u16,
+            );
         }
         self.mark_dirty();
     }
@@ -155,7 +160,10 @@ impl App {
     }
 
     fn terminal_modes(&self) -> TerminalModes {
-        self.terminal.as_ref().map(Terminal::modes).unwrap_or_default()
+        self.terminal
+            .as_ref()
+            .map(Terminal::modes)
+            .unwrap_or_default()
     }
 
     fn has_selection(&self) -> bool {
@@ -170,8 +178,7 @@ impl App {
     }
 
     fn sync_selection_to_overlay(&mut self) {
-        self.render_inputs.selection =
-            self.terminal.as_ref().and_then(Terminal::selection_range);
+        self.render_inputs.selection = self.terminal.as_ref().and_then(Terminal::selection_range);
     }
 
     fn copy_selection_to_clipboard(&mut self) {

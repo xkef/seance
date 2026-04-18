@@ -42,7 +42,11 @@ impl GlyphAtlas {
         bearing_y: i32,
         is_color: bool,
     ) -> Option<AtlasEntry> {
-        let plane = if is_color { &mut self.color } else { &mut self.grayscale };
+        let plane = if is_color {
+            &mut self.color
+        } else {
+            &mut self.grayscale
+        };
         let alloc = plane
             .allocator
             .allocate(ESize::new(width as i32, height as i32))?;

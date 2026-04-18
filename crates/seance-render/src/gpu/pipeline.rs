@@ -192,12 +192,36 @@ fn make_cell_text_pipeline(
         array_stride: CELL_TEXT_INSTANCE_STRIDE,
         step_mode: VertexStepMode::Instance,
         attributes: &[
-            VertexAttribute { format: VertexFormat::Uint32x2, offset: 0, shader_location: 0 },
-            VertexAttribute { format: VertexFormat::Uint32x2, offset: 8, shader_location: 1 },
-            VertexAttribute { format: VertexFormat::Sint16x2, offset: 16, shader_location: 2 },
-            VertexAttribute { format: VertexFormat::Uint16x2, offset: 20, shader_location: 3 },
-            VertexAttribute { format: VertexFormat::Unorm8x4, offset: 24, shader_location: 4 },
-            VertexAttribute { format: VertexFormat::Uint32, offset: 28, shader_location: 5 },
+            VertexAttribute {
+                format: VertexFormat::Uint32x2,
+                offset: 0,
+                shader_location: 0,
+            },
+            VertexAttribute {
+                format: VertexFormat::Uint32x2,
+                offset: 8,
+                shader_location: 1,
+            },
+            VertexAttribute {
+                format: VertexFormat::Sint16x2,
+                offset: 16,
+                shader_location: 2,
+            },
+            VertexAttribute {
+                format: VertexFormat::Uint16x2,
+                offset: 20,
+                shader_location: 3,
+            },
+            VertexAttribute {
+                format: VertexFormat::Unorm8x4,
+                offset: 24,
+                shader_location: 4,
+            },
+            VertexAttribute {
+                format: VertexFormat::Uint32,
+                offset: 28,
+                shader_location: 5,
+            },
         ],
     };
 

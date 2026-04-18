@@ -196,8 +196,7 @@ impl Terminal {
                 break;
             }
             if row_idx >= start.row {
-                let (col_start, col_end) =
-                    column_range(granularity, row_idx, start, end, cols);
+                let (col_start, col_end) = column_range(granularity, row_idx, start, end, cols);
                 if !out.is_empty() {
                     out.push('\n');
                 }
