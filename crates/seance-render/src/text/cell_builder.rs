@@ -1,16 +1,11 @@
-//! Builds per-frame GPU records from a VT snapshot.
+//! Build per-frame GPU records from a VT snapshot.
 //!
 //! Two passes:
-//! 1. [`walk_grid`] — VT-aware, text-free. Walks the [`FrameSource`],
-//!    resolves each cell's theme colors, emits a flat
-//!    [`CellRequest`] list plus the background color buffer.
-//! 2. [`shape_and_pack`] — text-aware, VT-free. Asks the
-//!    [`TextBackend`] to shape each request, ensures each resulting
-//!    glyph occupies an atlas slot, and emits [`CellText`] instance
-//!    records keyed back to their grid cell.
-//!
-//! Either pass can be reworked without disturbing the other — the
-//! planned path for swapping cosmic-text is entirely inside phase 2.
+//! 1. [`walk_grid`] — VT-aware, text-free. Resolves each cell's theme
+//!    colors and emits a flat [`CellRequest`] list + the bg buffer.
+//! 2. [`shape_and_pack`] — text-aware, VT-free. Shapes each request
+//!    through the [`TextBackend`], ensures each glyph occupies an
+//!    atlas slot, and emits one [`CellText`] per glyph.
 
 use std::collections::HashMap;
 
@@ -21,6 +16,7 @@ use super::atlas::{AtlasEntry, GlyphAtlas};
 use super::backend::{GlyphFormat, GlyphId, ShapedGlyph, TextBackend};
 use crate::theme::Theme;
 
+/// GPU instance record (32 bytes, matches the WGSL vertex buffer).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CellText {
@@ -47,9 +43,10 @@ pub struct FrameInfo {
     pub cursor_wide: bool,
 }
 
+type GlyphSlots = HashMap<GlyphId, AtlasEntry, FxBuildHasher>;
+
 /// One cell's shaping request produced by [`walk_grid`] and consumed
-/// by [`shape_and_pack`]. Pre-resolved foreground color keeps the
-/// shaping pass theme-free.
+/// by [`shape_and_pack`].
 struct CellRequest {
     row: u16,
     col: u16,
@@ -68,9 +65,8 @@ struct FrameGeometry {
 pub struct CellBuilder {
     atlas: GlyphAtlas,
     /// Stable map from backend-issued `GlyphId` to its atlas slot.
-    /// Survives across frames; cleared only on font-size / scale
-    /// changes via [`Self::reset_glyphs`].
-    glyph_slots: HashMap<GlyphId, AtlasEntry, FxBuildHasher>,
+    /// Survives across frames; cleared by [`Self::reset_glyphs`].
+    glyph_slots: GlyphSlots,
     bg_cells: Vec<[u8; 4]>,
     text_cells: Vec<CellText>,
     requests: Vec<CellRequest>,
@@ -98,15 +94,9 @@ impl CellBuilder {
         surface_width: u32,
         surface_height: u32,
         theme: &Theme,
-    ) -> bool {
-        let metrics = backend.metrics();
-        let geom = geometry(
-            source,
-            metrics.cell_width,
-            metrics.cell_height,
-            surface_width,
-            surface_height,
-        );
+    ) {
+        let m = backend.metrics();
+        let geom = geometry(source, m.cell_width, m.cell_height, surface_width, surface_height);
         let cursor = source.cursor();
 
         walk_grid(source, &geom, theme, &mut self.bg_cells, &mut self.requests);
@@ -135,11 +125,9 @@ impl CellBuilder {
             cursor_color: theme.cursor,
             cursor_wide: cursor.wide,
         });
-        true
     }
 
-    /// Drop all atlas-cached glyphs. Call when font size or scale
-    /// changes; the next frame will rebuild from scratch.
+    /// Drop all atlas-cached glyphs. Call on font size / scale change.
     pub fn reset_glyphs(&mut self) {
         self.atlas.reset();
         self.glyph_slots.clear();
@@ -170,10 +158,8 @@ fn geometry(
     surface_height: u32,
 ) -> FrameGeometry {
     let (cols, rows) = source.grid_size();
-    let total_w = cols as f32 * cell_width;
-    let total_h = rows as f32 * cell_height;
-    let pad_x = ((surface_width as f32 - total_w) / 2.0).max(0.0);
-    let pad_y = ((surface_height as f32 - total_h) / 2.0).max(0.0);
+    let pad_x = ((surface_width as f32 - cols as f32 * cell_width) / 2.0).max(0.0);
+    let pad_y = ((surface_height as f32 - rows as f32 * cell_height) / 2.0).max(0.0);
     FrameGeometry {
         cell_width,
         cell_height,
@@ -183,10 +169,8 @@ fn geometry(
     }
 }
 
-/// VT-aware, text-free pass. Walks the frame source, resolves each
-/// cell's background color into `bg_cells` and records a
-/// [`CellRequest`] per non-empty cell. No knowledge of the text
-/// backend or the atlas.
+/// VT-aware, text-free pass: resolve each cell's bg and queue a
+/// shape request per non-empty cell.
 fn walk_grid(
     source: &mut dyn FrameSource,
     geom: &FrameGeometry,
@@ -208,14 +192,12 @@ fn walk_grid(
     source.visit_cells(&mut visitor);
 }
 
-/// Text-aware, VT-free pass. Shapes every request through the backend,
-/// ensures each glyph has an atlas slot, and emits one
-/// [`CellText`] per resulting glyph. No knowledge of the VT source.
+/// Text-aware, VT-free pass: shape, cache glyphs, emit instance records.
 fn shape_and_pack(
     requests: &[CellRequest],
     backend: &mut dyn TextBackend,
     atlas: &mut GlyphAtlas,
-    glyph_slots: &mut HashMap<GlyphId, AtlasEntry, FxBuildHasher>,
+    glyph_slots: &mut GlyphSlots,
     shape_scratch: &mut Vec<ShapedGlyph>,
     out: &mut Vec<CellText>,
 ) {
@@ -232,14 +214,14 @@ fn shape_and_pack(
                 bearings: [entry.bearing_x as i16, entry.bearing_y as i16],
                 grid_pos: [req.col, req.row],
                 color: req.fg,
-                atlas_and_flags: if entry.is_color { 1 } else { 0 },
+                atlas_and_flags: u32::from(entry.is_color),
             });
         }
     }
 }
 
 fn ensure_glyph_slot(
-    slots: &mut HashMap<GlyphId, AtlasEntry, FxBuildHasher>,
+    slots: &mut GlyphSlots,
     atlas: &mut GlyphAtlas,
     backend: &mut dyn TextBackend,
     id: GlyphId,
@@ -260,9 +242,8 @@ fn ensure_glyph_slot(
     Some(entry)
 }
 
-/// Visitor that resolves theme colors and queues shape requests.
-/// Holds no backend/atlas references — stays on the VT side of the
-/// wall.
+/// Visitor: resolves theme colors, queues shape requests. Holds no
+/// backend/atlas references — stays on the VT side of the wall.
 struct WalkVisitor<'a> {
     bg_cells: &'a mut Vec<[u8; 4]>,
     requests: &'a mut Vec<CellRequest>,
@@ -276,26 +257,21 @@ impl CellVisitor for WalkVisitor<'_> {
         if row >= self.rows || col >= self.cols {
             return;
         }
-        let cell_index = row as usize * self.cols as usize + col as usize;
+        let idx = row as usize * self.cols as usize + col as usize;
 
         if let Some(rgb) = self.theme.resolve_color(&view.bg) {
-            self.bg_cells[cell_index] = [rgb[0], rgb[1], rgb[2], 255];
+            self.bg_cells[idx] = [rgb[0], rgb[1], rgb[2], 255];
         }
-
         if view.text.is_empty() {
             return;
         }
 
-        let fg = match self.theme.resolve_color(&view.fg) {
-            Some(rgb) => [rgb[0], rgb[1], rgb[2], 255],
-            None => [self.theme.fg[0], self.theme.fg[1], self.theme.fg[2], 255],
-        };
-
+        let fg_rgb = self.theme.resolve_color(&view.fg).unwrap_or(self.theme.fg);
         self.requests.push(CellRequest {
             row,
             col,
             text: view.text.to_owned(),
-            fg,
+            fg: [fg_rgb[0], fg_rgb[1], fg_rgb[2], 255],
         });
     }
 }
@@ -305,15 +281,14 @@ mod tests {
     use super::*;
     use seance_vt::{CellColor, CellVisitor, CursorInfo, GridPos};
 
-    /// Stub `FrameSource` that replays a fixed grid of `(text, fg, bg)`
-    /// triples. Lets us unit-test `walk_grid` without a real VT.
+    /// Stub `FrameSource` replaying a fixed `(text, fg, bg)` grid.
     struct FakeFrame<'a> {
         cols: u16,
         rows: u16,
         cells: &'a [(&'a str, CellColor, CellColor)],
     }
 
-    impl<'a> FrameSource for FakeFrame<'a> {
+    impl FrameSource for FakeFrame<'_> {
         fn grid_size(&mut self) -> (u16, u16) {
             (self.cols, self.rows)
         }
@@ -326,16 +301,10 @@ mod tests {
         fn visit_cells(&mut self, visitor: &mut dyn CellVisitor) {
             for (i, (text, fg, bg)) in self.cells.iter().enumerate() {
                 let i = i as u16;
-                let row = i / self.cols;
-                let col = i % self.cols;
                 visitor.cell(
-                    row,
-                    col,
-                    CellView {
-                        text,
-                        fg: *fg,
-                        bg: *bg,
-                    },
+                    i / self.cols,
+                    i % self.cols,
+                    CellView { text, fg: *fg, bg: *bg },
                 );
             }
         }
@@ -349,11 +318,7 @@ mod tests {
             ("", CellColor::Default, CellColor::Default),
             ("B", CellColor::Rgb(10, 20, 30), CellColor::Default),
         ];
-        let mut source = FakeFrame {
-            cols: 3,
-            rows: 1,
-            cells: &cells,
-        };
+        let mut source = FakeFrame { cols: 3, rows: 1, cells: &cells };
         let geom = FrameGeometry {
             cell_width: 10.0,
             cell_height: 20.0,

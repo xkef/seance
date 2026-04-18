@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::sync::Arc;
 
 use seance_vt::{FrameSource, GridPos};
@@ -20,9 +19,6 @@ pub struct RendererConfig {
 }
 
 /// Per-frame dynamic state the app supplies to the renderer.
-///
-/// Replaces the former `Overlay` struct: the renderer no longer holds
-/// mutable state the app mutates from outside. Colors stay on the theme.
 #[derive(Debug, Clone)]
 pub struct RenderInputs {
     pub vt_cursor_visible: bool,
@@ -48,7 +44,6 @@ pub struct TerminalRenderer {
     gpu: GpuState,
     theme: Theme,
     cell_size: [f32; 2],
-    grid_padding: Cell<[f32; 4]>,
     surface_width: u32,
     surface_height: u32,
 }
@@ -60,9 +55,8 @@ impl TerminalRenderer {
             config.font_size,
             config.scale,
         ));
-        let metrics = backend.metrics();
-        let cell_size = [metrics.cell_width, metrics.cell_height];
-
+        let m = backend.metrics();
+        let cell_size = [m.cell_width, m.cell_height];
         let gpu = GpuState::new(window).await;
 
         Some(Self {
@@ -71,7 +65,6 @@ impl TerminalRenderer {
             gpu,
             theme: Theme::default(),
             cell_size,
-            grid_padding: Cell::new([0.0; 4]),
             surface_width: config.width,
             surface_height: config.height,
         })
@@ -89,13 +82,16 @@ impl TerminalRenderer {
     }
 
     pub fn pixel_to_grid(&self, x: f64, y: f64) -> (u16, u16) {
-        let pad = self.grid_padding.get();
+        let pad = self
+            .cell_builder
+            .last_frame()
+            .map_or([0.0; 4], |fi| fi.grid_padding);
         let col = ((x as f32 - pad[0]) / self.cell_size[0]).max(0.0) as u16;
         let row = ((y as f32 - pad[1]) / self.cell_size[1]).max(0.0) as u16;
         (col, row)
     }
 
-    pub fn resize_surface(&mut self, width: u32, height: u32, _scale: f64) {
+    pub fn resize_surface(&mut self, width: u32, height: u32) {
         self.surface_width = width;
         self.surface_height = height;
         self.gpu
@@ -103,21 +99,18 @@ impl TerminalRenderer {
     }
 
     pub fn update_frame(&mut self, source: &mut dyn FrameSource) {
-        let ok = self.cell_builder.build_frame(
+        self.cell_builder.build_frame(
             source,
             self.backend.as_mut(),
             self.surface_width,
             self.surface_height,
             &self.theme,
         );
-        if ok && let Some(fi) = self.cell_builder.last_frame() {
-            self.grid_padding.set(fi.grid_padding);
-        }
     }
 
     pub fn render(&mut self, inputs: &RenderInputs) -> bool {
         let Some(fi) = self.cell_builder.last_frame() else {
-            log::warn!("render: no last_frame");
+            log::warn!("render: no frame built yet");
             return false;
         };
         self.gpu.render_frame(
@@ -133,7 +126,7 @@ impl TerminalRenderer {
     pub fn set_font_size(&mut self, points: f32) {
         self.backend.set_font_size(points);
         self.cell_builder.reset_glyphs();
-        let metrics = self.backend.metrics();
-        self.cell_size = [metrics.cell_width, metrics.cell_height];
+        let m = self.backend.metrics();
+        self.cell_size = [m.cell_width, m.cell_height];
     }
 }

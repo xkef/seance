@@ -1,5 +1,8 @@
 use etagere::{AtlasAllocator, Size as ESize};
 
+const GRAYSCALE_SIZE: u32 = 2048;
+const COLOR_SIZE: u32 = 1024;
+
 pub struct GlyphAtlas {
     grayscale: AtlasPlane,
     color: AtlasPlane,
@@ -9,8 +12,8 @@ struct AtlasPlane {
     allocator: AtlasAllocator,
     data: Vec<u8>,
     size: u32,
-    dirty: bool,
     bpp: u32,
+    dirty: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -25,8 +28,8 @@ pub struct AtlasEntry {
 impl GlyphAtlas {
     pub fn new() -> Self {
         Self {
-            grayscale: AtlasPlane::new(2048, 1),
-            color: AtlasPlane::new(1024, 4),
+            grayscale: AtlasPlane::new(GRAYSCALE_SIZE, 1),
+            color: AtlasPlane::new(COLOR_SIZE, 4),
         }
     }
 
@@ -39,31 +42,12 @@ impl GlyphAtlas {
         bearing_y: i32,
         is_color: bool,
     ) -> Option<AtlasEntry> {
-        let plane = if is_color {
-            &mut self.color
-        } else {
-            &mut self.grayscale
-        };
+        let plane = if is_color { &mut self.color } else { &mut self.grayscale };
         let alloc = plane
             .allocator
             .allocate(ESize::new(width as i32, height as i32))?;
         let pos = [alloc.rectangle.min.x as u32, alloc.rectangle.min.y as u32];
-
-        let dst_stride = plane.size as usize * plane.bpp as usize;
-        let src_stride = width as usize * plane.bpp as usize;
-        for row in 0..height as usize {
-            let dst_y = pos[1] as usize + row;
-            let dst_x = pos[0] as usize * plane.bpp as usize;
-            let dst_start = dst_y * dst_stride + dst_x;
-            let src_start = row * src_stride;
-            if src_start + src_stride <= bitmap.len() && dst_start + src_stride <= plane.data.len()
-            {
-                plane.data[dst_start..dst_start + src_stride]
-                    .copy_from_slice(&bitmap[src_start..src_start + src_stride]);
-            }
-        }
-        plane.dirty = true;
-
+        plane.copy_bitmap(bitmap, pos, width, height);
         Some(AtlasEntry {
             pos,
             size: [width, height],
@@ -87,8 +71,8 @@ impl GlyphAtlas {
     }
 
     pub fn reset(&mut self) {
-        self.grayscale = AtlasPlane::new(2048, 1);
-        self.color = AtlasPlane::new(1024, 4);
+        self.grayscale = AtlasPlane::new(GRAYSCALE_SIZE, 1);
+        self.color = AtlasPlane::new(COLOR_SIZE, 4);
     }
 }
 
@@ -98,8 +82,26 @@ impl AtlasPlane {
             allocator: AtlasAllocator::new(ESize::new(size as i32, size as i32)),
             data: vec![0u8; (size * size * bpp) as usize],
             size,
-            dirty: true,
             bpp,
+            dirty: true,
         }
+    }
+
+    fn copy_bitmap(&mut self, bitmap: &[u8], pos: [u32; 2], width: u32, height: u32) {
+        let bpp = self.bpp as usize;
+        let dst_stride = self.size as usize * bpp;
+        let src_stride = width as usize * bpp;
+        let x_bytes = pos[0] as usize * bpp;
+
+        for row in 0..height as usize {
+            let src_start = row * src_stride;
+            let dst_start = (pos[1] as usize + row) * dst_stride + x_bytes;
+            let src_end = src_start + src_stride;
+            let dst_end = dst_start + src_stride;
+            if src_end <= bitmap.len() && dst_end <= self.data.len() {
+                self.data[dst_start..dst_end].copy_from_slice(&bitmap[src_start..src_end]);
+            }
+        }
+        self.dirty = true;
     }
 }

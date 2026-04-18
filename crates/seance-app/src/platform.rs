@@ -4,23 +4,36 @@ pub fn configure_window(window: &winit::window::Window) {
     use objc2::runtime::{AnyClass, AnyObject};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-    let handle = window.window_handle().expect("no window handle");
-    let nsview = match handle.as_raw() {
-        RawWindowHandle::AppKit(h) => h.ns_view.as_ptr(),
-        _ => return,
+    // NSWindowStyleMask flags.
+    const TITLED: usize = 1 << 0;
+    const CLOSABLE: usize = 1 << 1;
+    const MINIATURIZABLE: usize = 1 << 2;
+    const RESIZABLE: usize = 1 << 3;
+    const FULLSIZE_CONTENT_VIEW: usize = 1 << 15;
+
+    // NSWindowTitleVisibility::Hidden.
+    const TITLE_HIDDEN: isize = 1;
+
+    let Ok(handle) = window.window_handle() else {
+        return;
     };
+    let RawWindowHandle::AppKit(h) = handle.as_raw() else {
+        return;
+    };
+
     unsafe {
-        let view: *mut AnyObject = nsview.cast();
+        let view: *mut AnyObject = h.ns_view.as_ptr().cast();
         let nswindow: *mut AnyObject = msg_send![view, window];
         if nswindow.is_null() {
             return;
         }
-        let mask: usize = 1 | 2 | 4 | 8 | (1 << 15);
-        let _: () = msg_send![nswindow, setStyleMask: mask];
+        let style_mask = TITLED | CLOSABLE | MINIATURIZABLE | RESIZABLE | FULLSIZE_CONTENT_VIEW;
+        let _: () = msg_send![nswindow, setStyleMask: style_mask];
         let _: () = msg_send![nswindow, setTitlebarAppearsTransparent: true];
-        let _: () = msg_send![nswindow, setTitleVisibility: 1_isize];
+        let _: () = msg_send![nswindow, setTitleVisibility: TITLE_HIDDEN];
         let _: () = msg_send![nswindow, setMovableByWindowBackground: true];
 
+        // Hide close, minimize, zoom buttons.
         for i in 0_isize..3 {
             let button: *mut AnyObject = msg_send![nswindow, standardWindowButton: i];
             if !button.is_null() {

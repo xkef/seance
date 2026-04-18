@@ -1,14 +1,15 @@
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
+use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Modifiers, MouseButton, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
 use seance_input::{InputHandler, VtInput};
 use seance_render::{RenderInputs, RendererConfig, TerminalRenderer};
-use seance_vt::{LibGhosttyFrameSource, Terminal};
+use seance_vt::{LibGhosttyFrameSource, Terminal, TerminalModes};
 
 mod command;
 mod keybinds;
@@ -19,9 +20,13 @@ use keybinds::Keybinds;
 
 const DEFAULT_FONT_SIZE: f32 = 14.0;
 const DEFAULT_FONT_FAMILY: &str = "JetBrainsMono Nerd Font";
+const FONT_SIZE_MIN: f32 = 6.0;
+const FONT_SIZE_MAX: f32 = 72.0;
+const POLL_INTERVAL: Duration = Duration::from_millis(4);
+const MULTI_CLICK_WINDOW: Duration = Duration::from_millis(500);
 
 struct MouseState {
-    cursor_pos: winit::dpi::PhysicalPosition<f64>,
+    cursor_pos: PhysicalPosition<f64>,
     is_down: bool,
     click_count: u8,
     last_click_time: Instant,
@@ -31,7 +36,7 @@ struct MouseState {
 impl Default for MouseState {
     fn default() -> Self {
         Self {
-            cursor_pos: winit::dpi::PhysicalPosition::new(0.0, 0.0),
+            cursor_pos: PhysicalPosition::new(0.0, 0.0),
             is_down: false,
             click_count: 0,
             last_click_time: Instant::now(),
@@ -43,12 +48,13 @@ impl Default for MouseState {
 impl MouseState {
     fn register_click(&mut self, col: u16, row: u16) -> u8 {
         let now = Instant::now();
-        let dt = now.duration_since(self.last_click_time);
-        if dt.as_millis() < 500 && (col, row) == self.last_click_pos {
-            self.click_count = (self.click_count % 3) + 1;
+        let fast = now.duration_since(self.last_click_time) < MULTI_CLICK_WINDOW;
+        let same_spot = (col, row) == self.last_click_pos;
+        self.click_count = if fast && same_spot {
+            (self.click_count % 3) + 1
         } else {
-            self.click_count = 1;
-        }
+            1
+        };
         self.last_click_time = now;
         self.last_click_pos = (col, row);
         self.click_count
@@ -94,55 +100,66 @@ impl App {
         }
     }
 
-    fn poll_pty(&mut self) -> bool {
+    fn mark_dirty(&mut self) {
+        self.content_dirty = true;
+        self.request_redraw();
+    }
+
+    fn poll_pty(&mut self) {
         let Some(term) = &mut self.terminal else {
-            return false;
+            return;
         };
-        let got_data = term.poll();
+        if term.poll() {
+            self.content_dirty = true;
+        }
         if !term.is_alive() {
             self.terminal = None;
         }
-        if got_data {
-            self.content_dirty = true;
-        }
-        got_data
     }
 
     fn draw(&mut self) {
         if self.occluded || self.terminal.is_none() {
             return;
         }
-        if self.content_dirty {
+        if self.content_dirty
+            && let (Some(r), Some(t)) = (&mut self.renderer, &mut self.terminal)
+        {
             self.content_dirty = false;
-            if let (Some(r), Some(t)) = (&mut self.renderer, &mut self.terminal) {
-                let mut source = LibGhosttyFrameSource::new(t);
-                r.update_frame(&mut source);
-            }
+            let mut source = LibGhosttyFrameSource::new(t);
+            r.update_frame(&mut source);
         }
         if let Some(r) = &mut self.renderer {
             r.render(&self.render_inputs);
         }
     }
 
+    /// Resize the surface and reflow the VT grid.
+    fn reflow(&mut self, pixel_size: PhysicalSize<u32>) {
+        let Some(r) = &mut self.renderer else {
+            return;
+        };
+        r.resize_surface(pixel_size.width, pixel_size.height);
+        self.cell_size = r.cell_size();
+        let (cols, rows) = r.grid_size();
+        if let Some(term) = &mut self.terminal {
+            term.resize(cols, rows, pixel_size.width as u16, pixel_size.height as u16);
+        }
+        self.mark_dirty();
+    }
+
     fn apply_font_size(&mut self) {
         if let (Some(r), Some(w)) = (&mut self.renderer, &self.window) {
             r.set_font_size(self.font_size);
-            let size = w.inner_size();
-            r.resize_surface(size.width, size.height, w.scale_factor());
-            self.cell_size = r.cell_size();
-            let (cols, rows) = r.grid_size();
-            if let Some(term) = &mut self.terminal {
-                term.resize(cols, rows, size.width as u16, size.height as u16);
-            }
+            self.reflow(w.inner_size());
         }
-        self.content_dirty = true;
-        self.request_redraw();
     }
 
-    fn terminal_modes(&self) -> seance_vt::TerminalModes {
-        self.terminal
-            .as_ref()
-            .map_or(Default::default(), |t| t.modes())
+    fn terminal_modes(&self) -> TerminalModes {
+        self.terminal.as_ref().map(Terminal::modes).unwrap_or_default()
+    }
+
+    fn has_selection(&self) -> bool {
+        self.terminal.as_ref().is_some_and(Terminal::has_selection)
     }
 
     fn clear_selection(&mut self) {
@@ -153,40 +170,40 @@ impl App {
     }
 
     fn sync_selection_to_overlay(&mut self) {
-        self.render_inputs.selection = self.terminal.as_ref().and_then(|t| t.selection_range());
+        self.render_inputs.selection =
+            self.terminal.as_ref().and_then(Terminal::selection_range);
     }
 
-    fn on_resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        if let (Some(r), Some(w)) = (&mut self.renderer, &self.window) {
-            r.resize_surface(new_size.width, new_size.height, w.scale_factor());
+    fn copy_selection_to_clipboard(&mut self) {
+        let Some(text) = self.terminal.as_mut().and_then(Terminal::selection_text) else {
+            return;
+        };
+        if text.is_empty() {
+            return;
         }
-        let (cols, rows) = self
-            .renderer
-            .as_ref()
-            .map(|r| r.grid_size())
-            .unwrap_or((80, 24));
-        if let Some(term) = &mut self.terminal {
-            term.resize(cols, rows, new_size.width as u16, new_size.height as u16);
+        if let Ok(mut cb) = arboard::Clipboard::new() {
+            let _ = cb.set_text(text);
         }
-        self.content_dirty = true;
-        self.draw();
     }
 
     fn on_keyboard_input(&mut self, event_loop: &ActiveEventLoop, event: &winit::event::KeyEvent) {
         if let Some(cmd) = self.keybinds.match_event(event, &self.modifiers) {
-            self.on_pressed_clear_selection(&cmd);
+            let preserves_selection = matches!(cmd, AppCommand::Copy | AppCommand::SelectAll);
+            if !preserves_selection && self.has_selection() {
+                self.clear_selection();
+            }
             self.execute_app_command(event_loop, cmd);
-            self.content_dirty = true;
-            self.request_redraw();
+            self.mark_dirty();
             return;
         }
 
-        let modes = self.terminal_modes();
-        let input = self.input.handle_key(event, &self.modifiers, modes);
+        let input = self
+            .input
+            .handle_key(event, &self.modifiers, self.terminal_modes());
 
         if event.state == ElementState::Pressed
             && !matches!(input, VtInput::Ignore)
-            && self.terminal.as_ref().is_some_and(|t| t.has_selection())
+            && self.has_selection()
         {
             self.clear_selection();
         }
@@ -196,51 +213,17 @@ impl App {
         {
             term.write(&bytes);
         }
-        self.content_dirty = true;
-        self.request_redraw();
-    }
-
-    /// Clear selection when a non-selection-preserving app command fires.
-    fn on_pressed_clear_selection(&mut self, cmd: &AppCommand) {
-        if matches!(cmd, AppCommand::Copy | AppCommand::SelectAll) {
-            return;
-        }
-        if self.terminal.as_ref().is_some_and(|t| t.has_selection()) {
-            self.clear_selection();
-        }
+        self.mark_dirty();
     }
 
     fn execute_app_command(&mut self, event_loop: &ActiveEventLoop, cmd: AppCommand) {
         match cmd {
             AppCommand::Quit | AppCommand::CloseWindow => event_loop.exit(),
             AppCommand::Copy => {
-                if let Some(term) = &mut self.terminal
-                    && let Some(text) = term.selection_text()
-                    && let Ok(mut cb) = arboard::Clipboard::new()
-                {
-                    let _ = cb.set_text(text);
-                }
+                self.copy_selection_to_clipboard();
                 self.clear_selection();
             }
-            AppCommand::Paste => {
-                if let Ok(mut cb) = arboard::Clipboard::new()
-                    && let Ok(text) = cb.get_text()
-                {
-                    let bracketed = self
-                        .terminal
-                        .as_ref()
-                        .is_some_and(|t| t.modes().bracketed_paste);
-                    if let Some(term) = &self.terminal {
-                        if bracketed {
-                            term.write(b"\x1b[200~");
-                        }
-                        term.write(text.as_bytes());
-                        if bracketed {
-                            term.write(b"\x1b[201~");
-                        }
-                    }
-                }
-            }
+            AppCommand::Paste => self.paste_from_clipboard(),
             AppCommand::SelectAll => {
                 if let Some(term) = &mut self.terminal {
                     term.select_all();
@@ -248,8 +231,8 @@ impl App {
                 self.sync_selection_to_overlay();
             }
             AppCommand::FontSizeDelta(delta) => {
-                let next = self.font_size + delta as f32;
-                self.font_size = next.clamp(6.0, 72.0);
+                self.font_size =
+                    (self.font_size + f32::from(delta)).clamp(FONT_SIZE_MIN, FONT_SIZE_MAX);
                 self.apply_font_size();
             }
             AppCommand::FontSizeReset => {
@@ -259,12 +242,32 @@ impl App {
         }
     }
 
+    fn paste_from_clipboard(&mut self) {
+        let Ok(mut cb) = arboard::Clipboard::new() else {
+            return;
+        };
+        let Ok(text) = cb.get_text() else {
+            return;
+        };
+        let Some(term) = &self.terminal else {
+            return;
+        };
+        let bracketed = term.modes().bracketed_paste;
+        if bracketed {
+            term.write(b"\x1b[200~");
+        }
+        term.write(text.as_bytes());
+        if bracketed {
+            term.write(b"\x1b[201~");
+        }
+    }
+
     fn on_mouse_wheel(&mut self, delta: winit::event::MouseScrollDelta) {
         let lines = match delta {
             winit::event::MouseScrollDelta::LineDelta(_, y) => y as i32,
             winit::event::MouseScrollDelta::PixelDelta(pos) => {
                 let ch = self.cell_size[1].max(1.0);
-                (pos.y / ch as f64) as i32
+                (pos.y / f64::from(ch)) as i32
             }
         };
         if lines == 0 {
@@ -278,27 +281,23 @@ impl App {
         } else if let Some(term) = &mut self.terminal {
             term.scroll_lines(-lines);
         }
-        self.content_dirty = true;
-        self.request_redraw();
+        self.mark_dirty();
     }
 
-    fn on_cursor_moved(&mut self, position: winit::dpi::PhysicalPosition<f64>) {
+    fn on_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         self.mouse.cursor_pos = position;
         if !self.mouse.is_down {
             return;
         }
-        let grid_pos = self
-            .renderer
-            .as_ref()
-            .map(|r| r.pixel_to_grid(position.x, position.y));
-        if let Some((col, row)) = grid_pos {
-            if let Some(term) = &mut self.terminal {
-                term.update_selection(col, row);
-            }
-            self.sync_selection_to_overlay();
-            self.content_dirty = true;
-            self.request_redraw();
+        let Some(r) = self.renderer.as_ref() else {
+            return;
+        };
+        let (col, row) = r.pixel_to_grid(position.x, position.y);
+        if let Some(term) = &mut self.terminal {
+            term.update_selection(col, row);
         }
+        self.sync_selection_to_overlay();
+        self.mark_dirty();
     }
 
     fn on_mouse_input(&mut self, state: ElementState, button: MouseButton) {
@@ -306,38 +305,31 @@ impl App {
             return;
         }
         match state {
-            ElementState::Pressed => {
-                let grid_pos = self
-                    .renderer
-                    .as_ref()
-                    .map(|r| r.pixel_to_grid(self.mouse.cursor_pos.x, self.mouse.cursor_pos.y));
-                if let Some((col, row)) = grid_pos {
-                    let clicks = self.mouse.register_click(col, row);
-                    if let Some(term) = &mut self.terminal {
-                        match clicks {
-                            1 => term.start_selection(col, row),
-                            2 => term.start_word_selection(col, row),
-                            3 => term.start_line_selection(row),
-                            _ => {}
-                        }
-                    }
-                    self.sync_selection_to_overlay();
-                }
-                self.mouse.is_down = true;
-                self.content_dirty = true;
-                self.request_redraw();
-            }
+            ElementState::Pressed => self.handle_mouse_press(),
             ElementState::Released => {
                 self.mouse.is_down = false;
-                if let Some(term) = &mut self.terminal
-                    && let Some(text) = term.selection_text()
-                    && !text.is_empty()
-                    && let Ok(mut cb) = arboard::Clipboard::new()
-                {
-                    let _ = cb.set_text(text);
-                }
+                self.copy_selection_to_clipboard();
             }
         }
+    }
+
+    fn handle_mouse_press(&mut self) {
+        let Some(r) = self.renderer.as_ref() else {
+            return;
+        };
+        let (col, row) = r.pixel_to_grid(self.mouse.cursor_pos.x, self.mouse.cursor_pos.y);
+        let clicks = self.mouse.register_click(col, row);
+        if let Some(term) = &mut self.terminal {
+            match clicks {
+                1 => term.start_selection(col, row),
+                2 => term.start_word_selection(col, row),
+                3 => term.start_line_selection(row),
+                _ => {}
+            }
+        }
+        self.sync_selection_to_overlay();
+        self.mouse.is_down = true;
+        self.mark_dirty();
     }
 }
 
@@ -347,10 +339,9 @@ impl ApplicationHandler for App {
             return;
         }
 
-        let attrs = Window::default_attributes().with_title("seance");
         let window = Arc::new(
             event_loop
-                .create_window(attrs)
+                .create_window(Window::default_attributes().with_title("seance"))
                 .expect("failed to create window"),
         );
 
@@ -358,12 +349,10 @@ impl ApplicationHandler for App {
         platform::configure_window(&window);
 
         let size = window.inner_size();
-        let scale = window.scale_factor();
-
         let config = RendererConfig {
             width: size.width,
             height: size.height,
-            scale,
+            scale: window.scale_factor(),
             font_family: DEFAULT_FONT_FAMILY.to_string(),
             font_size: DEFAULT_FONT_SIZE,
         };
@@ -376,9 +365,10 @@ impl ApplicationHandler for App {
         self.renderer = Some(renderer);
         self.window = Some(window);
 
-        let term = Terminal::spawn(cols, rows, size.width as u16, size.height as u16)
-            .expect("failed to spawn terminal");
-        self.terminal = Some(term);
+        self.terminal = Some(
+            Terminal::spawn(cols, rows, size.width as u16, size.height as u16)
+                .expect("failed to spawn terminal"),
+        );
     }
 
     fn window_event(
@@ -389,19 +379,19 @@ impl ApplicationHandler for App {
     ) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(size) => self.on_resize(size),
-            WindowEvent::ModifiersChanged(mods) => self.modifiers = mods,
-            WindowEvent::KeyboardInput { event, .. } => {
-                self.on_keyboard_input(event_loop, &event);
+            WindowEvent::Resized(size) => {
+                self.reflow(size);
+                self.draw();
             }
+            WindowEvent::ModifiersChanged(mods) => self.modifiers = mods,
+            WindowEvent::KeyboardInput { event, .. } => self.on_keyboard_input(event_loop, &event),
             WindowEvent::MouseWheel { delta, .. } => self.on_mouse_wheel(delta),
             WindowEvent::CursorMoved { position, .. } => self.on_cursor_moved(position),
             WindowEvent::MouseInput { state, button, .. } => self.on_mouse_input(state, button),
             WindowEvent::Occluded(is_occluded) => {
                 self.occluded = is_occluded;
                 if !is_occluded {
-                    self.content_dirty = true;
-                    self.request_redraw();
+                    self.mark_dirty();
                 }
             }
             WindowEvent::RedrawRequested => self.draw(),
@@ -410,25 +400,15 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if self.terminal.is_none() {
-            event_loop.exit();
-            return;
-        }
-
         self.poll_pty();
-
         if self.terminal.is_none() {
             event_loop.exit();
             return;
         }
-
         if self.content_dirty && !self.occluded {
             self.request_redraw();
         }
-
-        event_loop.set_control_flow(winit::event_loop::ControlFlow::wait_duration(
-            std::time::Duration::from_millis(4),
-        ));
+        event_loop.set_control_flow(ControlFlow::wait_duration(POLL_INTERVAL));
     }
 }
 

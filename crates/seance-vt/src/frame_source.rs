@@ -1,10 +1,7 @@
 //! libghostty-vt implementation of [`FrameSource`].
 //!
-//! Wraps a [`Terminal`] and drives a `CellVisitor` over every cell in
-//! the current VT snapshot. The only place in the workspace that
-//! touches libghostty-vt's `RenderState` + `RowIterator` +
-//! `CellIterator` dance; the renderer reads the resulting
-//! [`CellView`] stream.
+//! The only place that touches libghostty-vt's
+//! `RenderState` / `RowIterator` / `CellIterator` dance.
 
 use libghostty_vt::RenderState;
 use libghostty_vt::render::{CellIteration, CellIterator, RowIterator};
@@ -24,7 +21,7 @@ impl<'a> LibGhosttyFrameSource<'a> {
     }
 }
 
-impl<'a> FrameSource for LibGhosttyFrameSource<'a> {
+impl FrameSource for LibGhosttyFrameSource<'_> {
     fn grid_size(&mut self) -> (u16, u16) {
         let vt = self.term.vt_mut();
         (vt.cols().unwrap_or(80), vt.rows().unwrap_or(24))
@@ -47,84 +44,70 @@ impl<'a> FrameSource for LibGhosttyFrameSource<'a> {
     }
 
     fn visit_cells(&mut self, visitor: &mut dyn CellVisitor) {
-        let Ok(mut render_state) = RenderState::new() else {
-            return;
-        };
-        let Ok(snapshot) = render_state.update(self.term.vt_mut()) else {
-            return;
-        };
-
-        let Ok(mut row_iter_obj) = RowIterator::new() else {
-            return;
-        };
-        let Ok(mut cell_iter_obj) = CellIterator::new() else {
-            return;
-        };
-        let Ok(mut row_iter) = row_iter_obj.update(&snapshot) else {
-            return;
-        };
-
-        let mut scratch = String::with_capacity(4);
-        let mut row_idx: u16 = 0;
-
-        while let Some(row) = row_iter.next() {
-            let Ok(mut cell_iter) = cell_iter_obj.update(row) else {
-                return;
-            };
-            let mut col_idx: u16 = 0;
-
-            while let Some(cell) = cell_iter.next() {
-                scratch.clear();
-                if let Ok(graphs) = cell.graphemes() {
-                    for c in graphs {
-                        scratch.push(c);
-                    }
-                }
-
-                let bg = resolve_bg(cell);
-                let fg = resolve_fg(cell);
-
-                visitor.cell(
-                    row_idx,
-                    col_idx,
-                    CellView {
-                        text: scratch.as_str(),
-                        fg,
-                        bg,
-                    },
-                );
-                col_idx += 1;
-            }
-            row_idx += 1;
-        }
+        let _ = walk(self.term, visitor);
     }
+}
+
+/// Walks the VT snapshot, invoking `visitor` on each cell.
+/// Returns `None` if any libghostty-vt call fails (whole frame is dropped).
+fn walk(term: &mut Terminal, visitor: &mut dyn CellVisitor) -> Option<()> {
+    let mut render_state = RenderState::new().ok()?;
+    let snapshot = render_state.update(term.vt_mut()).ok()?;
+    let mut rows = RowIterator::new().ok()?;
+    let mut cells = CellIterator::new().ok()?;
+    let mut row_iter = rows.update(&snapshot).ok()?;
+
+    let mut scratch = String::with_capacity(4);
+    let mut row_idx: u16 = 0;
+    while let Some(row) = row_iter.next() {
+        let mut cell_iter = cells.update(row).ok()?;
+        let mut col_idx: u16 = 0;
+        while let Some(cell) = cell_iter.next() {
+            scratch.clear();
+            if let Ok(graphs) = cell.graphemes() {
+                scratch.extend(graphs);
+            }
+            visitor.cell(
+                row_idx,
+                col_idx,
+                CellView {
+                    text: &scratch,
+                    fg: resolve_fg(cell),
+                    bg: resolve_bg(cell),
+                },
+            );
+            col_idx += 1;
+        }
+        row_idx += 1;
+    }
+    Some(())
 }
 
 fn resolve_bg(cell: &CellIteration<'_, '_>) -> CellColor {
     if let Ok(Some(rgb)) = cell.bg_color() {
-        return rgb_to_color(rgb);
+        return rgb_to_cell_color(rgb);
     }
-    if let Ok(style) = cell.style() {
-        return style_color_to_cell_color(&style.bg_color);
+    match cell.style() {
+        Ok(style) => style_to_cell_color(&style.bg_color),
+        Err(_) => CellColor::Default,
     }
-    CellColor::Default
 }
 
 fn resolve_fg(cell: &CellIteration<'_, '_>) -> CellColor {
     if let Ok(Some(rgb)) = cell.fg_color() {
-        return rgb_to_color(rgb);
+        return rgb_to_cell_color(rgb);
     }
-    if let Ok(style) = cell.style() {
-        return style_color_to_cell_color(&style.fg_color);
+    match cell.style() {
+        Ok(style) => style_to_cell_color(&style.fg_color),
+        Err(_) => CellColor::Default,
     }
-    CellColor::Default
 }
 
-fn rgb_to_color(c: RgbColor) -> CellColor {
+fn rgb_to_cell_color(c: RgbColor) -> CellColor {
     CellColor::Rgb(c.r, c.g, c.b)
 }
 
-fn style_color_to_cell_color(sc: &style::StyleColor) -> CellColor {
+fn style_to_cell_color(sc: &style::StyleColor) -> CellColor {
     match sc {
         style::StyleColor::None => CellColor::Default,
         style::StyleColor::Palette(PaletteIndex(idx)) => CellColor::Palette(*idx),
