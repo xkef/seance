@@ -23,6 +23,7 @@ struct Uniforms {
     selection_end: vec2<u32>,
     selection_color: vec4<f32>,
     selection_active: u32,
+    baseline: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -242,7 +243,7 @@ fn vs_cell_text(
     let cell_pos = uniforms.cell_size * vec2<f32>(f32(instance.grid_pos.x), f32(instance.grid_pos.y));
     let size = vec2<f32>(f32(instance.glyph_size.x), f32(instance.glyph_size.y));
     var offset = vec2<f32>(f32(instance.bearings.x), f32(instance.bearings.y));
-    offset.y = uniforms.cell_size.y - offset.y;
+    offset.y = uniforms.baseline - offset.y;
 
     let world_pos = cell_pos + size * corner + offset + uniforms.grid_padding.xy;
 

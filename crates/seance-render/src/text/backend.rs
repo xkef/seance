@@ -10,10 +10,16 @@
 //! step is skipped. See [`crate::text::cell_builder`] for the driver.
 
 /// Per-cell geometry the renderer uses for layout.
+///
+/// `baseline` is the y-offset from the top of the cell to the glyph
+/// baseline. Centering the baseline within the line-box (rather than
+/// placing it at the cell bottom) keeps descenders inside the cell and
+/// splits the leading evenly above and below the ink.
 #[derive(Debug, Clone, Copy)]
 pub struct CellMetrics {
     pub cell_width: f32,
     pub cell_height: f32,
+    pub baseline: f32,
 }
 
 /// Opaque identifier for a shaped glyph at a given size.

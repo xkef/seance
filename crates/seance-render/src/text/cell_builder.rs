@@ -33,6 +33,7 @@ const _: () = assert!(size_of::<CellText>() == 32);
 pub struct FrameInfo {
     pub cell_width: f32,
     pub cell_height: f32,
+    pub baseline: f32,
     pub grid_cols: u16,
     pub grid_rows: u16,
     pub grid_padding: [f32; 4],
@@ -95,14 +96,17 @@ impl CellBuilder {
         surface_height: u32,
         theme: &Theme,
     ) {
-        let m = backend.metrics();
-        let geom = geometry(
-            source,
-            m.cell_width,
-            m.cell_height,
-            surface_width,
-            surface_height,
-        );
+        let (baseline, geom) = {
+            let m = backend.metrics();
+            let g = geometry(
+                source,
+                m.cell_width,
+                m.cell_height,
+                surface_width,
+                surface_height,
+            );
+            (m.baseline, g)
+        };
         let cursor = source.cursor();
 
         walk_grid(source, &geom, theme, &mut self.bg_cells, &mut self.requests);
@@ -122,6 +126,7 @@ impl CellBuilder {
         self.last_frame = Some(FrameInfo {
             cell_width: geom.cell_width,
             cell_height: geom.cell_height,
+            baseline,
             grid_cols: geom.grid_cols,
             grid_rows: geom.grid_rows,
             grid_padding: geom.grid_padding,

@@ -128,7 +128,9 @@ impl TextBackend for CosmicTextBackend {
 }
 
 /// Compute cell metrics by shaping a single "M". Width = glyph advance,
-/// height = `font_size × LINE_HEIGHT_SCALE`.
+/// height = `font_size × LINE_HEIGHT_SCALE`. `baseline` comes from
+/// cosmic-text's layout, which already centers ascent+descent within
+/// the line-box — using it here matches that convention.
 fn compute_metrics(fs: &mut FontSystem, family: &str, font_size: f32, scale: f64) -> CellMetrics {
     let scaled = font_size * scale as f32;
     let line_height = (scaled * LINE_HEIGHT_SCALE).ceil();
@@ -138,15 +140,23 @@ fn compute_metrics(fs: &mut FontSystem, family: &str, font_size: f32, scale: f64
     buffer.set_text(fs, "M", &attrs, Shaping::Advanced, None);
     buffer.shape_until_scroll(fs, false);
 
-    let cell_width = buffer
-        .layout_runs()
-        .next()
-        .and_then(|run| run.glyphs.iter().next().map(|g| g.w))
-        .unwrap_or(scaled * 0.6)
-        .ceil();
+    let (cell_width, baseline) = match buffer.layout_runs().next() {
+        Some(run) => {
+            let w = run
+                .glyphs
+                .iter()
+                .next()
+                .map(|g| g.w)
+                .unwrap_or(scaled * 0.6)
+                .ceil();
+            (w, run.line_y.round())
+        }
+        None => (scaled.ceil() * 0.6, (line_height * 0.8).round()),
+    };
 
     CellMetrics {
         cell_width,
         cell_height: line_height,
+        baseline,
     }
 }

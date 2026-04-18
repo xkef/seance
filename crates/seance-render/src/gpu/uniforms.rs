@@ -35,7 +35,8 @@ pub(crate) struct Uniforms {
     pub selection_end: [u32; 2],
     pub selection_color: [f32; 4],
     pub selection_active: u32,
-    pub _pad: [u32; 11],
+    pub baseline: f32,
+    pub _pad: [u32; 10],
 }
 
 impl Uniforms {
@@ -73,7 +74,8 @@ impl Uniforms {
             selection_end: sel_end,
             selection_color: theme.selection_bg,
             selection_active: sel_active,
-            _pad: [0; 11],
+            baseline: fi.baseline,
+            _pad: [0; 10],
         }
     }
 
