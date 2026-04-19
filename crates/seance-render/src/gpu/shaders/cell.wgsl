@@ -255,15 +255,20 @@ fn vs_cell_text(
                       && uniforms.cursor_wide != 0u
                       && instance.grid_pos.x == uniforms.cursor_pos.x + 1u
                       && instance.grid_pos.y == uniforms.cursor_pos.y;
-    var color = instance.color;
-    if (at_cursor || at_cursor_wide) && !is_cursor_glyph {
-        color = uniforms.cursor_color;
-    }
-
     let bg_idx = instance.grid_pos.y * uniforms.grid_size.x + instance.grid_pos.x;
     let bg_packed = bg_cells[bg_idx];
     let bg_srgb = unpack_rgba(bg_packed);
     let effective_bg = select(bg_srgb.rgb, uniforms.bg_color.rgb, bg_srgb.a < 0.01);
+
+    var color = instance.color;
+    if (at_cursor || at_cursor_wide) && !is_cursor_glyph {
+        if uniforms.overlay_shape == 1u {
+            // Block cursor fills the cell; invert glyph to bg for legibility.
+            color = vec4<f32>(effective_bg, color.a);
+        } else {
+            color = uniforms.cursor_color;
+        }
+    }
 
     var out: CellTextOut;
     out.position = uniforms.projection * vec4<f32>(world_pos, 0.0, 1.0);

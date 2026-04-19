@@ -69,7 +69,7 @@ impl Uniforms {
             cursor_wide: if fi.cursor_wide { 1 } else { 0 },
             overlay_shape: inputs.cursor_shape as u32,
             overlay_pos: [inputs.cursor_pos.col as u32, inputs.cursor_pos.row as u32],
-            overlay_color: theme.overlay_cursor_color,
+            overlay_color: u8x4_to_f32(theme.cursor),
             selection_start: sel_start,
             selection_end: sel_end,
             selection_color: theme.selection_bg,
