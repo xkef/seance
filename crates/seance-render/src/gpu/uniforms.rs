@@ -68,7 +68,7 @@ impl Uniforms {
             cursor_color: u8x4_to_f32(fi.cursor_color),
             cursor_wide: if fi.cursor_wide { 1 } else { 0 },
             overlay_shape: inputs.cursor_shape as u32,
-            overlay_pos: [inputs.cursor_pos.col as u32, inputs.cursor_pos.row as u32],
+            overlay_pos: [fi.cursor_pos[0] as u32, fi.cursor_pos[1] as u32],
             overlay_color: u8x4_to_f32(theme.cursor),
             selection_start: sel_start,
             selection_end: sel_end,

@@ -23,7 +23,6 @@ pub struct RendererConfig {
 pub struct RenderInputs {
     pub vt_cursor_visible: bool,
     pub cursor_shape: CursorShape,
-    pub cursor_pos: GridPos,
     pub selection: Option<(GridPos, GridPos)>,
 }
 
@@ -32,7 +31,6 @@ impl Default for RenderInputs {
         Self {
             vt_cursor_visible: true,
             cursor_shape: CursorShape::Block,
-            cursor_pos: GridPos { col: 0, row: 0 },
             selection: None,
         }
     }
