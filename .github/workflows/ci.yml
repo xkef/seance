@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  markdownlint:
+    name: markdownlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npx --yes markdownlint-cli2 "**/*.md"
+
+  prettier:
+    name: prettier
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npx --yes prettier --check "**/*.md"
+
+  fmt:
+    name: cargo fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.1"
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  build:
+    name: cargo build
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+      - name: Setup vendored ghostty-src
+        run: tools/setup-ghostty-src.sh
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --all-targets
+
+  clippy:
+    name: cargo clippy
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+      - name: Install clippy component
+        run: rustup component add clippy
+      - name: Setup vendored ghostty-src
+        run: tools/setup-ghostty-src.sh
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
