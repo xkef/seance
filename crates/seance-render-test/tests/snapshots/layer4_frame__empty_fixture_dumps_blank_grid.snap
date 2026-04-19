@@ -1,0 +1,13 @@
+---
+source: crates/seance-render-test/tests/layer4_frame.rs
+expression: world.dump_frame()
+---
+╭────────────────────╮
+│                    │
+│                    │
+│                    │
+╰────────────────────╯
+cells:
+  (none)
+cursor: (0,0) visible=true
+selection: none

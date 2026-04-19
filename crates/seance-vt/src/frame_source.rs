@@ -4,6 +4,7 @@
 //! `RenderState` / `RowIterator` / `CellIterator` dance.
 
 use libghostty_vt::RenderState;
+use libghostty_vt::Terminal as VtTerminal;
 use libghostty_vt::kitty::graphics as kg;
 use libghostty_vt::render::{CellIteration, CellIterator, CursorVisualStyle, RowIterator};
 use libghostty_vt::style::{self, PaletteIndex, RgbColor};
@@ -80,11 +81,14 @@ impl FrameSource for LibGhosttyFrameSource<'_> {
     }
 }
 
-/// Walks the VT snapshot, invoking `visitor` on each cell.
+/// Walks the VT snapshot at `vt`, invoking `visitor` on each cell.
 /// Returns `None` if any libghostty-vt call fails (whole frame is dropped).
-fn walk(term: &mut Terminal, visitor: &mut dyn CellVisitor) -> Option<()> {
+pub(crate) fn walk_vt_cells(
+    vt: &mut VtTerminal<'static, 'static>,
+    visitor: &mut dyn CellVisitor,
+) -> Option<()> {
     let mut render_state = RenderState::new().ok()?;
-    let snapshot = render_state.update(term.vt_mut()).ok()?;
+    let snapshot = render_state.update(vt).ok()?;
     let mut rows = RowIterator::new().ok()?;
     let mut cells = CellIterator::new().ok()?;
     let mut row_iter = rows.update(&snapshot).ok()?;
@@ -120,6 +124,11 @@ fn walk(term: &mut Terminal, visitor: &mut dyn CellVisitor) -> Option<()> {
         row_idx += 1;
     }
     Some(())
+}
+
+fn resolve_bg(cell: &CellIteration<'_, '_>, style: Option<&style::Style>) -> CellColor {
+fn walk(term: &mut Terminal, visitor: &mut dyn CellVisitor) -> Option<()> {
+    walk_vt_cells(term.vt_mut(), visitor)
 }
 
 fn resolve_bg(cell: &CellIteration<'_, '_>, style: Option<&style::Style>) -> CellColor {
