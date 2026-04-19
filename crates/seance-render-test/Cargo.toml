@@ -1,0 +1,21 @@
+[package]
+name = "seance-render-test"
+version = "0.0.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+description = "Layered test harness for the seance renderer (Phase A)"
+
+[dependencies]
+seance-vt = { path = "../seance-vt" }
+libghostty-vt.workspace = true
+rand_core = "0.6"
+rand_pcg.workspace = true
+unicode-width = "0.2"
+
+[dev-dependencies]
+insta.workspace = true
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true
