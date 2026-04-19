@@ -15,24 +15,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
+      - uses: actions/setup-node@v4
         with:
-          experimental: true
-      - run: markdownlint-cli2 "**/*.md"
+          node-version: "22"
+      - run: npx --yes markdownlint-cli2 "**/*.md"
+
+  prettier:
+    name: prettier
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npx --yes prettier --check "**/*.md"
 
   fmt:
     name: cargo fmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
+      - uses: dtolnay/rust-toolchain@master
         with:
-          experimental: true
+          toolchain: "1.94.1"
+          components: rustfmt
       - run: cargo fmt --all -- --check
 
   clippy:
     name: cargo clippy
     runs-on: macos-14
+    # macOS build pipeline involves Zig + vendored ghostty sources; keep this
+    # advisory until the workflow has been validated end-to-end on CI.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: jdx/mise-action@v2
