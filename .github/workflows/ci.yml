@@ -41,17 +41,29 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
-  clippy:
-    name: cargo clippy
+  build:
+    name: cargo build
     runs-on: macos-14
-    # macOS build pipeline involves Zig + vendored ghostty sources; keep this
-    # advisory until the workflow has been validated end-to-end on CI.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: jdx/mise-action@v2
         with:
           experimental: true
+      - name: Setup vendored ghostty-src
+        run: tools/setup-ghostty-src.sh
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --all-targets
+
+  clippy:
+    name: cargo clippy
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+      - name: Install clippy component
+        run: rustup component add clippy
       - name: Setup vendored ghostty-src
         run: tools/setup-ghostty-src.sh
       - uses: Swatinem/rust-cache@v2
