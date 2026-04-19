@@ -123,16 +123,9 @@ impl PlacementVisitor for PlacementCollector<'_> {
         // Destination rect in viewport pixels. `viewport_col/row` may be
         // negative for partially scrolled placements; the rasterizer
         // clips naturally, so no CPU-side clamping is needed.
-        let dest_x =
-            self.fi.grid_padding[0] + p.viewport_col as f32 * self.fi.cell_width;
-        let dest_y =
-            self.fi.grid_padding[1] + p.viewport_row as f32 * self.fi.cell_height;
-        let dest_rect = [
-            dest_x,
-            dest_y,
-            p.pixel_width as f32,
-            p.pixel_height as f32,
-        ];
+        let dest_x = self.fi.grid_padding[0] + p.viewport_col as f32 * self.fi.cell_width;
+        let dest_y = self.fi.grid_padding[1] + p.viewport_row as f32 * self.fi.cell_height;
+        let dest_rect = [dest_x, dest_y, p.pixel_width as f32, p.pixel_height as f32];
 
         let iw = p.image_width as f32;
         let ih = p.image_height as f32;

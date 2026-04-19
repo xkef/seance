@@ -320,8 +320,16 @@ impl Terminal {
 /// Returns (0, 0) when either axis has no cells or no pixels — libghostty-vt
 /// handles zero dimensions by disabling pixel-sensitive features for that axis.
 fn cell_px(cols: u16, rows: u16, pixel_width: u16, pixel_height: u16) -> (u32, u32) {
-    let w = if cols == 0 { 0 } else { u32::from(pixel_width) / u32::from(cols) };
-    let h = if rows == 0 { 0 } else { u32::from(pixel_height) / u32::from(rows) };
+    let w = if cols == 0 {
+        0
+    } else {
+        u32::from(pixel_width) / u32::from(cols)
+    };
+    let h = if rows == 0 {
+        0
+    } else {
+        u32::from(pixel_height) / u32::from(rows)
+    };
     (w, h)
 }
 

@@ -55,12 +55,7 @@ impl ImageCache {
         self.entries.get(&image_id).map(|e| &e.bind_group)
     }
 
-    pub(crate) fn upload(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        info: &ImageInfo<'_>,
-    ) {
+    pub(crate) fn upload(&mut self, device: &Device, queue: &Queue, info: &ImageInfo<'_>) {
         if info.width == 0 || info.height == 0 {
             return;
         }

@@ -52,11 +52,7 @@ impl FrameSource for LibGhosttyFrameSource<'_> {
         let _ = walk(self.term, visitor);
     }
 
-    fn visit_placements(
-        &mut self,
-        layer: PlacementLayer,
-        visitor: &mut dyn PlacementVisitor,
-    ) {
+    fn visit_placements(&mut self, layer: PlacementLayer, visitor: &mut dyn PlacementVisitor) {
         let _ = walk_placements(self.term, layer, visitor);
         let _ = walk_virtual_placements(self.term, layer, visitor);
     }
@@ -167,17 +163,29 @@ fn walk_placements(
             continue;
         }
         let Ok(image_id) = p.image_id() else { continue };
-        let Some(image) = graphics.image(image_id) else { continue };
+        let Some(image) = graphics.image(image_id) else {
+            continue;
+        };
         let vpos = match p.viewport_pos(&image, vt) {
             Ok(Some(vp)) => vp,
             _ => continue,
         };
-        let Ok(pxs) = p.pixel_size(&image, vt) else { continue };
-        let Ok(src) = p.source_rect(&image) else { continue };
-        let Ok(placement_id) = p.placement_id() else { continue };
+        let Ok(pxs) = p.pixel_size(&image, vt) else {
+            continue;
+        };
+        let Ok(src) = p.source_rect(&image) else {
+            continue;
+        };
+        let Ok(placement_id) = p.placement_id() else {
+            continue;
+        };
         let Ok(z) = p.z() else { continue };
-        let Ok(image_width) = image.width() else { continue };
-        let Ok(image_height) = image.height() else { continue };
+        let Ok(image_width) = image.width() else {
+            continue;
+        };
+        let Ok(image_height) = image.height() else {
+            continue;
+        };
         visitor.placement(&PlacementSnapshot {
             image_id,
             placement_id,
@@ -225,7 +233,9 @@ fn walk_images(term: &Terminal, visitor: &mut dyn ImageVisitor) -> Option<()> {
         }
         seen.push(image_id);
 
-        let Some(image) = graphics.image(image_id) else { continue };
+        let Some(image) = graphics.image(image_id) else {
+            continue;
+        };
         let Ok(width) = image.width() else { continue };
         let Ok(height) = image.height() else { continue };
         let Ok(format) = image.format() else { continue };
@@ -354,9 +364,15 @@ fn walk_virtual_placements(
             let Ok(grid_cols) = p.columns() else { continue };
             let Ok(grid_rows) = p.rows() else { continue };
             let Ok(z) = p.z() else { continue };
-            let Some(image) = graphics.image(image_id) else { continue };
-            let Ok(image_width) = image.width() else { continue };
-            let Ok(image_height) = image.height() else { continue };
+            let Some(image) = graphics.image(image_id) else {
+                continue;
+            };
+            let Ok(image_width) = image.width() else {
+                continue;
+            };
+            let Ok(image_height) = image.height() else {
+                continue;
+            };
             // If the transmit didn't specify rows/cols explicitly, libghostty
             // returns 0. Fall back to one-cell-per-image-pixel, though in
             // practice chafa/timg always set C= and r=.
@@ -504,7 +520,11 @@ fn emit_virtual_run(
     layer: PlacementLayer,
     visitor: &mut dyn PlacementVisitor,
 ) {
-    let Some(info) = infos.iter().find(|(id, _)| *id == run.image_id).map(|(_, i)| *i) else {
+    let Some(info) = infos
+        .iter()
+        .find(|(id, _)| *id == run.image_id)
+        .map(|(_, i)| *i)
+    else {
         return;
     };
     if !layer_matches(layer, info.z) {

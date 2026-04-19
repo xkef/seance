@@ -111,12 +111,7 @@ pub trait FrameSource {
     /// viewport. Virtual (unicode placeholder) placements are skipped in
     /// the v1 path. Default impl emits nothing for adapters without
     /// graphics support.
-    fn visit_placements(
-        &mut self,
-        _layer: PlacementLayer,
-        _visitor: &mut dyn PlacementVisitor,
-    ) {
-    }
+    fn visit_placements(&mut self, _layer: PlacementLayer, _visitor: &mut dyn PlacementVisitor) {}
 
     /// Emit pixel payloads for images referenced by visible placements.
     ///

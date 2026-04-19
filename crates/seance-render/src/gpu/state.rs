@@ -184,12 +184,9 @@ impl GpuState {
 
     /// Collect kitty image placements + upload image textures. Call
     /// between `update_frame` and `render_frame`.
-    pub(crate) fn update_image_frame(
-        &mut self,
-        source: &mut dyn FrameSource,
-        fi: &FrameInfo,
-    ) {
-        self.images.update_frame(&self.device, &self.queue, source, fi);
+    pub(crate) fn update_image_frame(&mut self, source: &mut dyn FrameSource, fi: &FrameInfo) {
+        self.images
+            .update_frame(&self.device, &self.queue, source, fi);
     }
 
     pub(crate) fn resize(&mut self, new_size: PhysicalSize<u32>) {

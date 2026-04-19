@@ -108,7 +108,9 @@ impl ImageRenderer {
         if draws.is_empty() {
             return;
         }
-        let Some(buf) = &self.instance_buf else { return };
+        let Some(buf) = &self.instance_buf else {
+            return;
+        };
 
         pass.set_pipeline(self.pipeline.pipeline());
         pass.set_bind_group(0, uniform_bg, &[]);

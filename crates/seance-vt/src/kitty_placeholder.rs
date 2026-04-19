@@ -20,10 +20,7 @@ pub(crate) const PLACEHOLDER_CP: u32 = 0x10EEEE;
 /// Return the 0-based index of `cp` in the Kitty row/col diacritic
 /// alphabet, or `None` if `cp` is not a valid diacritic.
 pub(crate) fn diacritic_index(cp: u32) -> Option<u32> {
-    DIACRITICS
-        .binary_search(&cp)
-        .ok()
-        .map(|i| i as u32)
+    DIACRITICS.binary_search(&cp).ok().map(|i| i as u32)
 }
 
 /// Sorted diacritic codepoints used by the Kitty graphics protocol to
