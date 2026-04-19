@@ -21,11 +21,15 @@ Shell (zsh/bash)
        │
        │ CellBg[], CellText[], atlas textures
        ▼
-┌──────────────┐   3 render passes   ┌───────────┐
+┌──────────────┐   6 render steps    ┌───────────┐
 │   GpuState   │ ──────────────────► │   wgpu    │
 │  (upload +   │   bg_color          │  surface  │
-│   draw)      │   cell_bg           │           │
-└──────────────┘   cell_text         └───────────┘
+│   draw)      │   kitty.below_bg    │           │
+│              │   cell_bg           │           │
+│              │   kitty.below_text  │           │
+│              │   cell_text         │           │
+│              │   kitty.above_text  │           │
+└──────────────┘                     └───────────┘
 ```
 
 ## Crate Structure
@@ -142,13 +146,17 @@ offset 28: atlas_and_flags u32       low byte = atlas (0=gray, 1=color)
 3 bind group layouts: uniforms (group 0), bg_cells storage (group 1),
 atlas textures + sampler (group 2).
 
-3 render pipelines, all in one render pass:
+3 cell pipelines + 1 image pipeline, interleaved into one render pass
+(see Kitty Graphics below for the image layers):
 
-| Pass | Pipeline    | Vertex              | Fragment                                       | Blend              |
-|------|-------------|---------------------|-------------------------------------------------|--------------------|
-| 1    | `bg_color`  | fullscreen triangle | solid `uniforms.bg_color`                       | none (opaque)      |
-| 2    | `cell_bg`   | fullscreen triangle | per-cell bg + selection highlight + cursor       | premultiplied alpha|
-| 3    | `cell_text` | instanced quads     | atlas sample, min-contrast, cursor color swap    | premultiplied alpha|
+| Step | Pipeline             | Vertex              | Fragment                                       | Blend              |
+|------|----------------------|---------------------|-------------------------------------------------|--------------------|
+| 1    | `bg_color`           | fullscreen triangle | solid `uniforms.bg_color`                       | none (opaque)      |
+| 2    | image `below_bg`     | instanced quads     | texture sample                                  | premultiplied alpha|
+| 3    | `cell_bg`            | fullscreen triangle | per-cell bg + selection highlight + cursor       | premultiplied alpha|
+| 4    | image `below_text`   | instanced quads     | texture sample                                  | premultiplied alpha|
+| 5    | `cell_text`          | instanced quads     | atlas sample, min-contrast, cursor color swap    | premultiplied alpha|
+| 6    | image `above_text`   | instanced quads     | texture sample                                  | premultiplied alpha|
 
 **Uniforms** (`uniforms.rs`):
 
@@ -174,8 +182,51 @@ matrix, cell/grid sizes, padding, bg color, min-contrast, cursor state
 2. Upload `bg_cells` to storage buffer (recreate if size changed).
 3. Upload `text_cells` to vertex buffer (instanced).
 4. Upload atlas textures (grayscale R8, color RGBA8).
-5. Execute 3 passes in a single render pass.
+5. Execute 6 interleaved steps (cell + image passes) in a single render pass.
 6. Present.
+
+## Kitty Graphics Protocol
+
+Direct placements and unicode-placeholder (virtual) placements both
+render. Path:
+
+1. **VT adapter** (`seance-vt/frame_source.rs`) calls
+   `VtTerminal::kitty_graphics()` each frame to get the `Graphics`
+   handle, then walks `PlacementIterator` for each z-layer. For direct
+   placements, entirely-off-screen ones are filtered out. For virtual
+   placements (Kitty unicode placeholders: base char `U+10EEEE` plus
+   up to three combining diacritics from a 297-entry alphabet encoding
+   row / col / image-id-high), the adapter also walks the screen grid,
+   decodes each placeholder cell via `kitty_placeholder.rs`, and groups
+   adjacent same-image cells on one row into a run. Diacritic indices
+   follow ghostty's `graphics_unicode.zig` table. Low 24 bits of the
+   image ID come from the cell's foreground color (truecolor or palette).
+   Cells whose first codepoint is `U+10EEEE` have their text emitted
+   empty so the text pass doesn't draw tofu over the image. Non-RGBA
+   image formats (RGB, Gray, GrayAlpha) are expanded to RGBA8 before
+   emission; PNG is already decoded to RGBA by ghostty via the
+   `set_png_decoder` callback installed once in `Terminal::spawn`.
+2. **ImageRenderer** (`seance-render/image/`) maintains a wgpu texture
+   cache keyed by `image_id`. `ImageCache` dedupes uploads (same id +
+   same dimensions = touch last-seen-frame, no upload); entries are
+   evicted after `EVICT_AGE_FRAMES` (120) without reference.
+3. **Per-frame collection**: `ImageRenderer::update_frame` walks
+   placements three times (one per layer), converting
+   `(viewport_col/row, cell_width/height, pixel_width/height)` into
+   `dest_rect` in viewport pixel space. Placements within a layer are
+   z-sorted; overlapping placements draw back-to-front. One
+   `ImageInstance` per visible placement is appended to a single
+   GPU-wide buffer; per-layer draw lists carry `(image_id, instance)`
+   pairs for bind-group rebinds.
+4. **Shader** (`image.wgsl`): instanced quad, 4 vertices per draw
+   (triangle strip). Samples the per-image texture with linear filter
+   and writes premultiplied RGBA. Uses the shared cell `Uniforms` block
+   for its projection matrix.
+
+Image storage is capped at 64 MiB per terminal via
+`set_kitty_image_storage_limit`; ghostty evicts oldest images past the
+cap. Default-off for the file/temp-file/shared-mem transmission
+mediums; only inline (`t=d`) and base64 payloads are accepted.
 
 ## macOS 26 Workaround
 
@@ -185,3 +236,23 @@ SDK detection to a sysroot overlay that uses Zig's own bundled
 `libSystem.tbd` (which includes `arm64`). Run `tools/setup-sysroot.sh`
 once after cloning. This workaround can be removed once Zig ships with
 macOS 26 linker stubs.
+
+## Vendored ghostty source
+
+`libghostty-vt-sys/build.rs` respects `GHOSTTY_SOURCE_DIR`; we set it
+in `.cargo/config.toml` to `vendor/ghostty-src` so every cargo profile
+reuses one repo-local clone instead of re-fetching into each
+`target/<profile>/build/libghostty-vt-sys-*/out/` dir.
+
+The clone is also pre-patched: ghostty's `build.zig` unconditionally
+runs `xcodebuild -create-xcframework` on Darwin, which fails on hosts
+with a broken Xcode plugin load (`IDESimulatorFoundation`). The dylib
+we consume is produced by the preceding step, so the xcframework
+packaging is not needed. `tools/setup-ghostty-src.sh` clones at the
+pinned commit (must match `libghostty-vt-sys/build.rs`'s
+`GHOSTTY_COMMIT` and our git-pinned `libghostty-vt` revision) and
+rewrites the xcframework `if` guard to a dead branch. Idempotent.
+
+Run after cloning the repo, after `cargo clean`, or after bumping
+`libghostty-vt` in `Cargo.toml`. `tools/run.sh` invokes it
+automatically. `vendor/` is gitignored.

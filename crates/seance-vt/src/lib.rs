@@ -7,11 +7,15 @@
 
 mod frame;
 mod frame_source;
+mod kitty_placeholder;
 mod modes;
 pub mod selection;
 mod terminal;
 
-pub use frame::{CellColor, CellView, CellVisitor, CursorInfo, FrameSource};
+pub use frame::{
+    CellColor, CellView, CellVisitor, CursorInfo, FrameSource, ImageInfo, ImageVisitor,
+    PlacementLayer, PlacementSnapshot, PlacementVisitor,
+};
 pub use frame_source::LibGhosttyFrameSource;
 pub use modes::TerminalModes;
 pub use selection::GridPos;

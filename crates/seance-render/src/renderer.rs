@@ -106,6 +106,9 @@ impl TerminalRenderer {
             self.surface_height,
             &self.theme,
         );
+        if let Some(fi) = self.cell_builder.last_frame() {
+            self.gpu.update_image_frame(source, fi);
+        }
     }
 
     pub fn render(&mut self, inputs: &RenderInputs) -> bool {

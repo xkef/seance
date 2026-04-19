@@ -3,7 +3,10 @@
 use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::rc::Rc;
+use std::sync::Once;
 
+use libghostty_vt::alloc::{Allocator, Bytes};
+use libghostty_vt::kitty::graphics::{self, DecodePng, DecodedImage};
 use libghostty_vt::render::{CellIterator, RowIterator};
 use libghostty_vt::terminal::{Mode, ScrollViewport};
 use libghostty_vt::{RenderState, Terminal as VtTerminal, TerminalOptions};
@@ -15,6 +18,53 @@ use crate::selection::{GridPos, Selection, SelectionGranularity};
 const READ_CHUNK: usize = 4096;
 const MAX_SCROLLBACK: usize = 10_000;
 
+/// Kitty image storage cap per terminal. Non-zero enables the protocol;
+/// ghostty evicts oldest images when we would exceed this limit.
+const KITTY_IMAGE_STORAGE_LIMIT_BYTES: u64 = 64 * 1024 * 1024;
+
+/// PNG decoder for the Kitty graphics protocol.
+///
+/// Ghostty's storage accepts RGBA8 pixels, so palette and grayscale
+/// inputs are expanded; 16-bit depths are stripped to 8-bit.
+struct PngDecoder;
+
+impl DecodePng for PngDecoder {
+    fn decode_png<'alloc>(
+        &mut self,
+        alloc: &'alloc Allocator<'_>,
+        data: &[u8],
+    ) -> Option<DecodedImage<'alloc>> {
+        use png::{Decoder, Transformations};
+
+        let mut decoder = Decoder::new(std::io::Cursor::new(data));
+        decoder.set_transformations(Transformations::ALPHA | Transformations::STRIP_16);
+
+        let mut reader = decoder.read_info().ok()?;
+        let buf_size = reader.output_buffer_size()?;
+        let mut scratch = vec![0u8; buf_size];
+        let info = reader.next_frame(&mut scratch).ok()?;
+
+        let mut bytes = Bytes::new_with_alloc(alloc, info.buffer_size()).ok()?;
+        bytes.copy_from_slice(&scratch[..info.buffer_size()]);
+
+        Some(DecodedImage {
+            width: info.width,
+            height: info.height,
+            data: bytes,
+        })
+    }
+}
+
+/// Install the PNG decoder. Safe to call repeatedly; only takes effect once.
+/// The decoder is thread-local inside libghostty-vt, so this must run on the
+/// thread that owns the terminal.
+fn install_png_decoder_once() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let _ = graphics::set_png_decoder(Some(PngDecoder));
+    });
+}
+
 /// A terminal session: VT emulator, PTY, and text selection state.
 pub struct Terminal {
     vt: Box<VtTerminal<'static, 'static>>,
@@ -24,11 +74,17 @@ pub struct Terminal {
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
     selection: Option<Selection>,
+    /// Per-cell pixel dimensions as last passed to `vt.resize()`. Needed
+    /// to convert virtual-placement cell coordinates into pixel rects.
+    cell_width_px: u32,
+    cell_height_px: u32,
 }
 
 impl Terminal {
     /// Spawn a new shell in a PTY.
     pub fn spawn(cols: u16, rows: u16, pixel_width: u16, pixel_height: u16) -> Option<Self> {
+        install_png_decoder_once();
+
         let mut vt = Box::new(
             VtTerminal::new(TerminalOptions {
                 cols,
@@ -37,6 +93,21 @@ impl Terminal {
             })
             .ok()?,
         );
+
+        // Enable Kitty graphics storage. Zero disables it entirely;
+        // ghostty needs a non-zero cap and cell pixel dimensions to
+        // compute placement grid sizes (set via resize below).
+        vt.set_kitty_image_storage_limit(KITTY_IMAGE_STORAGE_LIMIT_BYTES)
+            .ok()?;
+        // Allow file / temp-file / shared-mem transmission mediums.
+        // Yazi and similar previewers default to `t=t` (temp file) for
+        // anything over a few KB; disabling these makes the transmit
+        // silently fail, leaving no image in storage to render.
+        let _ = vt.set_kitty_image_from_file_allowed(true);
+        let _ = vt.set_kitty_image_from_temp_file_allowed(true);
+        let _ = vt.set_kitty_image_from_shared_mem_allowed(true);
+        let (cell_w, cell_h) = cell_px(cols, rows, pixel_width, pixel_height);
+        vt.resize(cols, rows, cell_w, cell_h).ok()?;
 
         let response_buf = Rc::new(RefCell::new(Vec::new()));
         let buf = Rc::clone(&response_buf);
@@ -76,6 +147,8 @@ impl Terminal {
             master: pair.master,
             child,
             selection: None,
+            cell_width_px: cell_w,
+            cell_height_px: cell_h,
         })
     }
 
@@ -108,7 +181,10 @@ impl Terminal {
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16, pixel_width: u16, pixel_height: u16) {
-        let _ = self.vt.resize(cols, rows, 0, 0);
+        let (cell_w, cell_h) = cell_px(cols, rows, pixel_width, pixel_height);
+        self.cell_width_px = cell_w;
+        self.cell_height_px = cell_h;
+        let _ = self.vt.resize(cols, rows, cell_w, cell_h);
         let _ = self.master.resize(PtySize {
             rows,
             cols,
@@ -227,6 +303,26 @@ impl Terminal {
     pub(crate) fn vt_mut(&mut self) -> &mut VtTerminal<'static, 'static> {
         &mut self.vt
     }
+
+    pub(crate) fn vt(&self) -> &VtTerminal<'static, 'static> {
+        &self.vt
+    }
+
+    /// Cell pixel dimensions as last passed to `vt.resize()`. Both are
+    /// `0` until the first resize, in which case virtual placements
+    /// can't be rendered (no way to size them).
+    pub(crate) fn cell_pixels(&self) -> (u32, u32) {
+        (self.cell_width_px, self.cell_height_px)
+    }
+}
+
+/// Derive cell pixel dimensions from a viewport's total pixel size.
+/// Returns (0, 0) when either axis has no cells or no pixels — libghostty-vt
+/// handles zero dimensions by disabling pixel-sensitive features for that axis.
+fn cell_px(cols: u16, rows: u16, pixel_width: u16, pixel_height: u16) -> (u32, u32) {
+    let w = if cols == 0 { 0 } else { u32::from(pixel_width) / u32::from(cols) };
+    let h = if rows == 0 { 0 } else { u32::from(pixel_height) / u32::from(rows) };
+    (w, h)
 }
 
 fn column_range(

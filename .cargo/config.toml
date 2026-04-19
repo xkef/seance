@@ -1,2 +1,6 @@
 [env]
 MACOSX_DEPLOYMENT_TARGET = "13.0"
+# Point libghostty-vt-sys at our repo-local, pre-patched ghostty clone.
+# Populate via `tools/setup-ghostty-src.sh`. `relative = true` resolves
+# against this config file's directory, yielding `<repo>/vendor/ghostty-src`.
+GHOSTTY_SOURCE_DIR = { value = "vendor/ghostty-src", relative = true }

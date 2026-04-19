@@ -1068,19 +1068,18 @@ checksum = "48f5d2a454e16a5ea0f4ced81bd44e4cfc7bd3a507b61887c99fd3538b28e4af"
 [[package]]
 name = "libghostty-vt"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8afe5cc9ae303133220e530b28b7addbbf591160bb1564b88f7ee61387fee74"
+source = "git+https://github.com/Uzaaft/libghostty-rs?rev=f27655ad#f27655ad18a6ef04d7d9cec2779e57dab11b3405"
 dependencies = [
  "bitflags 2.11.0",
  "int-enum",
  "libghostty-vt-sys",
+ "png",
 ]
 
 [[package]]
 name = "libghostty-vt-sys"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aee97068da1692162c4523d54843bdcb43fecf086a9ee412a3375817e433faca"
+source = "git+https://github.com/Uzaaft/libghostty-rs?rev=f27655ad#f27655ad18a6ef04d7d9cec2779e57dab11b3405"
 
 [[package]]
 name = "libloading"
@@ -2076,6 +2075,8 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "libghostty-vt",
+ "log",
+ "png",
  "portable-pty",
 ]
 

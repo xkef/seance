@@ -1,3 +1,4 @@
 /target
 .claude-notes/
 tools/sysroot/
+vendor/

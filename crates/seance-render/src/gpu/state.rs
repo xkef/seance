@@ -7,9 +7,11 @@ use winit::window::Window;
 
 use super::pipeline::Pipelines;
 use super::uniforms::Uniforms;
+use crate::image::ImageRenderer;
 use crate::renderer::RenderInputs;
 use crate::text::{CellText, FrameInfo, GlyphAtlas};
 use crate::theme::Theme;
+use seance_vt::{FrameSource, PlacementLayer};
 
 const ATLAS_GRAYSCALE_FORMAT: TextureFormat = TextureFormat::R8Unorm;
 const ATLAS_COLOR_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
@@ -32,6 +34,8 @@ pub(crate) struct GpuState {
     atlas_color: Option<Texture>,
     atlas_bind_group: Option<BindGroup>,
     atlas_sampler: Sampler,
+
+    images: ImageRenderer,
 
     size: PhysicalSize<u32>,
     surface_dirty: bool,
@@ -127,6 +131,7 @@ impl GpuState {
         surface.configure(&device, &config);
 
         let pipelines = Pipelines::new(&device, format);
+        let images = ImageRenderer::new(&device, format, &pipelines.uniform_bgl);
 
         let uniform_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("uniforms"),
@@ -171,9 +176,20 @@ impl GpuState {
             atlas_color: None,
             atlas_bind_group: None,
             atlas_sampler,
+            images,
             size,
             surface_dirty: false,
         }
+    }
+
+    /// Collect kitty image placements + upload image textures. Call
+    /// between `update_frame` and `render_frame`.
+    pub(crate) fn update_image_frame(
+        &mut self,
+        source: &mut dyn FrameSource,
+        fi: &FrameInfo,
+    ) {
+        self.images.update_frame(&self.device, &self.queue, source, fi);
     }
 
     pub(crate) fn resize(&mut self, new_size: PhysicalSize<u32>) {
@@ -359,30 +375,47 @@ impl GpuState {
         pass.set_bind_group(0, &self.uniform_bind_group, &[]);
         pass.draw(0..3, 0..1);
 
+        // Kitty images below the cell background layer.
+        self.images
+            .record_layer(&mut pass, PlacementLayer::BelowBg, &self.uniform_bind_group);
+
         // Pass 2: per-cell backgrounds + selection + cursor shapes.
-        let Some(bg_bg) = &self.bg_cells.bind_group else {
-            return;
-        };
-        pass.set_pipeline(&self.pipelines.cell_bg);
-        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-        pass.set_bind_group(1, bg_bg, &[]);
-        pass.draw(0..3, 0..1);
+        let maybe_bg_bg = self.bg_cells.bind_group.as_ref();
+        if let Some(bg_bg) = maybe_bg_bg {
+            pass.set_pipeline(&self.pipelines.cell_bg);
+            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            pass.set_bind_group(1, bg_bg, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
+        // Kitty images between cell bg and text.
+        self.images.record_layer(
+            &mut pass,
+            PlacementLayer::BelowText,
+            &self.uniform_bind_group,
+        );
 
         // Pass 3: text (instanced quads).
-        if self.text_instance_count == 0 {
-            return;
+        if let (Some(bg_bg), Some(atlas_bg), Some(text_buf)) = (
+            maybe_bg_bg,
+            self.atlas_bind_group.as_ref(),
+            self.text_instances.buffer.as_ref(),
+        ) && self.text_instance_count > 0
+        {
+            pass.set_pipeline(&self.pipelines.cell_text);
+            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            pass.set_bind_group(1, bg_bg, &[]);
+            pass.set_bind_group(2, atlas_bg, &[]);
+            pass.set_vertex_buffer(0, text_buf.slice(..));
+            pass.draw(0..4, 0..self.text_instance_count);
         }
-        let (Some(atlas_bg), Some(text_buf)) =
-            (&self.atlas_bind_group, &self.text_instances.buffer)
-        else {
-            return;
-        };
-        pass.set_pipeline(&self.pipelines.cell_text);
-        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-        pass.set_bind_group(1, bg_bg, &[]);
-        pass.set_bind_group(2, atlas_bg, &[]);
-        pass.set_vertex_buffer(0, text_buf.slice(..));
-        pass.draw(0..4, 0..self.text_instance_count);
+
+        // Kitty images above the text layer.
+        self.images.record_layer(
+            &mut pass,
+            PlacementLayer::AboveText,
+            &self.uniform_bind_group,
+        );
     }
 }
 

@@ -7,6 +7,7 @@
 //! cosmic-text for parley or a hand-rolled stack.
 
 mod gpu;
+mod image;
 mod renderer;
 mod text;
 mod theme;
