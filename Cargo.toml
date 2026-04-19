@@ -7,6 +7,7 @@ members = [
     "crates/seance-config",
     "crates/seance-app",
     "crates/seance-bench",
+    "crates/seance-render-test",
 ]
 
 [workspace.package]
@@ -22,3 +23,6 @@ log = "0.4"
 env_logger = "0.11"
 libc = "0.2"
 libghostty-vt = { git = "https://github.com/Uzaaft/libghostty-rs", rev = "dfac6f3e", default-features = false, features = ["kitty-graphics", "png"] }
+insta = { version = "1", features = ["glob", "yaml"] }
+pretty_assertions = "1"
+rand_pcg = "0.3"

@@ -1,0 +1,31 @@
+---
+source: crates/seance-render-test/tests/layer4_frame.rs
+expression: world.dump_frame()
+---
+╭────────────────────────────────────────╮
+│red green blue true                     │
+│                                        │
+│                                        │
+╰────────────────────────────────────────╯
+cells:
+  (0,0) "r" fg=#cc6666 bg=default
+  (0,1) "e" fg=#cc6666 bg=default
+  (0,2) "d" fg=#cc6666 bg=default
+  (0,3) " " fg=#cc6666 bg=default
+  (0,4) "g" fg=#b5bd68 bg=default
+  (0,5) "r" fg=#b5bd68 bg=default
+  (0,6) "e" fg=#b5bd68 bg=default
+  (0,7) "e" fg=#b5bd68 bg=default
+  (0,8) "n" fg=#b5bd68 bg=default
+  (0,9) " " fg=#b5bd68 bg=default
+  (0,10) "b" fg=#81a2be bg=default
+  (0,11) "l" fg=#81a2be bg=default
+  (0,12) "u" fg=#81a2be bg=default
+  (0,13) "e" fg=#81a2be bg=default
+  (0,14) " " fg=#81a2be bg=default
+  (0,15) "t" fg=#64c832 bg=default
+  (0,16) "r" fg=#64c832 bg=default
+  (0,17) "u" fg=#64c832 bg=default
+  (0,18) "e" fg=#64c832 bg=default
+cursor: (1,19) visible=true
+selection: none

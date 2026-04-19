@@ -12,6 +12,9 @@ mod modes;
 pub mod selection;
 mod terminal;
 
+#[doc(hidden)]
+pub mod test_support;
+
 pub use frame::{
     CellAttrs, CellColor, CellView, CellVisitor, CursorInfo, CursorShape, FrameSource, ImageInfo,
     ImageVisitor, PlacementLayer, PlacementSnapshot, PlacementVisitor,
