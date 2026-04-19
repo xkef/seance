@@ -1,258 +1,290 @@
 # Architecture
 
-## Data Flow
+This document describes both **what is built** and **what is planned**. Each
+section is tagged `[IMPLEMENTED]` (present in `main`/feature branches) or
+`[PLANNED: M<n>]` (scheduled under a GitHub epic, linked inline).
+
+Epic index:
+
+- **[M1][m1]** — Config & theme foundations
+- **[M2][m2]** — Rendering performance (shape cache, dirty rows, sync output, deadline redraw)
+- **[M3][m3]** — Visual fidelity (procedural glyphs, WCAG contrast, clipboard)
+- **[M4][m4]** — Z-layer architecture refactor
+- **[M5][m5]** — Image protocols (Kitty graphics, animated frames)
+- **[M6][m6]** — Multiplexing (`seance-mux` crate, tabs, splits, floating modals)
+- **[M7][m7]** — Custom shaders (Shadertoy-compatible post-pass)
+
+[m1]: https://github.com/xkef/seance/issues/4
+[m2]: https://github.com/xkef/seance/issues/5
+[m3]: https://github.com/xkef/seance/issues/6
+[m4]: https://github.com/xkef/seance/issues/7
+[m5]: https://github.com/xkef/seance/issues/8
+[m6]: https://github.com/xkef/seance/issues/9
+[m7]: https://github.com/xkef/seance/issues/10
+
+---
+
+## Pipeline overview
 
 ```
-Shell (zsh/bash)
-     │
-     │ PTY (pseudo-terminal)
-     ▼
-┌─────────────┐    raw bytes     ┌──────────────┐
-│  Terminal   │ ◄──────────────► │ libghostty-vt│
-│  (PTY I/O)  │    VT parsing    │  (C via Zig) │
-└──────┬──────┘                  └──────────────┘
-       │
-       │ RenderState / RowIterator / CellIterator
-       ▼
-┌──────────────┐   shape + rasterize   ┌─────────────┐
-│ CellBuilder  │ ◄───────────────────► │ cosmic-text │
-│ (frame gen)  │   CacheKey→AtlasEntry │ + SwashCache│
-└──────┬───────┘                       └─────────────┘
-       │
-       │ CellBg[], CellText[], atlas textures
-       ▼
-┌──────────────┐   6 render steps    ┌───────────┐
-│   GpuState   │ ──────────────────► │   wgpu    │
-│  (upload +   │   bg_color          │  surface  │
-│   draw)      │   kitty.below_bg    │           │
-│              │   cell_bg           │           │
-│              │   kitty.below_text  │           │
-│              │   cell_text         │           │
-│              │   kitty.above_text  │           │
-└──────────────┘                     └───────────┘
+┌─ input ──────────────────────────────────────────────────────────────┐
+│ winit event loop → seance-input                                      │
+│   key: KeyboardEvent → libghostty-vt key encoder → utf-8 bytes       │
+│   mouse: wheel/click → SGR 1006 encoding → bytes                     │
+│                           │                                          │
+│                           ▼                                          │
+│                       master PTY fd ──── write ────▶ shell           │
+└──────────────────────────────────────────────────────────────────────┘
+
+┌─ PTY read pump ──────────────────────────────────────────────────────┐
+│ MasterPty.read() → raw bytes                                         │
+│ libghostty-vt.write() → VT state machine mutates grid                │
+│ DEC 2026 synchronized output [PLANNED: M2]                           │
+│ row-dirty bitmap [PLANNED: M2]                                       │
+└──────────────────────────────────────────────────────────────────────┘
+
+┌─ render pass (wakes on dirty + animation deadline [PLANNED: M2]) ────┐
+│ rebuild_cells(only_dirty_rows [PLANNED: M2]):                        │
+│   for each row: run-iterator → TextRuns                              │
+│     shape_cache.get_or_shape(run_hash)  [PLANNED: M2]                │
+│       cosmic-text Buffer::shape_until_scroll                         │
+│     for each glyph:                                                  │
+│       procedural sprite registry [PLANNED: M3]                       │
+│       glyph_cache.get_or_insert(CacheKey)                            │
+│         miss → SwashCache → bitmap → etagere atlas                    │
+│                                                                      │
+│ emit quads into per-layer vertex buffers [PLANNED: M4]               │
+│ single render pass → N pipeline switches                             │
+│ optional post-pass (custom shaders, ping-pong) [PLANNED: M7]         │
+│ present()                                                            │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-## Crate Structure
+---
 
-- **`seance-app`** — entry point. Owns the winit event loop, `Window`,
-  `App` struct. Drives PTY polling at ~250 Hz via `about_to_wait`,
-  redraws on dirty. Handles keyboard/mouse dispatch.
-- **`seance-terminal`** — the core. Contains `Terminal` (VT + PTY),
-  `TerminalRenderer` (font + GPU), and all submodules.
-- **`seance-input`** — translates winit key/mouse events into VT escape
-  sequences using libghostty-vt's key/mouse encoders. Handles Cmd
-  shortcuts (quit, copy, paste, font size).
+## Crate structure
 
-## Terminal (VT + PTY)
+| Crate | Owns | Status |
+|---|---|---|
+| `seance-app` | winit event loop, `App`, render-thread driver | [IMPLEMENTED] |
+| `seance-input` | winit → VT key/mouse encoding (via libghostty-vt) | [IMPLEMENTED] |
+| `seance-render` | font pipeline, GPU pipelines, GlyphAtlas | [IMPLEMENTED] |
+| `seance-vt` | libghostty-vt wrapper, portable-pty PTY, selection | [IMPLEMENTED] |
+| `seance-mux` | Domain → Window → Tab → SplitTree → Pane | [PLANNED: [M6][m6]] |
 
-`terminal.rs` wraps:
+---
 
-- **libghostty-vt `VtTerminal`** — the VT state machine. Receives raw
-  bytes via `vt_write()`, maintains the cell grid, cursor, modes,
-  scrollback.
-- **portable-pty** — spawns a shell, provides a `MasterPty` with
-  non-blocking reader/writer.
-- **Selection** — character/word/line selection state with `GridPos`
-  ranges.
+## VT layer (`seance-vt`)
 
-The `poll()` method reads from the PTY fd (non-blocking, up to 4096
-bytes per call), feeds data to the VT emulator, and flushes any VT
-response bytes (device status reports etc.) back to the PTY.
+- **libghostty-vt** [IMPLEMENTED] — VT state machine via FFI. Handles CSI/OSC/DCS, alt screen, scrollback, mouse modes, Kitty keyboard.
+- **portable-pty** [IMPLEMENTED] — cross-platform PTY (ConPTY on Windows).
+- **FrameSource** trait [IMPLEMENTED] — exposes `visit_cells()` to the renderer.
+- **Row-dirty flags** [PLANNED: [M2][m2]] — add `dirty_rows()` iterator so the renderer can skip unchanged rows.
+- **DEC 2026 synchronized output** [PLANNED: [M2][m2]] — `is_sync_active()` + timeout, suppress rebuild while mode is set.
+- **OSC 52 clipboard** [PLANNED: [M3][m3]] — read/write with paste-protection prompt.
+- **Kitty graphics protocol** [PLANNED: [M5][m5]] — transmission, placements, virtual placeholders (U+10EEEE).
 
-## Renderer
+---
 
-`TerminalRenderer` in `renderer.rs` bridges VT state and the GPU:
+## Renderer (`seance-render`)
 
-```
-TerminalRenderer
-├── GlyphCache        (font system + atlas + glyph map)
-├── CellBuilder       (VT → GPU buffer conversion)
-├── GpuState          (wgpu device, surface, pipelines)
-├── Theme             (colors, palette)
-├── Overlay           (cursor shape/pos, selection range)
-└── cell_size, grid_padding, surface dimensions
-```
+### Font pipeline
 
-### Font Pipeline (`font/`)
+- **cosmic-text** [IMPLEMENTED] — wraps fontdb + rustybuzz + bidi. Shapes grapheme runs per-cell.
+- **SwashCache** [IMPLEMENTED] — rasterizes outlines (COLR v0/v1, SVG, CBDT).
+- **GlyphAtlas** [IMPLEMENTED] — two planes: grayscale R8 (2048×2048) and color RGBA8 (1024×1024). `etagere` rectangle packing, per-plane `dirty` flag.
+- **GlyphCache** [IMPLEMENTED] — `FxHashMap<cosmic_text::CacheKey, AtlasEntry>`.
+- **Shape cache** keyed by `(font, style, codepoint_run_hash)` [PLANNED: [M2][m2]] — bucketed LRU, avoids re-shaping unchanged rows across frames.
+- **Procedural sprite registry** (codepoints > U+10FFFF, U+2500–U+259F, U+E0B0–U+E0B3, legacy computing, braille) [PLANNED: [M3][m3]] — rasterized via `tiny-skia`, intercepted before cosmic-text shaping.
 
-**FontSystem** (`system.rs`):
+### CellBuilder
 
-- Wraps `cosmic_text::FontSystem` (discovers system fonts via fontdb)
-  and `SwashCache` (glyph rasterizer).
-- Computes `CellMetrics` by shaping a single "M" glyph: `cell_width` =
-  advance, `cell_height` = line height (font_size × 1.2), `baseline` =
-  80% of cell height.
-- All metrics are in physical pixels (font_size × scale).
+- **Current** [IMPLEMENTED] — iterates entire VT grid each frame, shapes every visible cell, writes `text_cells` + `bg_cells` vertex/SSBO data.
+- **Target** — takes `&[PositionedPane]` [PLANNED: [M6][m6]], only iterates dirty rows [PLANNED: [M2][m2]], skips shape when cached [PLANNED: [M2][m2]].
 
-**GlyphAtlas** (`atlas.rs`):
+### CellText instance layout (matches WGSL, 32 bytes)
 
-- Two planes: **grayscale** (2048×2048, R8, 1 bpp) for regular text,
-  **color** (1024×1024, RGBA8, 4 bpp) for emoji.
-- Each plane uses `etagere::AtlasAllocator` for rectangle packing.
-- `insert()` allocates a rectangle, copies the bitmap row-by-row into
-  the atlas data buffer, marks dirty.
+| Offset | Field | Type | Purpose |
+|---|---|---|---|
+| 0  | `glyph_pos`       | `u32×2` | atlas pixel coords |
+| 8  | `glyph_size`      | `u32×2` | bitmap dimensions |
+| 16 | `bearings`        | `i16×2` | x/y bearing |
+| 20 | `grid_pos`        | `u16×2` | column, row |
+| 24 | `color`           | `u8×4`  | RGBA foreground (Unorm8x4) |
+| 28 | `atlas_and_flags` | `u32`   | low byte: atlas (0=gray,1=color); byte 1: flags (bit 0=cursor) |
 
-**GlyphCache** (`cache.rs`):
+---
 
-- `HashMap<cosmic_text::CacheKey, AtlasEntry>` with FxHash for speed.
-- `get_or_insert(key)`: on miss, calls `SwashCache::get_image()` to
-  rasterize the glyph, inserts into atlas, stores the entry (atlas
-  position, size, bearings, color flag).
-- On font size change: clears the map and resets both atlas planes.
+## GPU layers
 
-**CellBuilder** (`cell_builder.rs`):
+### Current pipeline [IMPLEMENTED]
 
-Per-frame work. `build_frame()` does:
+One `wgpu::RenderPass` with 3 pipelines sharing 3 bind groups (uniforms / bg_cells SSBO / atlas textures + sampler):
 
-1. `RenderState::new()` → `render_state.update(vt)` → snapshot of the
-   VT grid.
-2. Iterates every row/cell via `RowIterator`/`CellIterator`.
-3. **Background**: reads `cell.bg_color()` or resolves `style.bg_color`
-   against the theme palette → pushes `[u8; 4]` RGBA to
-   `bg_cells[row * cols + col]`.
-4. **Text**: reads `cell.graphemes()`, shapes with cosmic-text
-   (`Buffer::new` → `set_text` → `shape_until_scroll`), gets `CacheKey`
-   for each shaped glyph, calls `glyph_cache.get_or_insert()` → builds
-   a `CellText` struct.
-5. Computes grid padding (center the grid in the surface).
-6. Returns `FrameInfo` (cell size, grid dims, padding, bg color, cursor
-   state).
+| Pass | Pipeline | Vertex | Fragment | Blend |
+|---|---|---|---|---|
+| 1 | `bg_color`  | fullscreen triangle | solid uniforms.bg_color | none |
+| 2 | `cell_bg`   | fullscreen triangle | per-cell bg from SSBO + selection + cursor shapes | premultiplied alpha |
+| 3 | `cell_text` | instanced quads      | atlas sample, min-contrast, cursor color swap | premultiplied alpha |
 
-**CellText layout** (32 bytes, matches WGSL vertex buffer):
+### Target layer stack [PLANNED: [M4][m4]]
+
+`RenderLayer` enum backed by per-layer triple vertex buffers, sorted CPU-side, no depth buffer:
 
 ```
-offset  0: glyph_pos      [u32; 2]   atlas pixel coords
-offset  8: glyph_size     [u32; 2]   bitmap dimensions
-offset 16: bearings       [i16; 2]   x/y bearing for positioning
-offset 20: grid_pos       [u16; 2]   terminal column, row
-offset 24: color          [u8; 4]    RGBA foreground (Unorm8x4)
-offset 28: atlas_and_flags u32       low byte = atlas (0=gray, 1=color)
-                                      byte 1 = flags (bit 0 = cursor glyph)
+Layer 0  BgImage
+Layer 1  BgFill
+Layer 2  KittyUnder        ← Kitty graphics z < min
+Layer 3  CellBg             ← fullscreen tri + cells_bg SSBO
+Layer 4  KittyMid           ← Kitty graphics 0 > z >= min
+Layer 5  CellText           ← glyphs + sprite underlines + cursor glyph
+Layer 6  KittyOver          ← Kitty graphics z >= 0
+Layer 7  CursorOver         ← cursor-over-text sprite
+Layer 8  Selection          ← selection rect overlay
+Layer 9  StatusBar/TabBar   ← [PLANNED: M4/M6]
+Layer 10 Modal              ← command palette, char select [PLANNED: M6]
+Layer 11 ImePreedit         ← inline IME composition [PLANNED: M6]
 ```
 
-### GPU Pipeline (`gpu/`)
+### Offscreen post-pass infrastructure [PLANNED: [M4][m4] + [M7][m7]]
 
-**GpuState** (`state.rs`):
+Front/back `bgra8unorm_srgb` render textures sized to the surface. All layers target `back`; optional ping-pong of user-supplied Shadertoy-compatible shaders; final blit to the drawable.
 
-- Creates wgpu device with `HighPerformance` adapter, `AutoVsync`
-  present mode.
-- Surface format: non-sRGB (e.g. `Bgra8Unorm`) for gamma-space alpha
-  blending.
-- On macOS: sets `CAMetalLayer.presentsWithTransaction = true` to
-  prevent stretching during live resize.
+### Atlas upload
 
-**Pipelines** (`pipeline.rs`):
+`wgpu::Queue::write_texture` per inserted glyph. Migrate to dirty-sub-rect batching [PLANNED: [M2][m2]].
 
-3 bind group layouts: uniforms (group 0), bg_cells storage (group 1),
-atlas textures + sampler (group 2).
+---
 
-3 cell pipelines + 1 image pipeline, interleaved into one render pass
-(see Kitty Graphics below for the image layers):
+## Event loop & redraw
 
-| Step | Pipeline             | Vertex              | Fragment                                       | Blend              |
-|------|----------------------|---------------------|-------------------------------------------------|--------------------|
-| 1    | `bg_color`           | fullscreen triangle | solid `uniforms.bg_color`                       | none (opaque)      |
-| 2    | image `below_bg`     | instanced quads     | texture sample                                  | premultiplied alpha|
-| 3    | `cell_bg`            | fullscreen triangle | per-cell bg + selection highlight + cursor       | premultiplied alpha|
-| 4    | image `below_text`   | instanced quads     | texture sample                                  | premultiplied alpha|
-| 5    | `cell_text`          | instanced quads     | atlas sample, min-contrast, cursor color swap    | premultiplied alpha|
-| 6    | image `above_text`   | instanced quads     | texture sample                                  | premultiplied alpha|
+### Current [IMPLEMENTED]
 
-**Uniforms** (`uniforms.rs`):
+`ControlFlow::wait_duration(POLL_INTERVAL = 4ms)` — 250 Hz PTY poll, redraw only when `content_dirty`, `AutoVsync` surface present mode.
 
-256-byte struct matching the WGSL `Uniforms`. Contains projection
-matrix, cell/grid sizes, padding, bg color, min-contrast, cursor state
-(VT cursor + overlay cursor), selection range.
+### Target [PLANNED: [M2][m2]]
 
-**Shaders** (`cell.wgsl`):
+Deadline-scheduled: one `Timer` at `min(next_due)` across all animation sources — cursor blink, SGR blink, bell, Kitty GIF frames, DEC 2026 sync timeout, custom-shader animation. Idle terminal = 0 fps. Modelled on WezTerm's `has_animation: RefCell<Option<Instant>>` pattern.
 
-- `fs_cell_bg`: reads `bg_cells[row * cols + col]`, blends selection
-  color if cell is in selection range, draws cursor shapes
-  (block/underline/bar) for the overlay cursor.
-- `vs_cell_text`: positions each glyph quad using
-  `cell_size * grid_pos + bearings + padding`. Swaps foreground to
-  cursor color when at cursor position.
-- `fs_cell_text`: samples grayscale atlas (alpha mask × fg color) or
-  color atlas (direct RGBA). Applies WCAG min-contrast correction
-  against the cell's background.
+---
 
-**Per-frame GPU work** in `render_frame()`:
+## Multiplexing model [PLANNED: [M6][m6]]
 
-1. Write uniforms buffer.
-2. Upload `bg_cells` to storage buffer (recreate if size changed).
-3. Upload `text_cells` to vertex buffer (instanced).
-4. Upload atlas textures (grayscale R8, color RGBA8).
-5. Execute 6 interleaved steps (cell + image passes) in a single render pass.
-6. Present.
+New `seance-mux` crate:
 
-## Kitty Graphics Protocol
+```
+Domain (trait)                       ← LocalDomain wraps portable-pty
+  └─ Window
+       └─ Tab
+            └─ SplitTree = Leaf(Pane) | Split(dir, ratio, left, right)
+```
 
-Direct placements and unicode-placeholder (virtual) placements both
-render. Path:
+`fn panes_positioned(&self, pixel_rect: Rect) -> Vec<PositionedPane>` walks the tree and emits per-pane `{ cell_rect, pixel_rect, is_active, pane }`. `CellBuilder` offsets `grid_pos` by each pane's top-left. **All panes render into one framebuffer** — no render-target-per-pane.
 
-1. **VT adapter** (`seance-vt/frame_source.rs`) calls
-   `VtTerminal::kitty_graphics()` each frame to get the `Graphics`
-   handle, then walks `PlacementIterator` for each z-layer. For direct
-   placements, entirely-off-screen ones are filtered out. For virtual
-   placements (Kitty unicode placeholders: base char `U+10EEEE` plus
-   up to three combining diacritics from a 297-entry alphabet encoding
-   row / col / image-id-high), the adapter also walks the screen grid,
-   decodes each placeholder cell via `kitty_placeholder.rs`, and groups
-   adjacent same-image cells on one row into a run. Diacritic indices
-   follow ghostty's `graphics_unicode.zig` table. Low 24 bits of the
-   image ID come from the cell's foreground color (truecolor or palette).
-   Cells whose first codepoint is `U+10EEEE` have their text emitted
-   empty so the text pass doesn't draw tofu over the image. Non-RGBA
-   image formats (RGB, Gray, GrayAlpha) are expanded to RGBA8 before
-   emission; PNG is already decoded to RGBA by ghostty via the
-   `set_png_decoder` callback installed once in `Terminal::spawn`.
-2. **ImageRenderer** (`seance-render/image/`) maintains a wgpu texture
-   cache keyed by `image_id`. `ImageCache` dedupes uploads (same id +
-   same dimensions = touch last-seen-frame, no upload); entries are
-   evicted after `EVICT_AGE_FRAMES` (120) without reference.
-3. **Per-frame collection**: `ImageRenderer::update_frame` walks
-   placements three times (one per layer), converting
-   `(viewport_col/row, cell_width/height, pixel_width/height)` into
-   `dest_rect` in viewport pixel space. Placements within a layer are
-   z-sorted; overlapping placements draw back-to-front. One
-   `ImageInstance` per visible placement is appended to a single
-   GPU-wide buffer; per-layer draw lists carry `(image_id, instance)`
-   pairs for bind-group rebinds.
-4. **Shader** (`image.wgsl`): instanced quad, 4 vertices per draw
-   (triangle strip). Samples the per-image texture with linear filter
-   and writes premultiplied RGBA. Uses the shared cell `Uniforms` block
-   for its projection matrix.
+- Split borders: 1px quads via floating-quad emitter (`RenderLayer::Selection`).
+- Inactive-pane dimming: shader uniform `inactive_pane_hsb: vec3<f32>`, applied to fg when `pane_idx != active_pane_idx`.
+- Tab bar: reserved row rendered through the status-line path.
+- Floating modals (palette, char select): `taffy` box-model → `RenderLayer::Modal`.
+- IME preedit: winit `Ime::Preedit` → shape inline at cursor column, `RenderLayer::ImePreedit`.
 
-Image storage is capped at 64 MiB per terminal via
-`set_kitty_image_storage_limit`; ghostty evicts oldest images past the
-cap. Default-off for the file/temp-file/shared-mem transmission
-mediums; only inline (`t=d`) and base64 payloads are accepted.
+---
 
-## macOS 26 Workaround
+## Config surface
 
-Zig 0.15's linker targets `arm64`, but the macOS 26 SDK's
-`libSystem.tbd` only declares `arm64e`. `tools/xcrun` redirects Zig's
-SDK detection to a sysroot overlay that uses Zig's own bundled
-`libSystem.tbd` (which includes `arm64`). Run `tools/setup-sysroot.sh`
-once after cloning. This workaround can be removed once Zig ships with
-macOS 26 linker stubs.
+### Current [IMPLEMENTED]
 
-## Vendored ghostty source
+Compile-time defaults only. `RendererConfig` exposes `width`, `height`, `scale`, `font_family` (hardcoded "JetBrainsMono Nerd Font"), `font_size` (runtime-adjustable via keybinds). Theme is `impl Default` → Catppuccin Frappe palette.
 
-`libghostty-vt-sys/build.rs` respects `GHOSTTY_SOURCE_DIR`; we set it
-in `.cargo/config.toml` to `vendor/ghostty-src` so every cargo profile
-reuses one repo-local clone instead of re-fetching into each
-`target/<profile>/build/libghostty-vt-sys-*/out/` dir.
+### Target [PLANNED: [M1][m1]]
 
-The clone is also pre-patched: ghostty's `build.zig` unconditionally
-runs `xcodebuild -create-xcframework` on Darwin, which fails on hosts
-with a broken Xcode plugin load (`IDESimulatorFoundation`). The dylib
-we consume is produced by the preceding step, so the xcframework
-packaging is not needed. `tools/setup-ghostty-src.sh` clones at the
-pinned commit (must match `libghostty-vt-sys/build.rs`'s
-`GHOSTTY_COMMIT` and our git-pinned `libghostty-vt` revision) and
-rewrites the xcframework `if` guard to a dead branch. Idempotent.
+```toml
+# ~/.config/seance/config.toml
+[font]
+family = "JetBrainsMono Nerd Font"
+size = 14.0
+features = ["calt"]
+min_contrast = 1.1
+adjust_cell_height = 1.20
 
-Run after cloning the repo, after `cargo clean`, or after bumping
-`libghostty-vt` in `Cargo.toml`. `tools/run.sh` invokes it
-automatically. `vendor/` is gitignored.
+[window]
+padding_x = 12
+padding_y = 0
+decoration = true
+background_opacity = 1.0
+
+[cursor]
+style = "block"          # block | bar | underline
+blink = false
+
+[clipboard]
+read = "ask"             # ask | allow | deny
+write = "allow"
+paste_protection = true
+copy_on_select = true
+
+[scrollback]
+limit = 50000
+
+[mouse]
+hide_while_typing = true
+
+[[keybind]]
+key = "ctrl+shift+c"; action = "copy"
+
+[renderer]
+custom_shaders = []
+custom_shader_animation = "focused"
+
+theme = "Catppuccin Frappe"  # resolves ~/.config/seance/themes/Catppuccin Frappe.toml
+```
+
+Theme files ship Catppuccin / Gruvbox / Tokyo Night / Solarized. Hot-reload via `notify` with targeted invalidation (theme → repaint; font → clear glyph + shape caches; keybind → rebuild action table).
+
+---
+
+## Input
+
+- winit `KeyboardInput` → `seance-input` → libghostty-vt key encoder [IMPLEMENTED].
+- `macos-option-as-alt` = left/right/both/none [PLANNED: [M1][m1]].
+- User keybind table parsed from config → `Action` enum (`Copy`, `Paste`, `FontSize(i8)`, `NewTab`, `SplitH`, `FocusPane(Dir)`, `ToggleFullscreen`, …) [PLANNED: [M1][m1] + [M6][m6]].
+
+---
+
+## Platform notes
+
+- macOS IOSurface / `CAMetalLayer.presentsWithTransaction = true` to prevent live-resize stretching [IMPLEMENTED].
+- macOS 26 SDK + Zig 0.15 linker workaround (`tools/xcrun` redirects SDK sysroot to Zig's bundled `libSystem.tbd`) [IMPLEMENTED].
+- Wayland damage tracking via `swap_buffers_with_damage` is not required for wgpu — dirty-row uploads + deadline-driven redraw replace it.
+
+---
+
+## Appendix — component choices
+
+| Problem | Component | Why |
+|---|---|---|
+| GPU API | `wgpu` | One abstraction for Metal/Vulkan/DX12/GL4/WebGPU. Dual-source blending (for LCD subpixel AA) gated behind `Features::DUAL_SOURCE_BLENDING`. |
+| Window + input | `winit` | Only serious cross-platform option. |
+| VT state machine | `libghostty-vt` via FFI | Battle-tested, handles DEC 2026, mouse, Kitty keyboard, iTerm OSC, selection. Don't reinvent. |
+| PTY | `portable-pty` | Cross-plat, correct ConPTY on Windows. |
+| Font discovery | `fontdb` (via cosmic-text) | fontconfig / CoreText / DirectWrite backed. |
+| Shaping | `cosmic-text` (rustybuzz + unicode-bidi) | BiDi, graphemes, per-font features. |
+| Rasterization | `swash` (via `SwashCache`) | COLR v0/v1, SVG, CBDT. |
+| Atlas packing | `etagere` | Shelf-bin with deallocation (alacritty's row-packer cannot evict). |
+| Procedural glyphs | `tiny-skia` | Software vector rasterizer for box-drawing / Powerline sprites [PLANNED: [M3][m3]]. |
+| Layout (modals/box model) | `taffy` | Flexbox + Grid for floating UI [PLANNED: [M6][m6]]. |
+| Animation | In-house `ColorEase` + deadline scheduler [PLANNED: [M2][m2]] | Cubic-bezier ease, one `Timer` at `min(next_due)` — power-efficient. |
+| Config | `toml` + `serde` + `notify` | Hot-reload with targeted invalidation. |
+| Logging | `tracing` + `tracing-subscriber` | Per-subsystem spans. |
+
+**Deliberately avoided:** `fontdue` (no COLRv1/SVG), `glyphon` (locks layout), `vello`/`wgpu_glyph` (wrong abstraction level for terminals), hand-rolled VT parsers (tarpit — every terminal team regrets them).
+
+---
+
+## Reference terminals
+
+For design rationale on any section, see the corresponding reports in `docs/`:
+
+- `docs/LIBGHOSTTY_ANALYSIS.md`, `docs/libghostty_renderer_patterns.md`, `docs/libghostty_vt_architecture.md` — Ghostty renderer
+- `docs/NOTES.md`, `docs/NOTES2.md`, `docs/NOTES3.md` — cross-terminal research (Alacritty, WezTerm, Ghostty)
+
+Side-by-side summary of the three references → see the synthesis in the design discussion leading up to this plan.
