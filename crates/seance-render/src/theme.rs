@@ -3,7 +3,6 @@ pub struct Theme {
     pub fg: [u8; 3],
     pub cursor: [u8; 4],
     pub selection_bg: [f32; 4],
-    pub overlay_cursor_color: [f32; 4],
     pub palette: [[u8; 3]; 256],
 }
 
@@ -19,7 +18,6 @@ impl Default for Theme {
             fg: [198, 208, 245],
             cursor: [242, 213, 207, 255],
             selection_bg: [0.3, 0.5, 0.8, 0.4],
-            overlay_cursor_color: [1.0, 1.0, 1.0, 1.0],
             palette,
         }
     }
