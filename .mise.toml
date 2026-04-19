@@ -1,6 +1,8 @@
 [tools]
 rust = "1.94"
 zig = "0.15.2"
+node = "22"
+"npm:markdownlint-cli2" = "latest"
 
 [env]
 # Prepend tools/ to PATH so Zig finds our xcrun wrapper.

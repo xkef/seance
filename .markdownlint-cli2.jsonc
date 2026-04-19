@@ -1,0 +1,29 @@
+// markdownlint-cli2 config
+// docs: https://github.com/DavidAnson/markdownlint/blob/main/doc/Rules.md
+// run locally: `markdownlint-cli2 "**/*.md"`  (add --fix to auto-format)
+{
+  "config": {
+    "default": true,
+    // line length: prose wraps naturally in editors; tables and code blocks
+    // routinely exceed any limit we'd pick
+    "MD013": false,
+    // siblings-only duplicate headings (e.g. "Scope" appearing under multiple
+    // epics) are fine
+    "MD024": { "siblings_only": true },
+    // inline HTML is occasionally useful for formatting
+    "MD033": false,
+    // first line of a file doesn't need to be an h1
+    "MD041": false,
+    // code blocks without an explicit language are fine (e.g. ASCII diagrams)
+    "MD040": false,
+    // table column style: authors may pad table cells for readability
+    "MD060": false
+  },
+  "globs": ["**/*.md"],
+  "ignores": [
+    "node_modules/**",
+    "target/**",
+    "vendor/**",
+    ".claude/**"
+  ]
+}
