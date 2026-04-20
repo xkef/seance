@@ -10,6 +10,7 @@ name = "seance"
 path = "src/main.rs"
 
 [dependencies]
+seance-config = { path = "../seance-config" }
 seance-input = { path = "../seance-input" }
 seance-render = { path = "../seance-render" }
 seance-vt = { path = "../seance-vt" }
