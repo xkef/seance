@@ -8,11 +8,9 @@
 
 use serde::Deserialize;
 
-/// Root config. Mirrors the top level of `config.toml`.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
-    /// Name of the active theme. Resolution per #12.
     pub theme: Option<String>,
     pub font: FontConfig,
     pub window: WindowConfig,

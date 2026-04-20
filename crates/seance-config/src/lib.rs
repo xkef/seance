@@ -19,7 +19,6 @@ pub use theme::{Theme, load as load_theme};
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
-/// Filename of the main config file within the seance config directory.
 pub const CONFIG_FILENAME: &str = "config.toml";
 
 /// Return `$XDG_CONFIG_HOME/seance/` (or `$HOME/.config/seance/`), without

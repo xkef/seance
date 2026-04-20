@@ -16,8 +16,6 @@ pub struct RendererConfig {
     pub scale: f64,
     pub font_family: String,
     pub font_size: f32,
-    /// Active theme. Supplied by the caller — seance-render holds no
-    /// hardcoded palette.
     pub theme: Theme,
 }
 
