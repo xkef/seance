@@ -7,6 +7,7 @@ use winit::event::{ElementState, Modifiers, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
+use seance_config::Config;
 use seance_input::{InputHandler, VtInput};
 use seance_render::{RenderInputs, RendererConfig, TerminalRenderer};
 use seance_vt::{LibGhosttyFrameSource, Terminal, TerminalModes};
@@ -18,8 +19,6 @@ mod platform;
 use command::AppCommand;
 use keybinds::Keybinds;
 
-const DEFAULT_FONT_SIZE: f32 = 14.0;
-const DEFAULT_FONT_FAMILY: &str = "JetBrainsMono Nerd Font";
 const FONT_SIZE_MIN: f32 = 6.0;
 const FONT_SIZE_MAX: f32 = 72.0;
 const POLL_INTERVAL: Duration = Duration::from_millis(4);
@@ -70,6 +69,7 @@ struct App {
     render_inputs: RenderInputs,
     modifiers: Modifiers,
     cell_size: [f32; 2],
+    config: Config,
     font_size: f32,
     content_dirty: bool,
     occluded: bool,
@@ -77,7 +77,8 @@ struct App {
 }
 
 impl App {
-    fn new() -> Self {
+    fn new(config: Config) -> Self {
+        let font_size = config.font.size;
         Self {
             window: None,
             renderer: None,
@@ -87,7 +88,8 @@ impl App {
             render_inputs: RenderInputs::default(),
             modifiers: Modifiers::default(),
             cell_size: [0.0, 0.0],
-            font_size: DEFAULT_FONT_SIZE,
+            config,
+            font_size,
             content_dirty: true,
             occluded: false,
             mouse: MouseState::default(),
@@ -243,7 +245,7 @@ impl App {
                 self.apply_font_size();
             }
             AppCommand::FontSizeReset => {
-                self.font_size = DEFAULT_FONT_SIZE;
+                self.font_size = self.config.font.size;
                 self.apply_font_size();
             }
         }
@@ -356,15 +358,17 @@ impl ApplicationHandler for App {
         platform::configure_window(&window);
 
         let size = window.inner_size();
-        let config = RendererConfig {
+        let theme = seance_config::load_theme(self.config.theme.as_deref());
+        let renderer_config = RendererConfig {
             width: size.width,
             height: size.height,
             scale: window.scale_factor(),
-            font_family: DEFAULT_FONT_FAMILY.to_string(),
-            font_size: DEFAULT_FONT_SIZE,
+            font_family: self.config.font.family.clone(),
+            font_size: self.font_size,
+            theme,
         };
 
-        let renderer = pollster::block_on(TerminalRenderer::new(window.clone(), config))
+        let renderer = pollster::block_on(TerminalRenderer::new(window.clone(), renderer_config))
             .expect("failed to create renderer");
 
         self.cell_size = renderer.cell_size();
@@ -428,6 +432,7 @@ fn main() {
         builder.with_activation_policy(ActivationPolicy::Regular);
     }
     let event_loop = builder.build().expect("failed to create event loop");
-    let mut app = App::new();
+    let config = seance_config::load();
+    let mut app = App::new(config);
     event_loop.run_app(&mut app).expect("event loop failed");
 }
