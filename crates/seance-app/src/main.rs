@@ -1,13 +1,14 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Modifiers, MouseButton, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowId};
 
-use seance_config::Config;
+use seance_config::{Config, ConfigDiff};
 use seance_input::{InputHandler, VtInput};
 use seance_render::{RenderInputs, RendererConfig, TerminalRenderer};
 use seance_vt::{LibGhosttyFrameSource, Terminal, TerminalModes};
@@ -15,9 +16,22 @@ use seance_vt::{LibGhosttyFrameSource, Terminal, TerminalModes};
 mod command;
 mod keybinds;
 mod platform;
+mod watcher;
 
 use command::AppCommand;
 use keybinds::Keybinds;
+use watcher::ConfigWatcher;
+
+/// Events forwarded from the config watcher into the winit event loop. Using
+/// `EventLoopProxy` keeps reloads single-threaded with rendering — no torn
+/// reads of `Config` mid-frame.
+#[derive(Debug, Clone)]
+pub enum UserEvent {
+    /// `config.toml` at `$XDG_CONFIG_HOME/seance/` changed.
+    ConfigFileChanged,
+    /// A file under `$XDG_CONFIG_HOME/seance/themes/` changed.
+    ThemeFileChanged(PathBuf),
+}
 
 const FONT_SIZE_MIN: f32 = 6.0;
 const FONT_SIZE_MAX: f32 = 72.0;
@@ -74,10 +88,12 @@ struct App {
     content_dirty: bool,
     occluded: bool,
     mouse: MouseState,
+    proxy: EventLoopProxy<UserEvent>,
+    watcher: Option<ConfigWatcher>,
 }
 
 impl App {
-    fn new(config: Config) -> Self {
+    fn new(config: Config, proxy: EventLoopProxy<UserEvent>) -> Self {
         let font_size = config.font.size;
         Self {
             window: None,
@@ -93,6 +109,8 @@ impl App {
             content_dirty: true,
             occluded: false,
             mouse: MouseState::default(),
+            proxy,
+            watcher: None,
         }
     }
 
@@ -158,6 +176,92 @@ impl App {
         if let (Some(r), Some(w)) = (&mut self.renderer, &self.window) {
             r.set_font_size(self.font_size);
             self.reflow(w.inner_size());
+        }
+    }
+
+    /// Re-resolve the currently-configured theme and push it to the renderer.
+    /// Bad theme files keep the previous theme live (#13).
+    fn reload_theme(&mut self) {
+        if self.renderer.is_none() {
+            return;
+        }
+        let spec = seance_config::theme::ThemeSpec::parse(
+            self.config
+                .theme
+                .as_deref()
+                .unwrap_or(seance_config::theme::resolve::DEFAULT_THEME_NAME),
+        );
+        let theme = match seance_config::theme::try_load(&spec) {
+            Ok(t) => t,
+            Err(err) => {
+                log::warn!("theme reload skipped: {err}");
+                return;
+            }
+        };
+        if let Some(r) = &mut self.renderer {
+            r.set_theme(theme);
+        }
+        self.mark_dirty();
+    }
+
+    /// Re-parse `config.toml` and apply whatever actually changed. A bad
+    /// TOML parse is logged and the running config is left untouched.
+    fn reload_config(&mut self) {
+        let Some(path) = seance_config::config_file_path() else {
+            return;
+        };
+        let new_config = match seance_config::try_load_from(&path) {
+            Ok(c) => c,
+            Err(err) => {
+                log::warn!("config reload skipped: {err}");
+                return;
+            }
+        };
+        let diff = ConfigDiff::between(&self.config, &new_config);
+        if diff.is_empty() {
+            self.config = new_config;
+            return;
+        }
+
+        log::info!("config reloaded: {diff:?}");
+        self.config = new_config;
+
+        if diff.font_size_changed {
+            self.font_size = self.config.font.size;
+            self.apply_font_size();
+        }
+        if diff.font_family_changed {
+            log::info!("font.family change takes effect on restart (live swap not yet supported)");
+        }
+        if diff.theme_changed {
+            self.reload_theme();
+        }
+        if diff.repaint_only {
+            self.mark_dirty();
+        }
+    }
+
+    /// A file under `themes/` changed on disk. Only re-resolve if it's the
+    /// theme actually in use (either a named override in the user dir or an
+    /// absolute-path spec pointing at that file).
+    fn on_theme_file_changed(&mut self, path: &std::path::Path) {
+        let active = self
+            .config
+            .theme
+            .as_deref()
+            .unwrap_or(seance_config::theme::resolve::DEFAULT_THEME_NAME);
+        let spec = seance_config::theme::ThemeSpec::parse(active);
+        let matches = match &spec {
+            seance_config::theme::ThemeSpec::Named(name)
+            | seance_config::theme::ThemeSpec::LightDark { dark: name, .. } => {
+                seance_config::config_dir()
+                    .map(|d| d.join("themes").join(name))
+                    .is_some_and(|p| p == path)
+            }
+            seance_config::theme::ThemeSpec::Path(p) => p == path,
+        };
+        if matches {
+            self.reload_theme();
         }
     }
 
@@ -342,7 +446,7 @@ impl App {
     }
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -380,6 +484,21 @@ impl ApplicationHandler for App {
             Terminal::spawn(cols, rows, size.width as u16, size.height as u16)
                 .expect("failed to spawn terminal"),
         );
+
+        // Start watching the config dir for edits. A non-XDG environment or
+        // an unreadable dir just skips the watcher — seance keeps running.
+        if self.watcher.is_none()
+            && let Some(dir) = seance_config::config_dir()
+        {
+            self.watcher = ConfigWatcher::spawn(&dir, self.proxy.clone());
+        }
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
+        match event {
+            UserEvent::ConfigFileChanged => self.reload_config(),
+            UserEvent::ThemeFileChanged(path) => self.on_theme_file_changed(&path),
+        }
     }
 
     fn window_event(
@@ -425,14 +544,15 @@ impl ApplicationHandler for App {
 
 fn main() {
     env_logger::init();
-    let mut builder = EventLoop::builder();
+    let mut builder = EventLoop::<UserEvent>::with_user_event();
     #[cfg(target_os = "macos")]
     {
         use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
         builder.with_activation_policy(ActivationPolicy::Regular);
     }
     let event_loop = builder.build().expect("failed to create event loop");
+    let proxy = event_loop.create_proxy();
     let config = seance_config::load();
-    let mut app = App::new(config);
+    let mut app = App::new(config, proxy);
     event_loop.run_app(&mut app).expect("event loop failed");
 }
