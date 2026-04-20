@@ -29,17 +29,23 @@ impl ConfigWatcher {
     /// directory cannot be watched — a missing config dir should never stop
     /// the terminal from launching.
     pub fn spawn(config_dir: &Path, proxy: EventLoopProxy<UserEvent>) -> Option<Self> {
-        let config_file = config_dir.join(seance_config::CONFIG_FILENAME);
-        let themes_dir = config_dir.join(THEMES_SUBDIR);
         let config_dir_owned = config_dir.to_path_buf();
+        let themes_dir = config_dir_owned.join(THEMES_SUBDIR);
 
-        let handler = move |result: notify_debouncer_full::DebounceEventResult| match result {
-            Ok(events) => {
-                dispatch_events(&events, &config_file, &themes_dir, &proxy);
-            }
-            Err(errors) => {
-                for e in errors {
-                    log::warn!("config watcher error: {e}");
+        // The handler closure owns its own copies — everything after this
+        // line still needs `themes_dir` / `config_dir_owned` for watching
+        // and logging.
+        let handler = {
+            let config_file = config_dir_owned.join(seance_config::CONFIG_FILENAME);
+            let themes_dir = themes_dir.clone();
+            move |result: notify_debouncer_full::DebounceEventResult| match result {
+                Ok(events) => {
+                    dispatch_events(&events, &config_file, &themes_dir, &proxy);
+                }
+                Err(errors) => {
+                    for e in errors {
+                        log::warn!("config watcher error: {e}");
+                    }
                 }
             }
         };
@@ -62,13 +68,13 @@ impl ConfigWatcher {
             );
             return None;
         }
-        if themes_dir.is_dir() {
-            if let Err(err) = debouncer.watch(&themes_dir, RecursiveMode::Recursive) {
-                log::warn!(
-                    "config watcher: could not watch {}: {err}",
-                    themes_dir.display()
-                );
-            }
+        if themes_dir.is_dir()
+            && let Err(err) = debouncer.watch(&themes_dir, RecursiveMode::Recursive)
+        {
+            log::warn!(
+                "config watcher: could not watch {}: {err}",
+                themes_dir.display()
+            );
         }
 
         log::info!("config watcher: watching {}", config_dir_owned.display());
