@@ -53,6 +53,8 @@ jobs:
         run: tools/setup-ghostty-src.sh
       - name: Setup vendored ghostty themes
         run: tools/setup-themes.sh
+      - name: Setup macOS sysroot
+        run: tools/setup-sysroot.sh
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --all-targets
 
@@ -70,5 +72,7 @@ jobs:
         run: tools/setup-ghostty-src.sh
       - name: Setup vendored ghostty themes
         run: tools/setup-themes.sh
+      - name: Setup macOS sysroot
+        run: tools/setup-sysroot.sh
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets -- -D warnings
