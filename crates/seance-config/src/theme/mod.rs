@@ -15,7 +15,7 @@ pub mod parser;
 pub mod resolve;
 
 pub use parser::{ParseError, parse_source};
-pub use resolve::{LoadError, ThemeSpec, load};
+pub use resolve::{LoadError, ThemeSpec, load, try_load};
 
 /// One theme — a palette plus window/cursor/selection colors.
 ///
