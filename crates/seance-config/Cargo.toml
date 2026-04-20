@@ -6,6 +6,7 @@ license.workspace = true
 description = "Configuration and theme loading for seance (TOML config, Ghostty-syntax themes)"
 
 [dependencies]
+include_dir = "0.7"
 log.workspace = true
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"

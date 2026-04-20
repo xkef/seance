@@ -1,6 +1,6 @@
 use crate::renderer::RenderInputs;
 use crate::text::FrameInfo;
-use crate::theme::Theme;
+use seance_config::Theme;
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

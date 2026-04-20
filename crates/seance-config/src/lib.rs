@@ -8,11 +8,13 @@
 //! TOML) and are resolved by a separate module (issue #12).
 
 mod schema;
+pub mod theme;
 
 pub use schema::{
     ClipboardConfig, Config, CursorConfig, CursorStyle, FontConfig, MouseConfig, ScrollbackConfig,
     WindowConfig,
 };
+pub use theme::{Theme, load as load_theme};
 
 use std::path::{Path, PathBuf};
 use std::{env, fs};

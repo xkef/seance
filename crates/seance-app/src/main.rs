@@ -358,12 +358,14 @@ impl ApplicationHandler for App {
         platform::configure_window(&window);
 
         let size = window.inner_size();
+        let theme = seance_config::load_theme(self.config.theme.as_deref());
         let renderer_config = RendererConfig {
             width: size.width,
             height: size.height,
             scale: window.scale_factor(),
             font_family: self.config.font.family.clone(),
             font_size: self.font_size,
+            theme,
         };
 
         let renderer = pollster::block_on(TerminalRenderer::new(window.clone(), renderer_config))
