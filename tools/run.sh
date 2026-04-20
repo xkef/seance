@@ -6,6 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 bash tools/setup-ghostty-src.sh >/dev/null
 bash tools/setup-themes.sh >/dev/null
+bash tools/setup-sysroot.sh >/dev/null
 PROFILE="${1:-release}"
 cargo build ${PROFILE:+--profile=$PROFILE} 2>/dev/null || cargo build --release
 bash tools/make-app.sh "$PROFILE" >/dev/null
