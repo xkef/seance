@@ -16,8 +16,8 @@ That nesting is where the pain lives — broken keybindings, double-rendered
 glyphs, no native image protocol, no clean GPU path for the inner panes.
 
 séance is meant to be the inverse: one terminal, one VT engine, one GPU
-pipeline, with the multiplexer living natively above the grid. Each pane will
-be a PTY plugged into its own `libghostty-vt` instance; all panes render into a
+pipeline, with the multiplexer living natively above the grid. Each pane will be
+a PTY plugged into its own `libghostty-vt` instance; all panes render into a
 single framebuffer with per-pane offsets. No second parser. No second renderer.
 
 The two pieces of the seam:
@@ -40,8 +40,8 @@ No hand-rolled VT parser. No bespoke graphics abstraction.
   atlas (R8 + RGBA8) packed with etagere.
 - One render pass, three pipelines: background fill, per-cell background SSBO,
   instanced glyph quads.
-- winit key/mouse encoding through `libghostty-vt`'s key encoder; SGR 1006
-  mouse reporting.
+- winit key/mouse encoding through `libghostty-vt`'s key encoder; SGR 1006 mouse
+  reporting.
 - Kitty graphics protocol transmission (recently added).
 - 250 Hz PTY poll, redraw only when content is dirty, AutoVsync presentation.
 - macOS IOSurface + `presentsWithTransaction` for clean live-resize.
@@ -61,10 +61,10 @@ Tracked as GitHub epics M1–M7:
 | **M7** | Custom shaders                 | Shadertoy-compatible post-pass with ping-pong textures                                      |
 
 The `seance-mux` crate (M6) is the one that delivers on the project's name. It
-will be a `Domain → Window → Tab → SplitTree → Pane` tree that walks itself
-into a `Vec<PositionedPane>` each frame; the renderer offsets `grid_pos` by
-each pane's top-left and emits all panes' cells into the same render pass.
-Splits as 1px quads; inactive-pane dimming as a shader uniform.
+will be a `Domain → Window → Tab → SplitTree → Pane` tree that walks itself into
+a `Vec<PositionedPane>` each frame; the renderer offsets `grid_pos` by each
+pane's top-left and emits all panes' cells into the same render pass. Splits as
+1px quads; inactive-pane dimming as a shader uniform.
 
 `docs/architecture.md` tags every subsystem `[IMPLEMENTED]` or `[PLANNED: M<n>]`
 — start there for the full picture.
@@ -93,13 +93,13 @@ shell ──▶ PTY ──▶ libghostty-vt ──▶ grid state
 
 ## Crates
 
-| Crate           | Role                                                  | Status        |
-| --------------- | ----------------------------------------------------- | ------------- |
-| `seance-app`    | winit event loop, top-level `App`, redraw driver      | implemented   |
-| `seance-vt`     | `libghostty-vt` adapter, PTY, Kitty graphics          | implemented   |
-| `seance-render` | wgpu pipelines, glyph atlas, font shaping             | implemented   |
-| `seance-input`  | winit → VT key/mouse encoding, Cmd shortcut dispatch  | implemented   |
-| `seance-mux`    | Domain / Window / Tab / SplitTree / Pane              | planned (M6)  |
+| Crate           | Role                                                 | Status       |
+| --------------- | ---------------------------------------------------- | ------------ |
+| `seance-app`    | winit event loop, top-level `App`, redraw driver     | implemented  |
+| `seance-vt`     | `libghostty-vt` adapter, PTY, Kitty graphics         | implemented  |
+| `seance-render` | wgpu pipelines, glyph atlas, font shaping            | implemented  |
+| `seance-input`  | winit → VT key/mouse encoding, Cmd shortcut dispatch | implemented  |
+| `seance-mux`    | Domain / Window / Tab / SplitTree / Pane             | planned (M6) |
 
 Full design reference: [`docs/architecture.md`](docs/architecture.md).
 
