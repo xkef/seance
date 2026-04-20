@@ -4,6 +4,7 @@ members = [
     "crates/seance-input",
     "crates/seance-vt",
     "crates/seance-render",
+    "crates/seance-config",
     "crates/seance-app",
 ]
 
