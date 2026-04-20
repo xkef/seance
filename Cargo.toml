@@ -6,6 +6,7 @@ members = [
     "crates/seance-render",
     "crates/seance-config",
     "crates/seance-app",
+    "crates/seance-bench",
 ]
 
 [workspace.package]
