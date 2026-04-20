@@ -31,7 +31,6 @@ pub fn configure_window(window: &winit::window::Window) {
         let _: () = msg_send![nswindow, setStyleMask: style_mask];
         let _: () = msg_send![nswindow, setTitlebarAppearsTransparent: true];
         let _: () = msg_send![nswindow, setTitleVisibility: TITLE_HIDDEN];
-        let _: () = msg_send![nswindow, setMovableByWindowBackground: true];
 
         // Hide close, minimize, zoom buttons.
         for i in 0_isize..3 {
