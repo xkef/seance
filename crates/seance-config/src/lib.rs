@@ -7,9 +7,11 @@
 //! Theme files live alongside the config but use Ghostty's config syntax (not
 //! TOML) and are resolved by a separate module (issue #12).
 
+mod diff;
 mod schema;
 pub mod theme;
 
+pub use diff::ConfigDiff;
 pub use schema::{
     ClipboardConfig, Config, CursorConfig, CursorStyle, FontConfig, MouseConfig, ScrollbackConfig,
     WindowConfig,
@@ -20,6 +22,26 @@ use std::path::{Path, PathBuf};
 use std::{env, fs};
 
 pub const CONFIG_FILENAME: &str = "config.toml";
+
+/// Errors surfaced by [`try_load`] / [`try_load_from`]. Used by the hot-reload
+/// path (#13) so a bad edit can be rejected instead of silently replaced with
+/// defaults.
+#[derive(Debug)]
+pub enum ConfigError {
+    Io(PathBuf, std::io::Error),
+    Parse(PathBuf, toml::de::Error),
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConfigError::Io(p, e) => write!(f, "reading {}: {e}", p.display()),
+            ConfigError::Parse(p, e) => write!(f, "parsing {}: {e}", p.display()),
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
 
 /// Return `$XDG_CONFIG_HOME/seance/` (or `$HOME/.config/seance/`), without
 /// creating it. Returns `None` if neither env var is set.
@@ -70,6 +92,21 @@ pub fn load_from(path: &Path) -> Config {
             Config::default()
         }
     }
+}
+
+/// Lower-level load that surfaces errors instead of falling back to defaults.
+/// Used by the hot-reload watcher — a mid-edit save with broken TOML should
+/// leave the running config untouched, not reset everything to defaults.
+///
+/// A missing file is treated as `Ok(Config::default())` (rather than an
+/// error) so a user who deletes their config can return to defaults live.
+pub fn try_load_from(path: &Path) -> Result<Config, ConfigError> {
+    let text = match fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Config::default()),
+        Err(err) => return Err(ConfigError::Io(path.to_path_buf(), err)),
+    };
+    toml::from_str(&text).map_err(|err| ConfigError::Parse(path.to_path_buf(), err))
 }
 
 #[cfg(test)]
@@ -138,6 +175,36 @@ mod tests {
         assert!(cfg.clipboard.write);
         assert!(cfg.clipboard.paste_protection);
         assert!(!cfg.clipboard.copy_on_select);
+    }
+
+    #[test]
+    fn try_load_rejects_bad_toml() {
+        let dir = env::temp_dir().join("seance-test-try-load-bad");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        fs::write(&path, "not = [a valid toml").unwrap();
+        let err = try_load_from(&path).unwrap_err();
+        assert!(matches!(err, ConfigError::Parse(..)), "{err}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn try_load_accepts_good_toml() {
+        let dir = env::temp_dir().join("seance-test-try-load-good");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        fs::write(&path, "theme = \"Gruvbox Dark\"\n").unwrap();
+        let cfg = try_load_from(&path).unwrap();
+        assert_eq!(cfg.theme.as_deref(), Some("Gruvbox Dark"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn try_load_missing_file_yields_defaults() {
+        let path = env::temp_dir().join("seance-definitely-missing.toml");
+        let _ = fs::remove_file(&path);
+        let cfg = try_load_from(&path).unwrap();
+        assert!(cfg.theme.is_none());
     }
 
     #[test]
