@@ -11,6 +11,7 @@ cosmic-text = "0.18"
 etagere = "0.3"
 log.workspace = true
 rustc-hash = "2"
+seance-config = { path = "../seance-config" }
 seance-vt = { path = "../seance-vt" }
 wgpu = "29"
 winit = "0.30"

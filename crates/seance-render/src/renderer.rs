@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use seance_config::Theme;
 use seance_vt::{FrameSource, GridPos};
 use winit::window::Window;
 
@@ -8,7 +9,6 @@ pub use crate::gpu::uniforms::CursorShape;
 use crate::text::CellBuilder;
 use crate::text::backend::TextBackend;
 use crate::text::cosmic::CosmicTextBackend;
-use crate::theme::Theme;
 
 pub struct RendererConfig {
     pub width: u32,
@@ -16,6 +16,7 @@ pub struct RendererConfig {
     pub scale: f64,
     pub font_family: String,
     pub font_size: f32,
+    pub theme: Theme,
 }
 
 /// Per-frame dynamic state the app supplies to the renderer.
@@ -61,7 +62,7 @@ impl TerminalRenderer {
             backend,
             cell_builder: CellBuilder::new(),
             gpu,
-            theme: Theme::default(),
+            theme: config.theme,
             cell_size,
             surface_width: config.width,
             surface_height: config.height,
