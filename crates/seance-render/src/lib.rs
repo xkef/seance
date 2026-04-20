@@ -10,6 +10,5 @@ mod gpu;
 mod image;
 mod renderer;
 mod text;
-mod theme;
 
 pub use renderer::{CursorShape, RenderInputs, RendererConfig, TerminalRenderer};

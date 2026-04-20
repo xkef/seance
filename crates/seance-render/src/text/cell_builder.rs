@@ -10,11 +10,21 @@
 use std::collections::HashMap;
 
 use rustc_hash::FxBuildHasher;
-use seance_vt::{CellView, CellVisitor, FrameSource};
+use seance_config::Theme;
+use seance_vt::{CellColor, CellView, CellVisitor, FrameSource};
 
 use super::atlas::{AtlasEntry, GlyphAtlas};
 use super::backend::{GlyphFormat, GlyphId, ShapedGlyph, TextBackend};
-use crate::theme::Theme;
+
+/// Resolve a VT-reported color into concrete RGB.
+/// `None` means "use the theme default" (caller decides fg vs bg).
+fn resolve_color(theme: &Theme, color: &CellColor) -> Option<[u8; 3]> {
+    match *color {
+        CellColor::Default => None,
+        CellColor::Palette(idx) => Some(theme.palette[idx as usize]),
+        CellColor::Rgb(r, g, b) => Some([r, g, b]),
+    }
+}
 
 /// GPU instance record (32 bytes, matches the WGSL vertex buffer).
 #[repr(C)]
@@ -270,14 +280,14 @@ impl CellVisitor for WalkVisitor<'_> {
         }
         let idx = row as usize * self.cols as usize + col as usize;
 
-        if let Some(rgb) = self.theme.resolve_color(&view.bg) {
+        if let Some(rgb) = resolve_color(self.theme, &view.bg) {
             self.bg_cells[idx] = [rgb[0], rgb[1], rgb[2], 255];
         }
         if view.text.is_empty() {
             return;
         }
 
-        let fg_rgb = self.theme.resolve_color(&view.fg).unwrap_or(self.theme.fg);
+        let fg_rgb = resolve_color(self.theme, &view.fg).unwrap_or(self.theme.fg);
         self.requests.push(CellRequest {
             row,
             col,
@@ -327,7 +337,7 @@ mod tests {
 
     #[test]
     fn walk_grid_emits_one_request_per_non_empty_cell() {
-        let theme = Theme::default();
+        let theme = Theme::blank();
         let cells = [
             ("A", CellColor::Default, CellColor::Default),
             ("", CellColor::Default, CellColor::Default),

@@ -36,6 +36,19 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
+## Code comments
+
+Default to writing no comments. Do not add doc comments that restate what an
+identifier + type already communicate — `pub theme: Theme` or
+`CONFIG_FILENAME = "config.toml"` do not need a one-line summary above them.
+Reserve comments for things a reader cannot infer from the signature: hidden
+invariants (e.g. "alpha always 0xff"), `Option` semantics (what `None` means
+here), surprising behavior, cross-file references, or a workaround tied to a
+specific bug.
+
+Design-decision narration ("this crate holds no X", "replaces Y") belongs in the
+commit message, not the code — it rots as the codebase evolves.
+
 ## Working on issues
 
 Epics are tracked on GitHub under the `epic` label (M1–M7). Each epic decomposes

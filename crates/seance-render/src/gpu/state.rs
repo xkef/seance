@@ -10,7 +10,7 @@ use super::uniforms::Uniforms;
 use crate::image::ImageRenderer;
 use crate::renderer::RenderInputs;
 use crate::text::{CellText, FrameInfo, GlyphAtlas};
-use crate::theme::Theme;
+use seance_config::Theme;
 use seance_vt::{FrameSource, PlacementLayer};
 
 const ATLAS_GRAYSCALE_FORMAT: TextureFormat = TextureFormat::R8Unorm;
