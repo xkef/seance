@@ -131,4 +131,11 @@ impl TerminalRenderer {
         let m = self.backend.metrics();
         self.cell_size = [m.cell_width, m.cell_height];
     }
+
+    /// Swap the theme. The theme is consumed CPU-side during the next
+    /// `update_frame()` / `render()`, so no cache or GPU buffer needs to be
+    /// touched — the caller just needs to trigger a repaint.
+    pub fn set_theme(&mut self, theme: Theme) {
+        self.theme = theme;
+    }
 }
