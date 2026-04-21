@@ -58,8 +58,8 @@ pub struct WindowConfig {
 impl Default for WindowConfig {
     fn default() -> Self {
         Self {
-            padding_x: 0,
-            padding_y: 0,
+            padding_x: 16,
+            padding_y: 16,
             decoration: true,
             background_opacity: 1.0,
         }

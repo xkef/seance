@@ -104,6 +104,7 @@ impl CellBuilder {
         backend: &mut dyn TextBackend,
         surface_width: u32,
         surface_height: u32,
+        window_padding: [u16; 2],
         theme: &Theme,
     ) {
         let (baseline, geom) = {
@@ -114,6 +115,7 @@ impl CellBuilder {
                 m.cell_height,
                 surface_width,
                 surface_height,
+                window_padding,
             );
             (m.baseline, g)
         };
@@ -177,10 +179,21 @@ fn geometry(
     cell_height: f32,
     surface_width: u32,
     surface_height: u32,
+    window_padding: [u16; 2],
 ) -> FrameGeometry {
     let (cols, rows) = source.grid_size();
-    let pad_x = ((surface_width as f32 - cols as f32 * cell_width) / 2.0).max(0.0);
-    let pad_y = ((surface_height as f32 - rows as f32 * cell_height) / 2.0).max(0.0);
+    // User-configured padding anchors the grid at `(padding_x, padding_y)`.
+    // Any residual between the grid pixel extent and the surface is left on
+    // the right/bottom and filled by the fullscreen bg pass — matches
+    // Ghostty/Alacritty semantics (padding = minimum gutter, not centering).
+    let user_pad_x = f32::from(window_padding[0]);
+    let user_pad_y = f32::from(window_padding[1]);
+    let pad_x = user_pad_x
+        .min((surface_width as f32 - cols as f32 * cell_width).max(0.0))
+        .max(0.0);
+    let pad_y = user_pad_y
+        .min((surface_height as f32 - rows as f32 * cell_height).max(0.0))
+        .max(0.0);
     FrameGeometry {
         cell_width,
         cell_height,
@@ -367,5 +380,34 @@ mod tests {
         assert_eq!(requests[1].text, "B");
         assert_eq!(requests[1].col, 2);
         assert_eq!(requests[1].fg, [10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn geometry_honors_user_padding() {
+        let cells: [(&str, CellColor, CellColor); 0] = [];
+        let mut source = FakeFrame {
+            cols: 10,
+            rows: 5,
+            cells: &cells,
+        };
+        // 10×5 grid of 10×20 cells = 100×100 grid pixels inside a 200×200
+        // surface. With padding [12, 6] the grid anchors at (12, 6).
+        let g = geometry(&mut source, 10.0, 20.0, 200, 200, [12, 6]);
+        assert_eq!(g.grid_padding, [12.0, 6.0, 12.0, 6.0]);
+    }
+
+    #[test]
+    fn geometry_clamps_padding_to_surface() {
+        let cells: [(&str, CellColor, CellColor); 0] = [];
+        let mut source = FakeFrame {
+            cols: 10,
+            rows: 5,
+            cells: &cells,
+        };
+        // Requested padding exceeds the residual space (surface - grid);
+        // clamp to the residual so the grid still fits entirely on-screen.
+        let g = geometry(&mut source, 10.0, 20.0, 110, 110, [50, 40]);
+        assert_eq!(g.grid_padding[0], 10.0);
+        assert_eq!(g.grid_padding[1], 10.0);
     }
 }

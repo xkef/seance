@@ -16,6 +16,10 @@ pub struct RendererConfig {
     pub scale: f64,
     pub font_family: String,
     pub font_size: f32,
+    /// Inner gutter between window edges and the cell grid, in physical
+    /// pixels. `[x, y]`. The area outside the grid is filled by the
+    /// fullscreen bg pass with `theme.bg`.
+    pub window_padding: [u16; 2],
     pub theme: Theme,
 }
 
@@ -45,6 +49,7 @@ pub struct TerminalRenderer {
     cell_size: [f32; 2],
     surface_width: u32,
     surface_height: u32,
+    window_padding: [u16; 2],
 }
 
 impl TerminalRenderer {
@@ -66,6 +71,7 @@ impl TerminalRenderer {
             cell_size,
             surface_width: config.width,
             surface_height: config.height,
+            window_padding: config.window_padding,
         })
     }
 
@@ -75,8 +81,12 @@ impl TerminalRenderer {
 
     pub fn grid_size(&self) -> (u16, u16) {
         let [cw, ch] = self.cell_size;
-        let cols = (self.surface_width as f32 / cw) as u16;
-        let rows = (self.surface_height as f32 / ch) as u16;
+        let usable_w =
+            (self.surface_width as f32 - 2.0 * f32::from(self.window_padding[0])).max(cw);
+        let usable_h =
+            (self.surface_height as f32 - 2.0 * f32::from(self.window_padding[1])).max(ch);
+        let cols = (usable_w / cw) as u16;
+        let rows = (usable_h / ch) as u16;
         (cols.max(1), rows.max(1))
     }
 
@@ -103,6 +113,7 @@ impl TerminalRenderer {
             self.backend.as_mut(),
             self.surface_width,
             self.surface_height,
+            self.window_padding,
             &self.theme,
         );
         if let Some(fi) = self.cell_builder.last_frame() {
@@ -137,5 +148,12 @@ impl TerminalRenderer {
     /// touched — the caller just needs to trigger a repaint.
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
+    }
+
+    /// Update the configured window padding. `grid_size()` shrinks
+    /// accordingly, so callers should call `reflow()` afterwards to push the
+    /// new cols/rows to the PTY.
+    pub fn set_window_padding(&mut self, padding: [u16; 2]) {
+        self.window_padding = padding;
     }
 }
