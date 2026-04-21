@@ -14,6 +14,11 @@ pub fn configure_window(window: &winit::window::Window) {
     // NSWindowTitleVisibility::Hidden.
     const TITLE_HIDDEN: isize = 1;
 
+    // NSTitlebarSeparatorStyle::None — suppresses the 1 px hairline AppKit
+    // otherwise draws at the titlebar/content boundary when the content view
+    // uses FULLSIZE_CONTENT_VIEW.
+    const TITLEBAR_SEPARATOR_NONE: isize = 1;
+
     let Ok(handle) = window.window_handle() else {
         return;
     };
@@ -31,6 +36,10 @@ pub fn configure_window(window: &winit::window::Window) {
         let _: () = msg_send![nswindow, setStyleMask: style_mask];
         let _: () = msg_send![nswindow, setTitlebarAppearsTransparent: true];
         let _: () = msg_send![nswindow, setTitleVisibility: TITLE_HIDDEN];
+        let _: () = msg_send![
+            nswindow,
+            setTitlebarSeparatorStyle: TITLEBAR_SEPARATOR_NONE
+        ];
 
         // Hide close, minimize, zoom buttons.
         for i in 0_isize..3 {
