@@ -236,8 +236,21 @@ impl App {
         if diff.theme_changed {
             self.reload_theme();
         }
+        if diff.window_padding_changed {
+            self.apply_window_padding();
+        }
         if diff.repaint_only {
             self.mark_dirty();
+        }
+    }
+
+    /// Push the configured window padding to the renderer and reflow the PTY.
+    /// `grid_size()` shrinks when padding grows, so a reflow is required to
+    /// keep the shell's SIGWINCH in sync.
+    fn apply_window_padding(&mut self) {
+        if let (Some(r), Some(w)) = (&mut self.renderer, &self.window) {
+            r.set_window_padding([self.config.window.padding_x, self.config.window.padding_y]);
+            self.reflow(w.inner_size());
         }
     }
 
@@ -469,6 +482,7 @@ impl ApplicationHandler<UserEvent> for App {
             scale: window.scale_factor(),
             font_family: self.config.font.family.clone(),
             font_size: self.font_size,
+            window_padding: [self.config.window.padding_x, self.config.window.padding_y],
             theme,
         };
 
