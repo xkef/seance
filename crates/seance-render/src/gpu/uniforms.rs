@@ -1,6 +1,6 @@
 use crate::renderer::RenderInputs;
 use crate::text::FrameInfo;
-use seance_config::Theme;
+use seance_config::{CursorStyle, Theme};
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -10,6 +10,16 @@ pub enum CursorShape {
     Block = 1,
     Underline = 2,
     Bar = 3,
+}
+
+impl From<CursorStyle> for CursorShape {
+    fn from(s: CursorStyle) -> Self {
+        match s {
+            CursorStyle::Block => CursorShape::Block,
+            CursorStyle::Bar => CursorShape::Bar,
+            CursorStyle::Underline => CursorShape::Underline,
+        }
+    }
 }
 
 /// Layout must match the `Uniforms` struct in `cell.wgsl` exactly.
@@ -96,4 +106,16 @@ fn u8x4_to_f32(c: [u8; 4]) -> [f32; 4] {
         c[2] as f32 / 255.0,
         c[3] as f32 / 255.0,
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cursor_style_maps_to_overlay_shape() {
+        assert_eq!(CursorShape::from(CursorStyle::Block) as u32, 1);
+        assert_eq!(CursorShape::from(CursorStyle::Underline) as u32, 2);
+        assert_eq!(CursorShape::from(CursorStyle::Bar) as u32, 3);
+    }
 }
