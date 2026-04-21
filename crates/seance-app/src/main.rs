@@ -427,6 +427,13 @@ impl App {
     }
 
     fn handle_mouse_press(&mut self) {
+        if self.modifiers.state().super_key()
+            && let Some(window) = self.window.as_ref()
+        {
+            let _ = window.drag_window();
+            return;
+        }
+
         let Some(r) = self.renderer.as_ref() else {
             return;
         };
