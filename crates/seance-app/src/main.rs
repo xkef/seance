@@ -8,8 +8,8 @@ use winit::event::{ElementState, Modifiers, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowId};
 
-use seance_config::{Config, ConfigDiff};
-use seance_input::{InputHandler, VtInput};
+use seance_config::{Config, ConfigDiff, MacosOptionAsAlt};
+use seance_input::{InputHandler, OptionAsAlt, VtInput};
 use seance_render::{RenderInputs, RendererConfig, TerminalRenderer};
 use seance_vt::{LibGhosttyFrameSource, Terminal, TerminalModes};
 
@@ -123,11 +123,13 @@ impl App {
             cursor_shape: config.cursor.style.into(),
             ..RenderInputs::default()
         };
+        let mut input = InputHandler::new();
+        input.set_option_as_alt(option_as_alt_from_config(config.input.macos_option_as_alt));
         Self {
             window: None,
             renderer: None,
             terminal: None,
-            input: InputHandler::new(),
+            input,
             keybinds: Keybinds::new(),
             render_inputs,
             modifiers: Modifiers::default(),
@@ -331,6 +333,11 @@ impl App {
         }
         if diff.window_padding_changed {
             self.apply_window_padding();
+        }
+        if diff.input_changed {
+            self.input.set_option_as_alt(option_as_alt_from_config(
+                self.config.input.macos_option_as_alt,
+            ));
         }
         if diff.repaint_only {
             self.mark_dirty();
@@ -670,6 +677,15 @@ impl ApplicationHandler<UserEvent> for App {
             self.request_redraw();
         }
         event_loop.set_control_flow(ControlFlow::wait_duration(POLL_INTERVAL));
+    }
+}
+
+fn option_as_alt_from_config(cfg: MacosOptionAsAlt) -> OptionAsAlt {
+    match cfg {
+        MacosOptionAsAlt::None => OptionAsAlt::None,
+        MacosOptionAsAlt::Left => OptionAsAlt::Left,
+        MacosOptionAsAlt::Right => OptionAsAlt::Right,
+        MacosOptionAsAlt::Both => OptionAsAlt::Both,
     }
 }
 

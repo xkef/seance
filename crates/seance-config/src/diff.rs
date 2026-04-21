@@ -35,6 +35,9 @@ pub struct ConfigDiff {
     /// Min-contrast, cursor, opacity, or mouse-hide changed — a plain
     /// repaint is enough once the renderer has consumed the new values.
     pub repaint_only: bool,
+    /// `[input]` section changed — caller must push the new settings to
+    /// `InputHandler` (e.g. `macos_option_as_alt`).
+    pub input_changed: bool,
 }
 
 impl ConfigDiff {
@@ -58,6 +61,8 @@ impl ConfigDiff {
             || old.cursor.blink != new.cursor.blink
             || old.mouse.hide_while_typing != new.mouse.hide_while_typing;
 
+        let input_changed = old.input.macos_option_as_alt != new.input.macos_option_as_alt;
+
         Self {
             theme_changed,
             font_size_changed,
@@ -65,6 +70,7 @@ impl ConfigDiff {
             font_adjust_cell_height_changed,
             window_padding_changed,
             repaint_only,
+            input_changed,
         }
     }
 
@@ -75,7 +81,8 @@ impl ConfigDiff {
             || self.font_family_changed
             || self.font_adjust_cell_height_changed
             || self.window_padding_changed
-            || self.repaint_only)
+            || self.repaint_only
+            || self.input_changed)
     }
 }
 
@@ -83,7 +90,7 @@ impl ConfigDiff {
 #[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
-    use crate::CursorStyle;
+    use crate::{CursorStyle, MacosOptionAsAlt};
 
     #[test]
     fn identical_configs_yield_empty_diff() {
@@ -165,6 +172,17 @@ mod tests {
         let d = ConfigDiff::between(&a, &b);
         assert!(d.window_padding_changed);
         assert!(!d.repaint_only);
+    }
+
+    #[test]
+    fn input_change_is_detected_separately() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.input.macos_option_as_alt = MacosOptionAsAlt::Left;
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.input_changed);
+        assert!(!d.repaint_only);
+        assert!(!d.theme_changed);
     }
 
     #[test]
