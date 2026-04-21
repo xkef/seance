@@ -26,7 +26,10 @@ pub struct ConfigDiff {
     /// `font.family` changed — live reload not yet implemented; caller logs
     /// a notice.
     pub font_family_changed: bool,
-    /// Cursor/padding/opacity/mouse-hide changed — a plain repaint is enough
+    /// `window.padding_x|y` changed — caller must push the new padding to
+    /// the renderer and reflow the PTY (cols/rows shrink when padding grows).
+    pub window_padding_changed: bool,
+    /// Cursor/opacity/mouse-hide changed — a plain repaint is enough
     /// (downstream consumers read `Config` directly on the next frame).
     pub repaint_only: bool,
 }
@@ -38,12 +41,13 @@ impl ConfigDiff {
         let font_size_changed = old.font.size != new.font.size;
         let font_family_changed = old.font.family != new.font.family;
 
+        let window_padding_changed = old.window.padding_x != new.window.padding_x
+            || old.window.padding_y != new.window.padding_y;
+
         // Fields whose consumers will pick up changes on the next paint.
         // Grouped together so we can request a single redraw if any of them
         // moved — we don't need a more granular signal than that.
-        let repaint_only = old.window.padding_x != new.window.padding_x
-            || old.window.padding_y != new.window.padding_y
-            || old.window.background_opacity != new.window.background_opacity
+        let repaint_only = old.window.background_opacity != new.window.background_opacity
             || old.cursor.style != new.cursor.style
             || old.cursor.blink != new.cursor.blink
             || old.mouse.hide_while_typing != new.mouse.hide_while_typing;
@@ -52,6 +56,7 @@ impl ConfigDiff {
             theme_changed,
             font_size_changed,
             font_family_changed,
+            window_padding_changed,
             repaint_only,
         }
     }
@@ -61,6 +66,7 @@ impl ConfigDiff {
         !(self.theme_changed
             || self.font_size_changed
             || self.font_family_changed
+            || self.window_padding_changed
             || self.repaint_only)
     }
 }
@@ -122,12 +128,13 @@ mod tests {
     }
 
     #[test]
-    fn padding_change_is_repaint_only() {
+    fn padding_change_sets_window_padding_flag() {
         let a = Config::default();
         let mut b = Config::default();
         b.window.padding_x = 12;
         let d = ConfigDiff::between(&a, &b);
-        assert!(d.repaint_only);
+        assert!(d.window_padding_changed);
+        assert!(!d.repaint_only);
     }
 
     #[test]
@@ -140,7 +147,7 @@ mod tests {
         let d = ConfigDiff::between(&a, &b);
         assert!(d.theme_changed);
         assert!(d.font_size_changed);
-        assert!(d.repaint_only);
+        assert!(d.window_padding_changed);
         assert!(!d.is_empty());
     }
 }
