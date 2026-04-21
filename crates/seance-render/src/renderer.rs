@@ -35,7 +35,7 @@ impl Default for RenderInputs {
     fn default() -> Self {
         Self {
             vt_cursor_visible: true,
-            cursor_shape: CursorShape::Block,
+            cursor_shape: CursorShape::Bar,
             selection: None,
         }
     }
