@@ -120,7 +120,7 @@ mod tests {
         assert_eq!(cfg.font.family, def.font.family);
         assert_eq!(cfg.font.size, def.font.size);
         assert_eq!(cfg.window.padding_x, 16);
-        assert_eq!(cfg.cursor.style, CursorStyle::Block);
+        assert_eq!(cfg.cursor.style, CursorStyle::Bar);
         assert!(cfg.theme.is_none());
     }
 

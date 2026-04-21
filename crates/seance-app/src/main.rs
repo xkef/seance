@@ -37,6 +37,10 @@ const FONT_SIZE_MIN: f32 = 6.0;
 const FONT_SIZE_MAX: f32 = 72.0;
 const POLL_INTERVAL: Duration = Duration::from_millis(4);
 const MULTI_CLICK_WINDOW: Duration = Duration::from_millis(500);
+// Half-period of the cursor blink cycle; on + off = 1 s. The tick rides on
+// POLL_INTERVAL wakeups — once M2 #24 lands we should drive it from the
+// deadline scheduler instead.
+const BLINK_HALF_PERIOD: Duration = Duration::from_millis(500);
 
 struct MouseState {
     cursor_pos: PhysicalPosition<f64>,
@@ -90,18 +94,24 @@ struct App {
     mouse: MouseState,
     proxy: EventLoopProxy<UserEvent>,
     watcher: Option<ConfigWatcher>,
+    blink_on: bool,
+    last_blink_edge: Instant,
 }
 
 impl App {
     fn new(config: Config, proxy: EventLoopProxy<UserEvent>) -> Self {
         let font_size = config.font.size;
+        let render_inputs = RenderInputs {
+            cursor_shape: config.cursor.style.into(),
+            ..RenderInputs::default()
+        };
         Self {
             window: None,
             renderer: None,
             terminal: None,
             input: InputHandler::new(),
             keybinds: Keybinds::new(),
-            render_inputs: RenderInputs::default(),
+            render_inputs,
             modifiers: Modifiers::default(),
             cell_size: [0.0, 0.0],
             config,
@@ -111,6 +121,8 @@ impl App {
             mouse: MouseState::default(),
             proxy,
             watcher: None,
+            blink_on: true,
+            last_blink_edge: Instant::now(),
         }
     }
 
@@ -148,8 +160,27 @@ impl App {
             let mut source = LibGhosttyFrameSource::new(t);
             r.update_frame(&mut source);
         }
+        // Refresh per-frame inputs from config so hot-reload is picked up
+        // without a dedicated wiring path in reload_config.
+        self.render_inputs.cursor_shape = self.config.cursor.style.into();
+        self.render_inputs.vt_cursor_visible = !self.config.cursor.blink || self.blink_on;
         if let Some(r) = &mut self.renderer {
             r.render(&self.render_inputs);
+        }
+    }
+
+    fn tick_blink(&mut self) {
+        if !self.config.cursor.blink {
+            if !self.blink_on {
+                self.blink_on = true;
+                self.mark_dirty();
+            }
+            return;
+        }
+        if self.last_blink_edge.elapsed() >= BLINK_HALF_PERIOD {
+            self.blink_on = !self.blink_on;
+            self.last_blink_edge = Instant::now();
+            self.mark_dirty();
         }
     }
 
@@ -556,6 +587,7 @@ impl ApplicationHandler<UserEvent> for App {
             event_loop.exit();
             return;
         }
+        self.tick_blink();
         if self.content_dirty && !self.occluded {
             self.request_redraw();
         }
