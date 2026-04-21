@@ -335,9 +335,11 @@ impl App {
             self.apply_window_padding();
         }
         if diff.input_changed {
-            self.input.set_option_as_alt(option_as_alt_from_config(
-                self.config.input.macos_option_as_alt,
-            ));
+            let mode = option_as_alt_from_config(self.config.input.macos_option_as_alt);
+            self.input.set_option_as_alt(mode);
+            if let Some(w) = &self.window {
+                platform::set_option_as_alt(w, mode);
+            }
         }
         if diff.repaint_only {
             self.mark_dirty();
@@ -588,6 +590,10 @@ impl ApplicationHandler<UserEvent> for App {
         if self.config.window.decoration {
             platform::configure_window(&window);
         }
+        platform::set_option_as_alt(
+            &window,
+            option_as_alt_from_config(self.config.input.macos_option_as_alt),
+        );
 
         let size = window.inner_size();
         let theme = seance_config::load_theme(self.config.theme.as_deref());
