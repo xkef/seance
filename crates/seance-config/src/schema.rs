@@ -8,7 +8,7 @@
 
 use serde::Deserialize;
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub theme: Option<String>,
@@ -19,6 +19,20 @@ pub struct Config {
     pub scrollback: ScrollbackConfig,
     pub mouse: MouseConfig,
     pub input: InputConfig,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            theme: Some("Catppuccin Frappe".to_string()),
+            font: FontConfig::default(),
+            window: WindowConfig::default(),
+            cursor: CursorConfig::default(),
+            clipboard: ClipboardConfig::default(),
+            scrollback: ScrollbackConfig::default(),
+            mouse: MouseConfig::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -38,10 +52,10 @@ impl Default for FontConfig {
         Self {
             family: "JetBrainsMono Nerd Font".to_string(),
             size: 14.0,
-            features: Vec::new(),
-            adjust_cell_height: None,
+            features: vec!["calt".to_string()],
+            adjust_cell_height: Some("20%".to_string()),
             adjust_cell_width: None,
-            min_contrast: 1.0,
+            min_contrast: 1.1,
             fallback: Vec::new(),
         }
     }
@@ -120,7 +134,7 @@ pub struct ScrollbackConfig {
 
 impl Default for ScrollbackConfig {
     fn default() -> Self {
-        Self { limit: 10_000 }
+        Self { limit: 50_000 }
     }
 }
 
