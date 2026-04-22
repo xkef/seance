@@ -72,6 +72,15 @@ pub enum CellColor {
     Rgb(u8, u8, u8),
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CellAttrs {
+    pub bold: bool,
+    pub italic: bool,
+    pub faint: bool,
+    pub inverse: bool,
+    pub invisible: bool,
+}
+
 /// A cell's renderable content at a point in time.
 ///
 /// `text` is backed by scratch storage in the adapter; it is valid
@@ -80,6 +89,7 @@ pub struct CellView<'a> {
     pub text: &'a str,
     pub fg: CellColor,
     pub bg: CellColor,
+    pub attrs: CellAttrs,
 }
 
 /// Cursor pose the renderer needs to place the block/underline/bar.

@@ -30,6 +30,12 @@ pub struct CellMetrics {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GlyphId(pub u64);
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FontAttrs {
+    pub bold: bool,
+    pub italic: bool,
+}
+
 /// A shaped glyph produced by [`TextBackend::shape_cell`].
 #[derive(Debug, Clone, Copy)]
 pub struct ShapedGlyph {
@@ -64,8 +70,12 @@ pub trait TextBackend {
 
     fn set_font_size(&mut self, points: f32);
 
+    fn set_scale(&mut self, scale: f64);
+
+    fn set_adjust_cell_height(&mut self, value: Option<&str>);
+
     /// Shape a single cell's text into glyphs. Appends to `out`.
-    fn shape_cell(&mut self, text: &str, out: &mut Vec<ShapedGlyph>);
+    fn shape_cell(&mut self, text: &str, attrs: FontAttrs, out: &mut Vec<ShapedGlyph>);
 
     /// Rasterize a previously shaped glyph. Returns `None` for zero-
     /// sized glyphs (whitespace etc.) — callers should skip those.

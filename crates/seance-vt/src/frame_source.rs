@@ -9,7 +9,7 @@ use libghostty_vt::render::{CellIteration, CellIterator, RowIterator};
 use libghostty_vt::style::{self, PaletteIndex, RgbColor};
 
 use crate::frame::{
-    CellColor, CellView, CellVisitor, CursorInfo, FrameSource, ImageInfo, ImageVisitor,
+    CellAttrs, CellColor, CellView, CellVisitor, CursorInfo, FrameSource, ImageInfo, ImageVisitor,
     PlacementLayer, PlacementSnapshot, PlacementVisitor,
 };
 use crate::kitty_placeholder::{PLACEHOLDER_CP, diacritic_index};
@@ -33,13 +33,26 @@ impl FrameSource for LibGhosttyFrameSource<'_> {
     }
 
     fn cursor(&mut self) -> CursorInfo {
-        let vt = self.term.vt_mut();
+        let mut render_state = match RenderState::new() {
+            Ok(state) => state,
+            Err(_) => return CursorInfo::default(),
+        };
+        let snapshot = match render_state.update(self.term.vt_mut()) {
+            Ok(snapshot) => snapshot,
+            Err(_) => return CursorInfo::default(),
+        };
+        let visible = snapshot.cursor_visible().unwrap_or(true);
+        let pos = snapshot
+            .cursor_viewport()
+            .ok()
+            .flatten()
+            .map_or(GridPos::default(), |vp| GridPos {
+                col: vp.x,
+                row: vp.y,
+            });
         CursorInfo {
-            pos: GridPos {
-                col: vt.cursor_x().unwrap_or(0),
-                row: vt.cursor_y().unwrap_or(0),
-            },
-            visible: vt.is_cursor_visible().unwrap_or(true),
+            pos,
+            visible,
             wide: false,
         }
     }
@@ -86,13 +99,15 @@ fn walk(term: &mut Terminal, visitor: &mut dyn CellVisitor) -> Option<()> {
             if scratch.starts_with('\u{10EEEE}') {
                 scratch.clear();
             }
+            let style = cell.style().ok();
             visitor.cell(
                 row_idx,
                 col_idx,
                 CellView {
                     text: &scratch,
-                    fg: resolve_fg(cell),
-                    bg: resolve_bg(cell),
+                    fg: resolve_fg(cell, style.as_ref()),
+                    bg: resolve_bg(cell, style.as_ref()),
+                    attrs: cell_attrs(style.as_ref()),
                 },
             );
             col_idx += 1;
@@ -102,23 +117,31 @@ fn walk(term: &mut Terminal, visitor: &mut dyn CellVisitor) -> Option<()> {
     Some(())
 }
 
-fn resolve_bg(cell: &CellIteration<'_, '_>) -> CellColor {
+fn resolve_bg(cell: &CellIteration<'_, '_>, style: Option<&style::Style>) -> CellColor {
     if let Ok(Some(rgb)) = cell.bg_color() {
         return rgb_to_cell_color(rgb);
     }
-    match cell.style() {
-        Ok(style) => style_to_cell_color(&style.bg_color),
-        Err(_) => CellColor::Default,
-    }
+    style.map_or(CellColor::Default, |style| {
+        style_to_cell_color(&style.bg_color)
+    })
 }
 
-fn resolve_fg(cell: &CellIteration<'_, '_>) -> CellColor {
+fn resolve_fg(cell: &CellIteration<'_, '_>, style: Option<&style::Style>) -> CellColor {
     if let Ok(Some(rgb)) = cell.fg_color() {
         return rgb_to_cell_color(rgb);
     }
-    match cell.style() {
-        Ok(style) => style_to_cell_color(&style.fg_color),
-        Err(_) => CellColor::Default,
+    style.map_or(CellColor::Default, |style| {
+        style_to_cell_color(&style.fg_color)
+    })
+}
+
+fn cell_attrs(style: Option<&style::Style>) -> CellAttrs {
+    CellAttrs {
+        bold: style.is_some_and(|style| style.bold),
+        italic: style.is_some_and(|style| style.italic),
+        faint: style.is_some_and(|style| style.faint),
+        inverse: style.is_some_and(|style| style.inverse),
+        invisible: style.is_some_and(|style| style.invisible),
     }
 }
 

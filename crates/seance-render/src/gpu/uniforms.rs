@@ -73,7 +73,11 @@ impl Uniforms {
             grid_padding: fi.grid_padding,
             bg_color: u8x4_to_f32(fi.bg_color),
             min_contrast: fi.min_contrast,
-            cursor_visible: if inputs.vt_cursor_visible { 1 } else { 0 },
+            cursor_visible: if inputs.vt_cursor_visible && fi.cursor_visible {
+                1
+            } else {
+                0
+            },
             cursor_pos: [fi.cursor_pos[0] as u32, fi.cursor_pos[1] as u32],
             cursor_color: u8x4_to_f32(fi.cursor_color),
             cursor_wide: if fi.cursor_wide { 1 } else { 0 },

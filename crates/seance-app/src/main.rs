@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
-use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Modifiers, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowId};
@@ -41,6 +41,24 @@ const MULTI_CLICK_WINDOW: Duration = Duration::from_millis(500);
 // POLL_INTERVAL wakeups — once M2 #24 lands we should drive it from the
 // deadline scheduler instead.
 const BLINK_HALF_PERIOD: Duration = Duration::from_millis(500);
+
+fn initial_window_size_from_env() -> Option<LogicalSize<u32>> {
+    let value = std::env::var("SEANCE_INITIAL_WINDOW_SIZE").ok()?;
+    let (width, height) = value.split_once(',').or_else(|| value.split_once('x'))?;
+    let width = width.parse().ok()?;
+    let height = height.parse().ok()?;
+    Some(LogicalSize::new(width, height))
+}
+
+fn physical_window_padding(config: &Config, scale_factor: f64) -> [u16; 2] {
+    let scale = |value: u16| -> u16 {
+        ((f64::from(value) * scale_factor).round()).clamp(0.0, f64::from(u16::MAX)) as u16
+    };
+    [
+        scale(config.window.padding_x),
+        scale(config.window.padding_y),
+    ]
+}
 
 struct MouseState {
     cursor_pos: PhysicalPosition<f64>,
@@ -210,6 +228,37 @@ impl App {
         }
     }
 
+    fn apply_font_metrics(&mut self, font_size_changed: bool, adjust_cell_height_changed: bool) {
+        if let (Some(r), Some(w)) = (&mut self.renderer, &self.window) {
+            if adjust_cell_height_changed {
+                r.set_adjust_cell_height(self.config.font.adjust_cell_height.as_deref());
+            }
+            if font_size_changed {
+                r.set_font_size(self.font_size);
+            }
+            self.reflow(w.inner_size());
+        }
+    }
+
+    fn apply_scale_factor(&mut self, scale_factor: f64) {
+        if let (Some(r), Some(w)) = (&mut self.renderer, &self.window) {
+            r.set_scale(scale_factor);
+            r.set_window_padding(physical_window_padding(&self.config, scale_factor));
+            self.reflow(w.inner_size());
+        }
+    }
+
+    fn apply_terminal_theme(&mut self, theme: &seance_config::Theme) {
+        if let Some(term) = &mut self.terminal {
+            term.set_theme_colors(
+                theme.fg,
+                [theme.bg[0], theme.bg[1], theme.bg[2]],
+                [theme.cursor[0], theme.cursor[1], theme.cursor[2]],
+                theme.palette,
+            );
+        }
+    }
+
     /// Re-resolve the currently-configured theme and push it to the renderer.
     /// Bad theme files keep the previous theme live (#13).
     fn reload_theme(&mut self) {
@@ -230,8 +279,9 @@ impl App {
             }
         };
         if let Some(r) = &mut self.renderer {
-            r.set_theme(theme);
+            r.set_theme(theme.clone());
         }
+        self.apply_terminal_theme(&theme);
         self.mark_dirty();
     }
 
@@ -248,7 +298,8 @@ impl App {
                 return;
             }
         };
-        let diff = ConfigDiff::between(&self.config, &new_config);
+        let old_config = self.config.clone();
+        let diff = ConfigDiff::between(&old_config, &new_config);
         if diff.is_empty() {
             self.config = new_config;
             return;
@@ -257,9 +308,20 @@ impl App {
         log::info!("config reloaded: {diff:?}");
         self.config = new_config;
 
+        if let Some(r) = &mut self.renderer {
+            if old_config.font.min_contrast != self.config.font.min_contrast {
+                r.set_min_contrast(self.config.font.min_contrast);
+            }
+            if old_config.window.background_opacity != self.config.window.background_opacity {
+                r.set_background_opacity(self.config.window.background_opacity);
+            }
+        }
+
         if diff.font_size_changed {
             self.font_size = self.config.font.size;
-            self.apply_font_size();
+        }
+        if diff.font_size_changed || diff.font_adjust_cell_height_changed {
+            self.apply_font_metrics(diff.font_size_changed, diff.font_adjust_cell_height_changed);
         }
         if diff.font_family_changed {
             log::info!("font.family change takes effect on restart (live swap not yet supported)");
@@ -280,7 +342,7 @@ impl App {
     /// keep the shell's SIGWINCH in sync.
     fn apply_window_padding(&mut self) {
         if let (Some(r), Some(w)) = (&mut self.renderer, &self.window) {
-            r.set_window_padding([self.config.window.padding_x, self.config.window.padding_y]);
+            r.set_window_padding(physical_window_padding(&self.config, w.scale_factor()));
             self.reflow(w.inner_size());
         }
     }
@@ -503,14 +565,22 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         }
 
+        let mut window_attrs = Window::default_attributes()
+            .with_title("seance")
+            .with_decorations(self.config.window.decoration);
+        if let Some(size) = initial_window_size_from_env() {
+            window_attrs = window_attrs.with_inner_size(size);
+        }
         let window = Arc::new(
             event_loop
-                .create_window(Window::default_attributes().with_title("seance"))
+                .create_window(window_attrs)
                 .expect("failed to create window"),
         );
 
         #[cfg(target_os = "macos")]
-        platform::configure_window(&window);
+        if self.config.window.decoration {
+            platform::configure_window(&window);
+        }
 
         let size = window.inner_size();
         let theme = seance_config::load_theme(self.config.theme.as_deref());
@@ -520,8 +590,11 @@ impl ApplicationHandler<UserEvent> for App {
             scale: window.scale_factor(),
             font_family: self.config.font.family.clone(),
             font_size: self.font_size,
-            window_padding: [self.config.window.padding_x, self.config.window.padding_y],
-            theme,
+            adjust_cell_height: self.config.font.adjust_cell_height.clone(),
+            min_contrast: self.config.font.min_contrast,
+            window_padding: physical_window_padding(&self.config, window.scale_factor()),
+            background_opacity: self.config.window.background_opacity,
+            theme: theme.clone(),
         };
 
         let renderer = pollster::block_on(TerminalRenderer::new(window.clone(), renderer_config))
@@ -536,6 +609,7 @@ impl ApplicationHandler<UserEvent> for App {
             Terminal::spawn(cols, rows, size.width as u16, size.height as u16)
                 .expect("failed to spawn terminal"),
         );
+        self.apply_terminal_theme(&theme);
 
         // Start watching the config dir for edits. A non-XDG environment or
         // an unreadable dir just skips the watcher — seance keeps running.
@@ -563,6 +637,10 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
                 self.reflow(size);
+                self.draw();
+            }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                self.apply_scale_factor(scale_factor);
                 self.draw();
             }
             WindowEvent::ModifiersChanged(mods) => self.modifiers = mods,
