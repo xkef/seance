@@ -18,6 +18,7 @@ pub struct Config {
     pub clipboard: ClipboardConfig,
     pub scrollback: ScrollbackConfig,
     pub mouse: MouseConfig,
+    pub input: InputConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -135,4 +136,31 @@ impl Default for MouseConfig {
             hide_while_typing: true,
         }
     }
+}
+
+/// Controls whether the macOS Option key is treated as a VT Alt modifier
+/// (producing `ESC`-prefixed sequences like readline/vim expect) or passed
+/// through to the OS text composer (producing `ø`, `¬`, … per the active
+/// keyboard layout).
+///
+/// Ignored on non-macOS: Alt is always Alt there.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MacosOptionAsAlt {
+    /// Both Option keys compose macOS special characters. Default — matches
+    /// Ghostty's default and preserves `ø`/`¬`/`–` input.
+    #[default]
+    None,
+    /// Only left-Option sends ESC-prefix; right-Option still composes.
+    Left,
+    /// Only right-Option sends ESC-prefix; left-Option still composes.
+    Right,
+    /// Both Option keys send ESC-prefix. Breaks macOS text composition.
+    Both,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct InputConfig {
+    pub macos_option_as_alt: MacosOptionAsAlt,
 }

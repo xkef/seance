@@ -84,3 +84,27 @@ pub fn configure_window(window: &winit::window::Window) {
         }
     }
 }
+
+/// Push the macOS "option-as-alt" policy down into winit's NSView, which
+/// drives whether `event.text` contains the Option-composed glyph
+/// (e.g. CH `Opt+n` → `~`) or the raw un-composed key (e.g. `n` with ALT
+/// modifier set). Without this call, winit routes Option through
+/// NSTextInputClient's dead-key processing and `event.text` is empty for
+/// dead keys.
+#[cfg(target_os = "macos")]
+pub fn set_option_as_alt(window: &winit::window::Window, mode: seance_input::OptionAsAlt) {
+    use seance_input::OptionAsAlt;
+    use winit::platform::macos::{OptionAsAlt as WinitOptionAsAlt, WindowExtMacOS};
+
+    let winit_mode = match mode {
+        OptionAsAlt::None => WinitOptionAsAlt::None,
+        OptionAsAlt::Left => WinitOptionAsAlt::OnlyLeft,
+        OptionAsAlt::Right => WinitOptionAsAlt::OnlyRight,
+        OptionAsAlt::Both => WinitOptionAsAlt::Both,
+    };
+    log::info!("macOS option-as-alt -> {mode:?} (winit: {winit_mode:?})");
+    window.set_option_as_alt(winit_mode);
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn set_option_as_alt(_window: &winit::window::Window, _mode: seance_input::OptionAsAlt) {}
