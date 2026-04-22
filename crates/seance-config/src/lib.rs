@@ -119,7 +119,7 @@ mod tests {
         let def = Config::default();
         assert_eq!(cfg.font.family, def.font.family);
         assert_eq!(cfg.font.size, def.font.size);
-        assert_eq!(cfg.window.padding_x, 16);
+        assert_eq!(cfg.window.padding_x, 2);
         assert_eq!(cfg.cursor.style, CursorStyle::Bar);
         assert_eq!(cfg.theme.as_deref(), Some("Catppuccin Frappe"));
     }
