@@ -8,8 +8,10 @@ mod keymap;
 
 use libghostty_vt::{key, mouse};
 use seance_vt::TerminalModes;
-use winit::event::{ElementState, KeyEvent};
-use winit::keyboard::PhysicalKey;
+use winit::event::{ElementState, KeyEvent, Modifiers};
+use winit::keyboard::{Key, PhysicalKey};
+#[cfg(target_os = "macos")]
+use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 
 /// Result of encoding a VT-bound key event.
 #[derive(Debug)]
@@ -20,6 +22,37 @@ pub enum VtInput {
     Ignore,
 }
 
+/// macOS "option-as-alt" policy.
+///
+/// On macOS, Option serves double duty: it's both the VT Alt modifier
+/// (readline `Alt+f`/`Alt+b`, vim `<M-…>`) and the OS text composer
+/// (`Opt+o` → `ø`). This enum picks which role Option plays per side.
+/// Ignored on non-macOS — Alt is always Alt there.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OptionAsAlt {
+    /// Both Option keys compose macOS special characters. macOS-friendly
+    /// default — preserves `ø`/`¬`/`–` input.
+    #[default]
+    None,
+    /// Only left-Option sends ESC-prefix; right-Option still composes.
+    Left,
+    /// Only right-Option sends ESC-prefix; left-Option still composes.
+    Right,
+    /// Both Option keys send ESC-prefix. Breaks macOS text composition.
+    Both,
+}
+
+impl OptionAsAlt {
+    fn to_libghostty(self) -> key::OptionAsAlt {
+        match self {
+            OptionAsAlt::None => key::OptionAsAlt::False,
+            OptionAsAlt::Left => key::OptionAsAlt::Left,
+            OptionAsAlt::Right => key::OptionAsAlt::Right,
+            OptionAsAlt::Both => key::OptionAsAlt::True,
+        }
+    }
+}
+
 /// Translates winit events into VT bytes.
 pub struct InputHandler {
     key_encoder: key::Encoder<'static>,
@@ -28,8 +61,13 @@ pub struct InputHandler {
 
 impl Default for InputHandler {
     fn default() -> Self {
+        let mut key_encoder = key::Encoder::new().expect("key encoder");
+        // Enable DEC mode 1036 so ALT+<char> produces `ESC <char>` (matches
+        // xterm/Ghostty defaults). Without this, the encoder drops the ALT
+        // bit and just emits the un-prefixed character.
+        key_encoder.set_alt_esc_prefix(true);
         Self {
-            key_encoder: key::Encoder::new().expect("key encoder"),
+            key_encoder,
             mouse_encoder: mouse::Encoder::new().expect("mouse encoder"),
         }
     }
@@ -40,11 +78,19 @@ impl InputHandler {
         Self::default()
     }
 
+    /// Update the macOS option-as-alt policy. The encoder uses this (together
+    /// with the `ALT_SIDE` bit on each event's mods) to decide whether to
+    /// emit `ESC`-prefix for Option+key or pass the composed text through.
+    pub fn set_option_as_alt(&mut self, mode: OptionAsAlt) {
+        self.key_encoder
+            .set_macos_option_as_alt(mode.to_libghostty());
+    }
+
     /// Encode a key event as VT bytes (cursor keys, function keys, etc.).
     pub fn handle_key(
         &mut self,
         event: &KeyEvent,
-        modifiers: &winit::event::Modifiers,
+        modifiers: &Modifiers,
         modes: TerminalModes,
     ) -> VtInput {
         if event.state != ElementState::Pressed {
@@ -93,7 +139,7 @@ impl InputHandler {
     fn encode_key(
         &mut self,
         event: &KeyEvent,
-        modifiers: &winit::event::Modifiers,
+        modifiers: &Modifiers,
         modes: TerminalModes,
     ) -> Vec<u8> {
         self.key_encoder
@@ -108,6 +154,7 @@ impl InputHandler {
         let Ok(mut key_event) = key::Event::new() else {
             return Vec::new();
         };
+
         key_event
             .set_key(gk)
             .set_action(keymap::map_action(event.state))
@@ -118,6 +165,27 @@ impl InputHandler {
 
         let mut buf = Vec::new();
         let _ = self.key_encoder.encode_to_vec(&key_event, &mut buf);
+
+        if log::log_enabled!(log::Level::Trace) {
+            let logical = match &event.logical_key {
+                Key::Character(s) => Some(s.as_str()),
+                _ => None,
+            };
+            #[cfg(target_os = "macos")]
+            let all_mods = event.text_with_all_modifiers();
+            #[cfg(not(target_os = "macos"))]
+            let all_mods: Option<&str> = None;
+            log::trace!(
+                "encode_key: code={:?} text={:?} logical={:?} all_mods={:?} mods={:?} -> {:02x?}",
+                code,
+                event.text.as_deref(),
+                logical,
+                all_mods,
+                key_event.mods(),
+                buf,
+            );
+        }
+
         buf
     }
 }

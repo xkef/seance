@@ -10,5 +10,6 @@ workspace = true
 
 [dependencies]
 libghostty-vt.workspace = true
+log.workspace = true
 seance-vt = { path = "../seance-vt" }
 winit = "0.30"
