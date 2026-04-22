@@ -169,7 +169,8 @@ fn fs_cell_bg(in: FullScreenOut) -> @location(0) vec4<f32> {
         );
     }
 
-    if uniforms.overlay_shape != 0u
+    if uniforms.cursor_visible != 0u
+       && uniforms.overlay_shape != 0u
        && col == uniforms.overlay_pos.x
        && row == uniforms.overlay_pos.y {
         let local = pos - uniforms.cell_size * vec2<f32>(f32(col), f32(row));
