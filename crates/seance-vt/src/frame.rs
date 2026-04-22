@@ -92,12 +92,24 @@ pub struct CellView<'a> {
     pub attrs: CellAttrs,
 }
 
+/// DECSCUSR-tracked cursor shape reported by the VT.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CursorShape {
+    Block,
+    Bar,
+    Underline,
+}
+
 /// Cursor pose the renderer needs to place the block/underline/bar.
+///
+/// `shape` is `None` when the VT snapshot couldn't be read (FFI error) —
+/// the caller should fall back to the user's configured default.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CursorInfo {
     pub pos: GridPos,
     pub visible: bool,
     pub wide: bool,
+    pub shape: Option<CursorShape>,
 }
 
 /// A snapshot of the VT grid the renderer walks to build one frame.

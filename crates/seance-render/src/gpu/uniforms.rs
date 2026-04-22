@@ -22,6 +22,16 @@ impl From<CursorStyle> for CursorShape {
     }
 }
 
+impl From<seance_vt::CursorShape> for CursorShape {
+    fn from(s: seance_vt::CursorShape) -> Self {
+        match s {
+            seance_vt::CursorShape::Block => CursorShape::Block,
+            seance_vt::CursorShape::Bar => CursorShape::Bar,
+            seance_vt::CursorShape::Underline => CursorShape::Underline,
+        }
+    }
+}
+
 /// Layout must match the `Uniforms` struct in `cell.wgsl` exactly.
 const _: () = assert!(size_of::<Uniforms>() == 256);
 
@@ -121,5 +131,15 @@ mod tests {
         assert_eq!(CursorShape::from(CursorStyle::Block) as u32, 1);
         assert_eq!(CursorShape::from(CursorStyle::Underline) as u32, 2);
         assert_eq!(CursorShape::from(CursorStyle::Bar) as u32, 3);
+    }
+
+    #[test]
+    fn vt_cursor_shape_maps_to_overlay_shape() {
+        assert_eq!(CursorShape::from(seance_vt::CursorShape::Block) as u32, 1);
+        assert_eq!(
+            CursorShape::from(seance_vt::CursorShape::Underline) as u32,
+            2
+        );
+        assert_eq!(CursorShape::from(seance_vt::CursorShape::Bar) as u32, 3);
     }
 }

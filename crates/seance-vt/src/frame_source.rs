@@ -5,12 +5,12 @@
 
 use libghostty_vt::RenderState;
 use libghostty_vt::kitty::graphics as kg;
-use libghostty_vt::render::{CellIteration, CellIterator, RowIterator};
+use libghostty_vt::render::{CellIteration, CellIterator, CursorVisualStyle, RowIterator};
 use libghostty_vt::style::{self, PaletteIndex, RgbColor};
 
 use crate::frame::{
-    CellAttrs, CellColor, CellView, CellVisitor, CursorInfo, FrameSource, ImageInfo, ImageVisitor,
-    PlacementLayer, PlacementSnapshot, PlacementVisitor,
+    CellAttrs, CellColor, CellView, CellVisitor, CursorInfo, CursorShape, FrameSource, ImageInfo,
+    ImageVisitor, PlacementLayer, PlacementSnapshot, PlacementVisitor,
 };
 use crate::kitty_placeholder::{PLACEHOLDER_CP, diacritic_index};
 use crate::selection::GridPos;
@@ -50,10 +50,15 @@ impl FrameSource for LibGhosttyFrameSource<'_> {
                 col: vp.x,
                 row: vp.y,
             });
+        let shape = snapshot
+            .cursor_visual_style()
+            .ok()
+            .and_then(map_cursor_shape);
         CursorInfo {
             pos,
             visible,
             wide: false,
+            shape,
         }
     }
 
@@ -154,6 +159,20 @@ fn style_to_cell_color(sc: &style::StyleColor) -> CellColor {
         style::StyleColor::None => CellColor::Default,
         style::StyleColor::Palette(PaletteIndex(idx)) => CellColor::Palette(*idx),
         style::StyleColor::Rgb(rgb) => CellColor::Rgb(rgb.r, rgb.g, rgb.b),
+    }
+}
+
+// `BlockHollow` is ghostty's unfocused-window rendering, not a DECSCUSR
+// request — collapse into `Block`. Window-focus hollow cursors are a
+// separate feature tracked elsewhere. Unknown future variants (the
+// enum is `#[non_exhaustive]`) return `None` so the app falls back to
+// the user's configured shape.
+fn map_cursor_shape(s: CursorVisualStyle) -> Option<CursorShape> {
+    match s {
+        CursorVisualStyle::Bar => Some(CursorShape::Bar),
+        CursorVisualStyle::Block | CursorVisualStyle::BlockHollow => Some(CursorShape::Block),
+        CursorVisualStyle::Underline => Some(CursorShape::Underline),
+        _ => None,
     }
 }
 
