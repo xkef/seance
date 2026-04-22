@@ -49,6 +49,32 @@ pub fn configure_window(window: &winit::window::Window) {
             }
         }
 
+        // Hide the `NSTitlebarContainerView` inside the window's theme frame.
+        // `titlebarAppearsTransparent` + `fullSizeContentView` leave this view
+        // in the hierarchy, and it paints a 1 px highlight at the top of the
+        // window regardless of `titlebarSeparatorStyle`. Mirrors Ghostty's
+        // `HiddenTitlebarTerminalWindow.reapplyHiddenStyle`.
+        if let Some(titlebar_cls) = AnyClass::get(c"NSTitlebarContainerView") {
+            let content_view: *mut AnyObject = msg_send![nswindow, contentView];
+            if !content_view.is_null() {
+                let theme_frame: *mut AnyObject = msg_send![content_view, superview];
+                if !theme_frame.is_null() {
+                    let subviews: *mut AnyObject = msg_send![theme_frame, subviews];
+                    if !subviews.is_null() {
+                        let count: usize = msg_send![subviews, count];
+                        for i in 0..count {
+                            let sub: *mut AnyObject = msg_send![subviews, objectAtIndex: i];
+                            let is_titlebar: bool = msg_send![sub, isKindOfClass: titlebar_cls];
+                            if is_titlebar {
+                                let _: () = msg_send![sub, setHidden: true];
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if let Some(app_class) = AnyClass::get(c"NSApplication") {
             let app: *mut AnyObject = msg_send![app_class, sharedApplication];
             if !app.is_null() {
