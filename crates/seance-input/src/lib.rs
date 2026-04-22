@@ -9,7 +9,9 @@ mod keymap;
 use libghostty_vt::{key, mouse};
 use seance_vt::TerminalModes;
 use winit::event::{ElementState, KeyEvent, Modifiers};
-use winit::keyboard::PhysicalKey;
+use winit::keyboard::{Key, PhysicalKey};
+#[cfg(target_os = "macos")]
+use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 
 /// Result of encoding a VT-bound key event.
 #[derive(Debug)]
@@ -165,10 +167,20 @@ impl InputHandler {
         let _ = self.key_encoder.encode_to_vec(&key_event, &mut buf);
 
         if log::log_enabled!(log::Level::Trace) {
+            let logical = match &event.logical_key {
+                Key::Character(s) => Some(s.as_str()),
+                _ => None,
+            };
+            #[cfg(target_os = "macos")]
+            let all_mods = event.text_with_all_modifiers();
+            #[cfg(not(target_os = "macos"))]
+            let all_mods: Option<&str> = None;
             log::trace!(
-                "encode_key: code={:?} text={:?} mods={:?} -> {:02x?}",
+                "encode_key: code={:?} text={:?} logical={:?} all_mods={:?} mods={:?} -> {:02x?}",
                 code,
                 event.text.as_deref(),
+                logical,
+                all_mods,
                 key_event.mods(),
                 buf,
             );
