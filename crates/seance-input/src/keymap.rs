@@ -181,6 +181,16 @@ pub fn map_mods(mods: &winit::event::Modifiers) -> key::Mods {
     }
     if state.alt_key() {
         m |= key::Mods::ALT;
+        // Required for the libghostty-vt encoder's `macos_option_as_alt =
+        // left/right` branch. `ALT_SIDE` unset means left. Gate on the right
+        // side only — `lalt_state` may report `Unknown` on some platforms
+        // while `ralt_state` reports `Pressed`.
+        if matches!(
+            mods.ralt_state(),
+            winit::keyboard::ModifiersKeyState::Pressed
+        ) {
+            m |= key::Mods::ALT_SIDE;
+        }
     }
     if state.super_key() {
         m |= key::Mods::SUPER;

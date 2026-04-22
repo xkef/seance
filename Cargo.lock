@@ -2199,6 +2199,7 @@ name = "seance-input"
 version = "0.1.0"
 dependencies = [
  "libghostty-vt",
+ "log",
  "seance-vt",
  "winit",
 ]
