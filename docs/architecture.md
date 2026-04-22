@@ -285,9 +285,9 @@ caches; keybind → rebuild action table).
   [IMPLEMENTED].
 - `input.macos_option_as_alt` = `none` / `left` / `right` / `both`
   [IMPLEMENTED]. When `left` or `right`, only that side of Option sends
-  `ESC`-prefix; the other side falls through to macOS text composition
-  (`ø`, `¬`, `–`, …). `both` makes both Option keys Alt (breaks text
-  composition); `none` (default) preserves the macOS default.
+  `ESC`-prefix; the other side falls through to macOS text composition (`ø`,
+  `¬`, `–`, …). `both` makes both Option keys Alt (breaks text composition);
+  `none` (default) preserves the macOS default.
 - User keybind table parsed from config → `Action` enum (`Copy`, `Paste`,
   `FontSize(i8)`, `NewTab`, `SplitH`, `FocusPane(Dir)`, `ToggleFullscreen`, …)
   [PLANNED: [M1][m1] + [M6][m6]].
