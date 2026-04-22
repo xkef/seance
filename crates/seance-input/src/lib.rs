@@ -9,7 +9,7 @@ mod keymap;
 use libghostty_vt::{key, mouse};
 use seance_vt::TerminalModes;
 use winit::event::{ElementState, KeyEvent, Modifiers};
-use winit::keyboard::{ModifiersKeyState, PhysicalKey};
+use winit::keyboard::PhysicalKey;
 
 /// Result of encoding a VT-bound key event.
 #[derive(Debug)]
@@ -40,19 +40,33 @@ pub enum OptionAsAlt {
     Both,
 }
 
+impl OptionAsAlt {
+    fn to_libghostty(self) -> key::OptionAsAlt {
+        match self {
+            OptionAsAlt::None => key::OptionAsAlt::False,
+            OptionAsAlt::Left => key::OptionAsAlt::Left,
+            OptionAsAlt::Right => key::OptionAsAlt::Right,
+            OptionAsAlt::Both => key::OptionAsAlt::True,
+        }
+    }
+}
+
 /// Translates winit events into VT bytes.
 pub struct InputHandler {
     key_encoder: key::Encoder<'static>,
     mouse_encoder: mouse::Encoder<'static>,
-    option_as_alt: OptionAsAlt,
 }
 
 impl Default for InputHandler {
     fn default() -> Self {
+        let mut key_encoder = key::Encoder::new().expect("key encoder");
+        // Enable DEC mode 1036 so ALT+<char> produces `ESC <char>` (matches
+        // xterm/Ghostty defaults). Without this, the encoder drops the ALT
+        // bit and just emits the un-prefixed character.
+        key_encoder.set_alt_esc_prefix(true);
         Self {
-            key_encoder: key::Encoder::new().expect("key encoder"),
+            key_encoder,
             mouse_encoder: mouse::Encoder::new().expect("mouse encoder"),
-            option_as_alt: OptionAsAlt::default(),
         }
     }
 }
@@ -62,10 +76,12 @@ impl InputHandler {
         Self::default()
     }
 
-    /// Update the macOS option-as-alt policy. Takes effect on the next key
-    /// event — no queued bytes to reinterpret.
+    /// Update the macOS option-as-alt policy. The encoder uses this (together
+    /// with the `ALT_SIDE` bit on each event's mods) to decide whether to
+    /// emit `ESC`-prefix for Option+key or pass the composed text through.
     pub fn set_option_as_alt(&mut self, mode: OptionAsAlt) {
-        self.option_as_alt = mode;
+        self.key_encoder
+            .set_macos_option_as_alt(mode.to_libghostty());
     }
 
     /// Encode a key event as VT bytes (cursor keys, function keys, etc.).
@@ -137,28 +153,10 @@ impl InputHandler {
             return Vec::new();
         };
 
-        let alt_as_alt = self.alt_is_alt(modifiers);
-        let mut mods = keymap::map_mods(modifiers);
-        if !alt_as_alt {
-            // Option is acting as the OS text composer — the composed glyph
-            // already lives in `event.text`, and keeping ALT on would cause
-            // the encoder to emit an unwanted `ESC` prefix in front of it.
-            mods.remove(key::Mods::ALT);
-        }
-
         key_event
             .set_key(gk)
             .set_action(keymap::map_action(event.state))
-            .set_mods(mods);
-
-        // Always forward `event.text` when winit produced one. When Alt acts
-        // as Alt (ESC-prefix path), winit's `set_option_as_alt` already
-        // provides the un-composed character (e.g. `c`, not `ç`), so the
-        // encoder gets key=C + utf8="c" + ALT and emits `ESC c`. When Option
-        // is composing, ALT is cleared above and the composed glyph flows
-        // through unchanged. The encoder emits nothing without a utf8 for
-        // plain letter keys, so dropping text on the Alt path silently
-        // swallows the event.
+            .set_mods(keymap::map_mods(modifiers));
         if let Some(text) = &event.text {
             key_event.set_utf8(Some(text.as_str()));
         }
@@ -168,123 +166,14 @@ impl InputHandler {
 
         if log::log_enabled!(log::Level::Trace) {
             log::trace!(
-                "encode_key: code={:?} text={:?} alt={} lalt={:?} ralt={:?} policy={:?} alt_as_alt={} mods={:?} -> {:02x?}",
+                "encode_key: code={:?} text={:?} mods={:?} -> {:02x?}",
                 code,
                 event.text.as_deref(),
-                modifiers.state().alt_key(),
-                modifiers.lalt_state(),
-                modifiers.ralt_state(),
-                self.option_as_alt,
-                alt_as_alt,
-                mods,
+                key_event.mods(),
                 buf,
             );
         }
 
         buf
-    }
-
-    /// Should the currently-held Alt be treated as a VT Alt (ESC-prefix)
-    /// or passed through to OS text composition?
-    ///
-    /// Non-macOS: always Alt. macOS: per `option_as_alt`, resolved against
-    /// the pressed side (`lalt_state` / `ralt_state`).
-    fn alt_is_alt(&self, modifiers: &Modifiers) -> bool {
-        let alt = modifiers.state().alt_key();
-        let lalt = matches!(modifiers.lalt_state(), ModifiersKeyState::Pressed);
-        let ralt = matches!(modifiers.ralt_state(), ModifiersKeyState::Pressed);
-        alt_is_alt_for(
-            self.option_as_alt,
-            cfg!(target_os = "macos"),
-            alt,
-            lalt,
-            ralt,
-        )
-    }
-}
-
-/// Pure decision: given the option-as-alt policy, whether we're on macOS,
-/// and the three Alt-related modifier bits, should Alt act as a VT Alt
-/// (ESC-prefix) rather than a macOS text composer?
-fn alt_is_alt_for(
-    mode: OptionAsAlt,
-    is_macos: bool,
-    alt_held: bool,
-    lalt_pressed: bool,
-    ralt_pressed: bool,
-) -> bool {
-    if !alt_held {
-        return false;
-    }
-    if !is_macos {
-        return true;
-    }
-    match mode {
-        OptionAsAlt::None => false,
-        OptionAsAlt::Both => true,
-        OptionAsAlt::Left => lalt_pressed,
-        OptionAsAlt::Right => ralt_pressed,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn alt_is_alt_non_macos_always_true_when_held() {
-        for mode in [
-            OptionAsAlt::None,
-            OptionAsAlt::Left,
-            OptionAsAlt::Right,
-            OptionAsAlt::Both,
-        ] {
-            assert!(
-                alt_is_alt_for(mode, false, true, false, false),
-                "mode={mode:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn alt_is_alt_false_when_alt_not_held() {
-        assert!(!alt_is_alt_for(
-            OptionAsAlt::Both,
-            true,
-            false,
-            false,
-            false
-        ));
-        assert!(!alt_is_alt_for(
-            OptionAsAlt::Both,
-            false,
-            false,
-            false,
-            false
-        ));
-    }
-
-    #[test]
-    fn alt_is_alt_macos_none_always_composes() {
-        assert!(!alt_is_alt_for(OptionAsAlt::None, true, true, true, false));
-        assert!(!alt_is_alt_for(OptionAsAlt::None, true, true, false, true));
-    }
-
-    #[test]
-    fn alt_is_alt_macos_both_always_alt() {
-        assert!(alt_is_alt_for(OptionAsAlt::Both, true, true, true, false));
-        assert!(alt_is_alt_for(OptionAsAlt::Both, true, true, false, true));
-    }
-
-    #[test]
-    fn alt_is_alt_macos_left_follows_lalt() {
-        assert!(alt_is_alt_for(OptionAsAlt::Left, true, true, true, false));
-        assert!(!alt_is_alt_for(OptionAsAlt::Left, true, true, false, true));
-    }
-
-    #[test]
-    fn alt_is_alt_macos_right_follows_ralt() {
-        assert!(alt_is_alt_for(OptionAsAlt::Right, true, true, false, true));
-        assert!(!alt_is_alt_for(OptionAsAlt::Right, true, true, true, false));
     }
 }
