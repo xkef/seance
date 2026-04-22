@@ -14,6 +14,11 @@ pub fn configure_window(window: &winit::window::Window) {
     // NSWindowTitleVisibility::Hidden.
     const TITLE_HIDDEN: isize = 1;
 
+    // NSTitlebarSeparatorStyle::None — suppresses the 1 px hairline AppKit
+    // otherwise draws at the titlebar/content boundary when the content view
+    // uses FULLSIZE_CONTENT_VIEW.
+    const TITLEBAR_SEPARATOR_NONE: isize = 1;
+
     let Ok(handle) = window.window_handle() else {
         return;
     };
@@ -31,12 +36,42 @@ pub fn configure_window(window: &winit::window::Window) {
         let _: () = msg_send![nswindow, setStyleMask: style_mask];
         let _: () = msg_send![nswindow, setTitlebarAppearsTransparent: true];
         let _: () = msg_send![nswindow, setTitleVisibility: TITLE_HIDDEN];
+        let _: () = msg_send![
+            nswindow,
+            setTitlebarSeparatorStyle: TITLEBAR_SEPARATOR_NONE
+        ];
 
         // Hide close, minimize, zoom buttons.
         for i in 0_isize..3 {
             let button: *mut AnyObject = msg_send![nswindow, standardWindowButton: i];
             if !button.is_null() {
                 let _: () = msg_send![button, setHidden: true];
+            }
+        }
+
+        // Hide the `NSTitlebarContainerView` inside the window's theme frame.
+        // `titlebarAppearsTransparent` + `fullSizeContentView` leave this view
+        // in the hierarchy, and it paints a 1 px highlight at the top of the
+        // window regardless of `titlebarSeparatorStyle`. Mirrors Ghostty's
+        // `HiddenTitlebarTerminalWindow.reapplyHiddenStyle`.
+        if let Some(titlebar_cls) = AnyClass::get(c"NSTitlebarContainerView") {
+            let content_view: *mut AnyObject = msg_send![nswindow, contentView];
+            if !content_view.is_null() {
+                let theme_frame: *mut AnyObject = msg_send![content_view, superview];
+                if !theme_frame.is_null() {
+                    let subviews: *mut AnyObject = msg_send![theme_frame, subviews];
+                    if !subviews.is_null() {
+                        let count: usize = msg_send![subviews, count];
+                        for i in 0..count {
+                            let sub: *mut AnyObject = msg_send![subviews, objectAtIndex: i];
+                            let is_titlebar: bool = msg_send![sub, isKindOfClass: titlebar_cls];
+                            if is_titlebar {
+                                let _: () = msg_send![sub, setHidden: true];
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
 
