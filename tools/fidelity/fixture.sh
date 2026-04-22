@@ -43,6 +43,8 @@ truecolor_row() {
 
 line 'seance fidelity fixture'
 line 'issue-19: palette, bold-is-bright, min-contrast, gamma/blending'
+read -r tty_rows tty_cols < <(stty size)
+line "tty size: ${tty_cols}x${tty_rows}"
 printf '\n'
 
 line 'palette 0-7'
@@ -54,6 +56,14 @@ printf '\n'
 ansi_row '3' 'normal'
 ansi_row '9' 'bright'
 ansi_row '1;3' 'bold'
+printf '\n'
+
+printf '%-14s' 'styles'
+printf '\033[36mcyan\033[0m '
+printf '\033[2;36mdim-cyan\033[0m '
+printf '\033[35mpurple\033[0m '
+printf '\033[1;32mbold-green\033[0m '
+printf '\033[31merror-red\033[0m\n'
 printf '\n'
 
 printf '%-14s' 'near-bg fg'

@@ -26,6 +26,9 @@ pub struct ConfigDiff {
     /// `font.family` changed — live reload not yet implemented; caller logs
     /// a notice.
     pub font_family_changed: bool,
+    /// `font.adjust_cell_height` changed — caller must recompute cell
+    /// metrics and reflow the PTY so rows stay in sync with the renderer.
+    pub font_adjust_cell_height_changed: bool,
     /// `window.padding_x|y` changed — caller must push the new padding to
     /// the renderer and reflow the PTY (cols/rows shrink when padding grows).
     pub window_padding_changed: bool,
@@ -40,6 +43,8 @@ impl ConfigDiff {
         let theme_changed = old.theme != new.theme;
         let font_size_changed = old.font.size != new.font.size;
         let font_family_changed = old.font.family != new.font.family;
+        let font_adjust_cell_height_changed =
+            old.font.adjust_cell_height != new.font.adjust_cell_height;
 
         let window_padding_changed = old.window.padding_x != new.window.padding_x
             || old.window.padding_y != new.window.padding_y;
@@ -57,6 +62,7 @@ impl ConfigDiff {
             theme_changed,
             font_size_changed,
             font_family_changed,
+            font_adjust_cell_height_changed,
             window_padding_changed,
             repaint_only,
         }
@@ -67,6 +73,7 @@ impl ConfigDiff {
         !(self.theme_changed
             || self.font_size_changed
             || self.font_family_changed
+            || self.font_adjust_cell_height_changed
             || self.window_padding_changed
             || self.repaint_only)
     }
@@ -115,6 +122,17 @@ mod tests {
         let d = ConfigDiff::between(&a, &b);
         assert!(d.font_family_changed);
         assert!(!d.font_size_changed);
+    }
+
+    #[test]
+    fn font_adjust_cell_height_change_is_detected() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.font.adjust_cell_height = Some("20%".to_string());
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.font_adjust_cell_height_changed);
+        assert!(!d.font_size_changed);
+        assert!(!d.repaint_only);
     }
 
     #[test]

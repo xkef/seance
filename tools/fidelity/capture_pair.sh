@@ -52,7 +52,7 @@ BACKGROUND_OPACITY="${FIDELITY_BACKGROUND_OPACITY:-1.0}"
 CURSOR_STYLE="${FIDELITY_CURSOR_STYLE:-block}"
 CURSOR_BLINK="${FIDELITY_CURSOR_BLINK:-false}"
 BOUNDS="${FIDELITY_BOUNDS:-120,120,1100,760}"
-SETTLE_SECONDS="${FIDELITY_SETTLE_SECONDS:-1.25}"
+SETTLE_SECONDS="${FIDELITY_SETTLE_SECONDS:-3}"
 FIXTURE="${FIDELITY_FIXTURE:-tools/fidelity/fixture.sh}"
 GHOSTTY_APP="${FIDELITY_GHOSTTY_APP:-/Applications/Ghostty.app}"
 SEANCE_APP="${FIDELITY_SEANCE_APP:-$ROOT/target/Seance.app}"
@@ -151,20 +151,16 @@ wait_for_window_json() {
     return 1
 }
 
-set_window_bounds() {
+set_window_position() {
     local pid=$1
     local x=$2
     local y=$3
-    local w=$4
-    local h=$5
 
-    osascript - "$pid" "$x" "$y" "$w" "$h" <<'APPLESCRIPT' >/dev/null
+    osascript - "$pid" "$x" "$y" <<'APPLESCRIPT' >/dev/null
 on run argv
     set pidValue to (item 1 of argv) as integer
     set xValue to (item 2 of argv) as integer
     set yValue to (item 3 of argv) as integer
-    set wValue to (item 4 of argv) as integer
-    set hValue to (item 5 of argv) as integer
 
     tell application "System Events"
         set targetProcess to first application process whose unix id is pidValue
@@ -177,7 +173,6 @@ on run argv
         end repeat
         tell window 1 of targetProcess
             set position to {xValue, yValue}
-            set size to {wValue, hValue}
         end tell
     end tell
 end run
@@ -186,6 +181,10 @@ APPLESCRIPT
 
 window_id_from_json() {
     python3 -c 'import json,sys; print(json.load(sys.stdin)["window_id"])'
+}
+
+window_size_from_json() {
+    python3 -c 'import json,sys; d=json.load(sys.stdin); print("{},{}".format(d["width"], d["height"]))'
 }
 
 capture_window() {
@@ -199,7 +198,7 @@ capture_window() {
         echo "fidelity: $name window did not appear" >&2
         exit 1
     }
-    set_window_bounds "$pid" "$WIN_X" "$WIN_Y" "$WIN_W" "$WIN_H"
+    set_window_position "$pid" "$WIN_X" "$WIN_Y"
     sleep "$SETTLE_SECONDS"
     json="$(wait_for_window_json "$pid" 10)" || {
         echo "fidelity: failed to read $name window info" >&2
@@ -329,8 +328,11 @@ launch_ghostty() {
 }
 
 launch_seance() {
-    XDG_CONFIG_HOME="$TMP_DIR/xdg" SHELL="$TMP_DIR/driver.sh" "$SEANCE_BIN" \
-        >"$OUT_DIR/seance.stdout.log" 2>"$OUT_DIR/seance.stderr.log" &
+    local initial_size=${1:-}
+    XDG_CONFIG_HOME="$TMP_DIR/xdg" \
+        SHELL="$TMP_DIR/driver.sh" \
+        SEANCE_INITIAL_WINDOW_SIZE="$initial_size" \
+        "$SEANCE_BIN" >"$OUT_DIR/seance.stdout.log" 2>"$OUT_DIR/seance.stderr.log" &
     local pid=$!
     PIDS+=("$pid")
     printf '%s\n' "$pid"
@@ -360,10 +362,11 @@ cp "$TMP_DIR/xdg/seance/config.toml" "$OUT_DIR/seance.toml"
 
 GHOSTTY_PID="$(launch_ghostty)"
 capture_window "$GHOSTTY_PID" "$OUT_DIR/ghostty.png" ghostty
+GHOSTTY_SIZE="$(window_size_from_json <"$OUT_DIR/ghostty.window.json")"
 kill "$GHOSTTY_PID" 2>/dev/null || true
 sleep 0.5
 
-SEANCE_PID="$(launch_seance)"
+SEANCE_PID="$(launch_seance "$GHOSTTY_SIZE")"
 capture_window "$SEANCE_PID" "$OUT_DIR/seance.png" seance
 kill "$SEANCE_PID" 2>/dev/null || true
 sleep 0.5

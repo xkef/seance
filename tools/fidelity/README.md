@@ -56,7 +56,7 @@ Supported environment variables:
 - `FIDELITY_CURSOR_STYLE`
 - `FIDELITY_CURSOR_BLINK`
 - `FIDELITY_BOUNDS` — `x,y,width,height`
-- `FIDELITY_SETTLE_SECONDS`
+- `FIDELITY_SETTLE_SECONDS` — capture delay after launch/move (defaults to `3`)
 - `FIDELITY_FIXTURE`
 - `FIDELITY_GHOSTTY_APP`
 - `FIDELITY_SEANCE_APP`
@@ -72,5 +72,7 @@ Supported environment variables:
 - The default config disables decorations to avoid titlebar/compositor noise.
   Re-enable them with `FIDELITY_DECORATION=true` if the issue requires it.
 - `osascript` needs Accessibility permission to move/focus windows.
+- The default settle delay is intentionally conservative so the first macOS
+  HiDPI scale/reflow pass finishes before capture.
 - The diff image amplifies per-channel deltas. `metrics.json` contains numeric
   summaries plus the hottest changed tiles.
