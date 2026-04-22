@@ -8,6 +8,7 @@ use std::sync::Once;
 use libghostty_vt::alloc::{Allocator, Bytes};
 use libghostty_vt::kitty::graphics::{self, DecodePng, DecodedImage};
 use libghostty_vt::render::{CellIterator, RowIterator};
+use libghostty_vt::style::RgbColor;
 use libghostty_vt::terminal::{Mode, ScrollViewport};
 use libghostty_vt::{RenderState, Terminal as VtTerminal, TerminalOptions};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -191,6 +192,20 @@ impl Terminal {
             pixel_width,
             pixel_height,
         });
+    }
+
+    pub fn set_theme_colors(
+        &mut self,
+        fg: [u8; 3],
+        bg: [u8; 3],
+        cursor: [u8; 3],
+        palette: [[u8; 3]; 256],
+    ) {
+        let rgb = |[r, g, b]: [u8; 3]| RgbColor { r, g, b };
+        let _ = self.vt.set_default_fg_color(Some(rgb(fg)));
+        let _ = self.vt.set_default_bg_color(Some(rgb(bg)));
+        let _ = self.vt.set_default_cursor_color(Some(rgb(cursor)));
+        let _ = self.vt.set_default_color_palette(Some(palette.map(rgb)));
     }
 
     pub fn scroll_lines(&mut self, delta: i32) {

@@ -11,4 +11,4 @@ mod cell_builder;
 pub mod cosmic;
 
 pub(crate) use atlas::GlyphAtlas;
-pub(crate) use cell_builder::{CellBuilder, CellText, FrameInfo};
+pub(crate) use cell_builder::{BuildFrameConfig, CellBuilder, CellText, FrameInfo};

@@ -29,17 +29,32 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 
 // ================================================================
-// Min-contrast (WCAG relative luminance, approximate in sRGB)
+// Min-contrast (WCAG relative luminance in linearized sRGB)
 // ================================================================
+
+fn linearize_component(v: f32) -> f32 {
+    if v <= 0.04045 {
+        return v / 12.92;
+    }
+    return pow((v + 0.055) / 1.055, 2.4);
+}
+
+fn linearize_rgb(rgb: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(
+        linearize_component(rgb.r),
+        linearize_component(rgb.g),
+        linearize_component(rgb.b),
+    );
+}
 
 fn luminance(rgb: vec3<f32>) -> f32 {
     return dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
 }
 
-fn contrast_ratio(l1: f32, l2: f32) -> f32 {
-    let lighter = max(l1, l2);
-    let darker = min(l1, l2);
-    return (lighter + 0.05) / (darker + 0.05);
+fn contrast_ratio(color1: vec3<f32>, color2: vec3<f32>) -> f32 {
+    let l1 = luminance(color1);
+    let l2 = luminance(color2);
+    return (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05);
 }
 
 fn apply_min_contrast(fg: vec3<f32>, bg: vec3<f32>, min_ratio: f32) -> vec3<f32> {
@@ -47,41 +62,18 @@ fn apply_min_contrast(fg: vec3<f32>, bg: vec3<f32>, min_ratio: f32) -> vec3<f32>
         return fg;
     }
 
-    let fg_lum = luminance(fg);
-    let bg_lum = luminance(bg);
-
-    if contrast_ratio(fg_lum, bg_lum) >= min_ratio {
+    let fg_linear = linearize_rgb(fg);
+    let bg_linear = linearize_rgb(bg);
+    if contrast_ratio(fg_linear, bg_linear) >= min_ratio {
         return fg;
     }
 
-    let target_lighter = min_ratio * (bg_lum + 0.05) - 0.05;
-    let target_darker = (bg_lum + 0.05) / min_ratio - 0.05;
-
-    var target_lum: f32;
-    if target_lighter <= 1.0 {
-        target_lum = target_lighter;
-    } else if target_darker >= 0.0 {
-        target_lum = target_darker;
-    } else {
-        target_lum = select(0.0, 1.0, abs(target_lighter - fg_lum) < abs(target_darker - fg_lum));
+    let white_ratio = contrast_ratio(vec3<f32>(1.0, 1.0, 1.0), bg_linear);
+    let black_ratio = contrast_ratio(vec3<f32>(0.0, 0.0, 0.0), bg_linear);
+    if white_ratio > black_ratio {
+        return vec3<f32>(1.0, 1.0, 1.0);
     }
-
-    if fg_lum > 0.001 {
-        let scale = target_lum / fg_lum;
-        let adjusted = clamp(fg * scale, vec3<f32>(0.0), vec3<f32>(1.0));
-        let adj_lum = luminance(adjusted);
-        if abs(adj_lum - target_lum) > 0.01 {
-            if target_lum > adj_lum {
-                let t = (target_lum - adj_lum) / (1.0 - adj_lum + 0.001);
-                return mix(adjusted, vec3<f32>(1.0), clamp(t, 0.0, 1.0));
-            } else {
-                let t = (adj_lum - target_lum) / (adj_lum + 0.001);
-                return mix(adjusted, vec3<f32>(0.0), clamp(t, 0.0, 1.0));
-            }
-        }
-        return adjusted;
-    }
-    return vec3<f32>(target_lum);
+    return vec3<f32>(0.0, 0.0, 0.0);
 }
 
 // ================================================================
@@ -133,7 +125,8 @@ fn vs_fullscreen(@builtin(vertex_index) vid: u32) -> FullScreenOut {
 
 @fragment
 fn fs_bg_color(in: FullScreenOut) -> @location(0) vec4<f32> {
-    return uniforms.bg_color;
+    let bg = uniforms.bg_color;
+    return vec4<f32>(bg.rgb * bg.a, bg.a);
 }
 
 // ================================================================
@@ -176,7 +169,8 @@ fn fs_cell_bg(in: FullScreenOut) -> @location(0) vec4<f32> {
         );
     }
 
-    if uniforms.overlay_shape != 0u
+    if uniforms.cursor_visible != 0u
+       && uniforms.overlay_shape != 0u
        && col == uniforms.overlay_pos.x
        && row == uniforms.overlay_pos.y {
         let local = pos - uniforms.cell_size * vec2<f32>(f32(col), f32(row));

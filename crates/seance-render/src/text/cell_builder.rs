@@ -14,7 +14,7 @@ use seance_config::Theme;
 use seance_vt::{CellColor, CellView, CellVisitor, FrameSource};
 
 use super::atlas::{AtlasEntry, GlyphAtlas};
-use super::backend::{GlyphFormat, GlyphId, ShapedGlyph, TextBackend};
+use super::backend::{FontAttrs, GlyphFormat, GlyphId, ShapedGlyph, TextBackend};
 
 /// Resolve a VT-reported color into concrete RGB.
 /// `None` means "use the theme default" (caller decides fg vs bg).
@@ -50,8 +50,18 @@ pub struct FrameInfo {
     pub bg_color: [u8; 4],
     pub min_contrast: f32,
     pub cursor_pos: [u16; 2],
+    pub cursor_visible: bool,
     pub cursor_color: [u8; 4],
     pub cursor_wide: bool,
+}
+
+pub struct BuildFrameConfig<'a> {
+    pub surface_width: u32,
+    pub surface_height: u32,
+    pub window_padding: [u16; 2],
+    pub theme: &'a Theme,
+    pub bg_color: [u8; 4],
+    pub min_contrast: f32,
 }
 
 type GlyphSlots = HashMap<GlyphId, AtlasEntry, FxBuildHasher>;
@@ -63,6 +73,7 @@ struct CellRequest {
     col: u16,
     text: String,
     fg: [u8; 4],
+    font_attrs: FontAttrs,
 }
 
 struct FrameGeometry {
@@ -72,6 +83,8 @@ struct FrameGeometry {
     grid_rows: u16,
     grid_padding: [f32; 4],
 }
+
+const FAINT_ALPHA: u8 = 128;
 
 pub struct CellBuilder {
     atlas: GlyphAtlas,
@@ -102,10 +115,7 @@ impl CellBuilder {
         &mut self,
         source: &mut dyn FrameSource,
         backend: &mut dyn TextBackend,
-        surface_width: u32,
-        surface_height: u32,
-        window_padding: [u16; 2],
-        theme: &Theme,
+        config: BuildFrameConfig<'_>,
     ) {
         let (baseline, geom) = {
             let m = backend.metrics();
@@ -113,15 +123,21 @@ impl CellBuilder {
                 source,
                 m.cell_width,
                 m.cell_height,
-                surface_width,
-                surface_height,
-                window_padding,
+                config.surface_width,
+                config.surface_height,
+                config.window_padding,
             );
             (m.baseline, g)
         };
         let cursor = source.cursor();
 
-        walk_grid(source, &geom, theme, &mut self.bg_cells, &mut self.requests);
+        walk_grid(
+            source,
+            &geom,
+            config.theme,
+            &mut self.bg_cells,
+            &mut self.requests,
+        );
 
         self.text_cells.clear();
         shape_and_pack(
@@ -142,10 +158,11 @@ impl CellBuilder {
             grid_cols: geom.grid_cols,
             grid_rows: geom.grid_rows,
             grid_padding: geom.grid_padding,
-            bg_color: theme.bg,
-            min_contrast: 1.0,
+            bg_color: config.bg_color,
+            min_contrast: config.min_contrast,
             cursor_pos: [cursor.pos.col, cursor.pos.row],
-            cursor_color: theme.cursor,
+            cursor_visible: cursor.visible,
+            cursor_color: config.theme.cursor,
             cursor_wide: cursor.wide,
         });
     }
@@ -213,7 +230,10 @@ fn walk_grid(
     requests: &mut Vec<CellRequest>,
 ) {
     bg_cells.clear();
-    bg_cells.resize(geom.grid_cols as usize * geom.grid_rows as usize, theme.bg);
+    bg_cells.resize(
+        geom.grid_cols as usize * geom.grid_rows as usize,
+        [0, 0, 0, 0],
+    );
     requests.clear();
 
     let mut visitor = WalkVisitor {
@@ -237,7 +257,7 @@ fn shape_and_pack(
 ) {
     for req in requests {
         shape_scratch.clear();
-        backend.shape_cell(&req.text, shape_scratch);
+        backend.shape_cell(&req.text, req.font_attrs, shape_scratch);
         for glyph in &*shape_scratch {
             let Some(entry) = ensure_glyph_slot(glyph_slots, atlas, backend, glyph.id) else {
                 continue;
@@ -293,19 +313,29 @@ impl CellVisitor for WalkVisitor<'_> {
         }
         let idx = row as usize * self.cols as usize + col as usize;
 
-        if let Some(rgb) = resolve_color(self.theme, &view.bg) {
-            self.bg_cells[idx] = [rgb[0], rgb[1], rgb[2], 255];
+        let theme_bg = [self.theme.bg[0], self.theme.bg[1], self.theme.bg[2]];
+        let mut fg_rgb = resolve_color(self.theme, &view.fg).unwrap_or(self.theme.fg);
+        let mut bg_rgb = resolve_color(self.theme, &view.bg).unwrap_or(theme_bg);
+        if view.attrs.inverse {
+            std::mem::swap(&mut fg_rgb, &mut bg_rgb);
         }
-        if view.text.is_empty() {
+        if bg_rgb != theme_bg {
+            self.bg_cells[idx] = [bg_rgb[0], bg_rgb[1], bg_rgb[2], 255];
+        }
+        if view.text.is_empty() || view.attrs.invisible {
             return;
         }
 
-        let fg_rgb = resolve_color(self.theme, &view.fg).unwrap_or(self.theme.fg);
+        let alpha = if view.attrs.faint { FAINT_ALPHA } else { 255 };
         self.requests.push(CellRequest {
             row,
             col,
             text: view.text.to_owned(),
-            fg: [fg_rgb[0], fg_rgb[1], fg_rgb[2], 255],
+            fg: [fg_rgb[0], fg_rgb[1], fg_rgb[2], alpha],
+            font_attrs: FontAttrs {
+                bold: view.attrs.bold,
+                italic: view.attrs.italic,
+            },
         });
     }
 }
@@ -313,13 +343,12 @@ impl CellVisitor for WalkVisitor<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use seance_vt::{CellColor, CellVisitor, CursorInfo, GridPos};
+    use seance_vt::{CellAttrs, CellColor, CellVisitor, CursorInfo, GridPos};
 
-    /// Stub `FrameSource` replaying a fixed `(text, fg, bg)` grid.
     struct FakeFrame<'a> {
         cols: u16,
         rows: u16,
-        cells: &'a [(&'a str, CellColor, CellColor)],
+        cells: &'a [(&'a str, CellColor, CellColor, CellAttrs)],
     }
 
     impl FrameSource for FakeFrame<'_> {
@@ -333,7 +362,7 @@ mod tests {
             None
         }
         fn visit_cells(&mut self, visitor: &mut dyn CellVisitor) {
-            for (i, (text, fg, bg)) in self.cells.iter().enumerate() {
+            for (i, (text, fg, bg, attrs)) in self.cells.iter().enumerate() {
                 let i = i as u16;
                 visitor.cell(
                     i / self.cols,
@@ -342,6 +371,7 @@ mod tests {
                         text,
                         fg: *fg,
                         bg: *bg,
+                        attrs: *attrs,
                     },
                 );
             }
@@ -352,9 +382,24 @@ mod tests {
     fn walk_grid_emits_one_request_per_non_empty_cell() {
         let theme = Theme::blank();
         let cells = [
-            ("A", CellColor::Default, CellColor::Default),
-            ("", CellColor::Default, CellColor::Default),
-            ("B", CellColor::Rgb(10, 20, 30), CellColor::Default),
+            (
+                "A",
+                CellColor::Default,
+                CellColor::Default,
+                CellAttrs::default(),
+            ),
+            (
+                "",
+                CellColor::Default,
+                CellColor::Default,
+                CellAttrs::default(),
+            ),
+            (
+                "B",
+                CellColor::Rgb(10, 20, 30),
+                CellColor::Default,
+                CellAttrs::default(),
+            ),
         ];
         let mut source = FakeFrame {
             cols: 3,
@@ -374,38 +419,178 @@ mod tests {
         walk_grid(&mut source, &geom, &theme, &mut bg_cells, &mut requests);
 
         assert_eq!(bg_cells.len(), 3);
+        assert_eq!(bg_cells[0], [0, 0, 0, 0]);
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].text, "A");
         assert_eq!(requests[0].col, 0);
         assert_eq!(requests[1].text, "B");
         assert_eq!(requests[1].col, 2);
         assert_eq!(requests[1].fg, [10, 20, 30, 255]);
+        assert_eq!(requests[1].font_attrs, FontAttrs::default());
+    }
+
+    #[test]
+    fn walk_grid_applies_faint_alpha() {
+        let theme = Theme::blank();
+        let cells = [(
+            "dim",
+            CellColor::Palette(6),
+            CellColor::Default,
+            CellAttrs {
+                faint: true,
+                ..CellAttrs::default()
+            },
+        )];
+        let mut source = FakeFrame {
+            cols: 1,
+            rows: 1,
+            cells: &cells,
+        };
+        let geom = FrameGeometry {
+            cell_width: 10.0,
+            cell_height: 20.0,
+            grid_cols: 1,
+            grid_rows: 1,
+            grid_padding: [0.0; 4],
+        };
+        let mut bg_cells = Vec::new();
+        let mut requests = Vec::new();
+
+        walk_grid(&mut source, &geom, &theme, &mut bg_cells, &mut requests);
+
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].fg, [0, 205, 205, FAINT_ALPHA]);
+    }
+
+    #[test]
+    fn walk_grid_swaps_fg_and_bg_for_inverse_cells() {
+        let theme = Theme::blank();
+        let cells = [(
+            "inv",
+            CellColor::Palette(1),
+            CellColor::Default,
+            CellAttrs {
+                inverse: true,
+                ..CellAttrs::default()
+            },
+        )];
+        let mut source = FakeFrame {
+            cols: 1,
+            rows: 1,
+            cells: &cells,
+        };
+        let geom = FrameGeometry {
+            cell_width: 10.0,
+            cell_height: 20.0,
+            grid_cols: 1,
+            grid_rows: 1,
+            grid_padding: [0.0; 4],
+        };
+        let mut bg_cells = Vec::new();
+        let mut requests = Vec::new();
+
+        walk_grid(&mut source, &geom, &theme, &mut bg_cells, &mut requests);
+
+        assert_eq!(bg_cells[0], [205, 0, 0, 255]);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].fg, [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn walk_grid_skips_invisible_text_but_keeps_background() {
+        let theme = Theme::blank();
+        let cells = [(
+            "hidden",
+            CellColor::Palette(2),
+            CellColor::Palette(1),
+            CellAttrs {
+                invisible: true,
+                bold: true,
+                italic: true,
+                ..CellAttrs::default()
+            },
+        )];
+        let mut source = FakeFrame {
+            cols: 1,
+            rows: 1,
+            cells: &cells,
+        };
+        let geom = FrameGeometry {
+            cell_width: 10.0,
+            cell_height: 20.0,
+            grid_cols: 1,
+            grid_rows: 1,
+            grid_padding: [0.0; 4],
+        };
+        let mut bg_cells = Vec::new();
+        let mut requests = Vec::new();
+
+        walk_grid(&mut source, &geom, &theme, &mut bg_cells, &mut requests);
+
+        assert_eq!(bg_cells[0], [205, 0, 0, 255]);
+        assert!(requests.is_empty());
+    }
+
+    #[test]
+    fn walk_grid_preserves_bold_and_italic_font_attrs() {
+        let theme = Theme::blank();
+        let cells = [(
+            "styled",
+            CellColor::Default,
+            CellColor::Default,
+            CellAttrs {
+                bold: true,
+                italic: true,
+                ..CellAttrs::default()
+            },
+        )];
+        let mut source = FakeFrame {
+            cols: 1,
+            rows: 1,
+            cells: &cells,
+        };
+        let geom = FrameGeometry {
+            cell_width: 10.0,
+            cell_height: 20.0,
+            grid_cols: 1,
+            grid_rows: 1,
+            grid_padding: [0.0; 4],
+        };
+        let mut bg_cells = Vec::new();
+        let mut requests = Vec::new();
+
+        walk_grid(&mut source, &geom, &theme, &mut bg_cells, &mut requests);
+
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].font_attrs,
+            FontAttrs {
+                bold: true,
+                italic: true,
+            }
+        );
     }
 
     #[test]
     fn geometry_honors_user_padding() {
-        let cells: [(&str, CellColor, CellColor); 0] = [];
+        let cells: [(&str, CellColor, CellColor, CellAttrs); 0] = [];
         let mut source = FakeFrame {
             cols: 10,
             rows: 5,
             cells: &cells,
         };
-        // 10×5 grid of 10×20 cells = 100×100 grid pixels inside a 200×200
-        // surface. With padding [12, 6] the grid anchors at (12, 6).
         let g = geometry(&mut source, 10.0, 20.0, 200, 200, [12, 6]);
         assert_eq!(g.grid_padding, [12.0, 6.0, 12.0, 6.0]);
     }
 
     #[test]
     fn geometry_clamps_padding_to_surface() {
-        let cells: [(&str, CellColor, CellColor); 0] = [];
+        let cells: [(&str, CellColor, CellColor, CellAttrs); 0] = [];
         let mut source = FakeFrame {
             cols: 10,
             rows: 5,
             cells: &cells,
         };
-        // Requested padding exceeds the residual space (surface - grid);
-        // clamp to the residual so the grid still fits entirely on-screen.
         let g = geometry(&mut source, 10.0, 20.0, 110, 110, [50, 40]);
         assert_eq!(g.grid_padding[0], 10.0);
         assert_eq!(g.grid_padding[1], 10.0);
