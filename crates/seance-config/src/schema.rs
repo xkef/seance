@@ -53,7 +53,7 @@ impl Default for FontConfig {
             family: "JetBrainsMono Nerd Font".to_string(),
             size: 14.0,
             features: vec!["calt".to_string()],
-            adjust_cell_height: Some("20%".to_string()),
+            adjust_cell_height: None,
             adjust_cell_width: None,
             min_contrast: 1.1,
             fallback: Vec::new(),

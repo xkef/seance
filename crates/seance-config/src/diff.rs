@@ -135,7 +135,7 @@ mod tests {
     fn font_adjust_cell_height_change_is_detected() {
         let a = Config::default();
         let mut b = Config::default();
-        b.font.adjust_cell_height = Some("10%".to_string());
+        b.font.adjust_cell_height = Some("20%".to_string());
         let d = ConfigDiff::between(&a, &b);
         assert!(d.font_adjust_cell_height_changed);
         assert!(!d.font_size_changed);
