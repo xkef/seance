@@ -162,6 +162,22 @@ impl InputHandler {
 
         let mut buf = Vec::new();
         let _ = self.key_encoder.encode_to_vec(&key_event, &mut buf);
+
+        if log::log_enabled!(log::Level::Trace) {
+            log::trace!(
+                "encode_key: code={:?} text={:?} alt={} lalt={:?} ralt={:?} policy={:?} alt_as_alt={} mods={:?} -> {:02x?}",
+                code,
+                event.text.as_deref(),
+                modifiers.state().alt_key(),
+                modifiers.lalt_state(),
+                modifiers.ralt_state(),
+                self.option_as_alt,
+                alt_as_alt,
+                mods,
+                buf,
+            );
+        }
+
         buf
     }
 
