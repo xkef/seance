@@ -18,6 +18,22 @@ def convert_to_bmp(src: Path, dst: Path) -> None:
     )
 
 
+def channel_mask_info(mask: int) -> tuple[int, int]:
+    if mask == 0:
+        raise ValueError("BMP channel mask must be non-zero")
+    shift = (mask & -mask).bit_length() - 1
+    bits = (mask >> shift).bit_length()
+    return shift, bits
+
+
+def extract_channel(value: int, mask: int) -> int:
+    shift, bits = channel_mask_info(mask)
+    raw = (value & mask) >> shift
+    if bits == 8:
+        return raw
+    return round(raw * 255 / ((1 << bits) - 1))
+
+
 def read_bmp(path: Path) -> tuple[int, int, bytearray]:
     data = path.read_bytes()
     if data[:2] != b"BM":
@@ -36,16 +52,22 @@ def read_bmp(path: Path) -> tuple[int, int, bytearray]:
 
     if planes != 1:
         raise ValueError(f"{path} has unsupported plane count {planes}")
-    if compression != 0:
-        raise ValueError(f"{path} uses unsupported compression mode {compression}")
     if bits_per_pixel not in (24, 32):
         raise ValueError(f"{path} uses unsupported pixel format {bits_per_pixel}-bit")
+    if compression not in (0, 3):
+        raise ValueError(f"{path} uses unsupported compression mode {compression}")
 
     top_down = height < 0
     width = abs(width)
     height = abs(height)
     bytes_per_pixel = bits_per_pixel // 8
     row_stride = ((width * bits_per_pixel + 31) // 32) * 4
+
+    masks = None
+    if compression == 3:
+        if bits_per_pixel != 32:
+            raise ValueError(f"{path} uses unsupported bitfields format {bits_per_pixel}-bit")
+        masks = struct.unpack_from("<IIII", data, 54)
 
     pixels = bytearray(width * height * 3)
     for row in range(height):
@@ -54,10 +76,17 @@ def read_bmp(path: Path) -> tuple[int, int, bytearray]:
         dst_base = row * width * 3
         for col in range(width):
             src = src_base + col * bytes_per_pixel
-            b = data[src]
-            g = data[src + 1]
-            r = data[src + 2]
             dst = dst_base + col * 3
+            if masks is None:
+                b = data[src]
+                g = data[src + 1]
+                r = data[src + 2]
+            else:
+                packed = struct.unpack_from("<I", data, src)[0]
+                red_mask, green_mask, blue_mask, _alpha_mask = masks
+                r = extract_channel(packed, red_mask)
+                g = extract_channel(packed, green_mask)
+                b = extract_channel(packed, blue_mask)
             pixels[dst] = r
             pixels[dst + 1] = g
             pixels[dst + 2] = b
@@ -98,6 +127,18 @@ def write_png_via_sips(path: Path, width: int, height: int, pixels: bytearray) -
         )
 
 
+def crop_top_left(pixels: bytearray, width: int, height: int, target_width: int, target_height: int) -> bytearray:
+    if (width, height) == (target_width, target_height):
+        return pixels
+    cropped = bytearray(target_width * target_height * 3)
+    for row in range(target_height):
+        src_base = row * width * 3
+        dst_base = row * target_width * 3
+        span = target_width * 3
+        cropped[dst_base : dst_base + span] = pixels[src_base : src_base + span]
+    return cropped
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Compare two screenshots and emit a diff image plus JSON metrics.")
     parser.add_argument("--reference", required=True, type=Path)
@@ -116,10 +157,13 @@ def main() -> int:
         width, height, reference = read_bmp(ref_bmp)
         cand_width, cand_height, candidate = read_bmp(cand_bmp)
 
-    if (width, height) != (cand_width, cand_height):
-        raise SystemExit(
-            f"dimension mismatch: reference={width}x{height}, candidate={cand_width}x{cand_height}"
-        )
+    original_width, original_height = width, height
+    original_cand_width, original_cand_height = cand_width, cand_height
+    crop_width = min(width, cand_width)
+    crop_height = min(height, cand_height)
+    reference = crop_top_left(reference, width, height, crop_width, crop_height)
+    candidate = crop_top_left(candidate, cand_width, cand_height, crop_width, crop_height)
+    width, height = crop_width, crop_height
 
     total_channels = width * height * 3
     total_pixels = width * height
@@ -189,6 +233,9 @@ def main() -> int:
         "diff": os.fspath(args.diff),
         "width": width,
         "height": height,
+        "reference_dimensions": {"width": original_width, "height": original_height},
+        "candidate_dimensions": {"width": original_cand_width, "height": original_cand_height},
+        "cropped_to_common_top_left": (original_width, original_height) != (original_cand_width, original_cand_height),
         "mae": round(sum_abs / total_channels, 6),
         "rmse": round(math.sqrt(sum_sq / total_channels), 6),
         "max_channel_diff": max_diff,

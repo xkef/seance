@@ -16,10 +16,12 @@ pub struct RendererConfig {
     pub scale: f64,
     pub font_family: String,
     pub font_size: f32,
+    pub min_contrast: f32,
     /// Inner gutter between window edges and the cell grid, in physical
     /// pixels. `[x, y]`. The area outside the grid is filled by the
-    /// fullscreen bg pass with `theme.bg`.
+    /// fullscreen bg pass with the effective theme background.
     pub window_padding: [u16; 2],
+    pub background_opacity: f32,
     pub theme: Theme,
 }
 
@@ -46,6 +48,8 @@ pub struct TerminalRenderer {
     cell_builder: CellBuilder,
     gpu: GpuState,
     theme: Theme,
+    min_contrast: f32,
+    background_opacity: f32,
     cell_size: [f32; 2],
     surface_width: u32,
     surface_height: u32,
@@ -68,6 +72,8 @@ impl TerminalRenderer {
             cell_builder: CellBuilder::new(),
             gpu,
             theme: config.theme,
+            min_contrast: config.min_contrast.clamp(1.0, 21.0),
+            background_opacity: config.background_opacity.clamp(0.0, 1.0),
             cell_size,
             surface_width: config.width,
             surface_height: config.height,
@@ -108,6 +114,8 @@ impl TerminalRenderer {
     }
 
     pub fn update_frame(&mut self, source: &mut dyn FrameSource) {
+        let bg_color = self.effective_bg_color();
+        let min_contrast = self.min_contrast;
         self.cell_builder.build_frame(
             source,
             self.backend.as_mut(),
@@ -115,6 +123,8 @@ impl TerminalRenderer {
             self.surface_height,
             self.window_padding,
             &self.theme,
+            bg_color,
+            min_contrast,
         );
         if let Some(fi) = self.cell_builder.last_frame() {
             self.gpu.update_image_frame(source, fi);
@@ -150,10 +160,41 @@ impl TerminalRenderer {
         self.theme = theme;
     }
 
+    pub fn set_min_contrast(&mut self, min_contrast: f32) {
+        self.min_contrast = min_contrast.clamp(1.0, 21.0);
+    }
+
+    pub fn set_background_opacity(&mut self, opacity: f32) {
+        self.background_opacity = opacity.clamp(0.0, 1.0);
+    }
+
     /// Update the configured window padding. `grid_size()` shrinks
     /// accordingly, so callers should call `reflow()` afterwards to push the
     /// new cols/rows to the PTY.
     pub fn set_window_padding(&mut self, padding: [u16; 2]) {
         self.window_padding = padding;
+    }
+
+    fn effective_bg_color(&self) -> [u8; 4] {
+        effective_bg_color(self.theme.bg, self.background_opacity)
+    }
+}
+
+fn effective_bg_color(bg: [u8; 4], opacity: f32) -> [u8; 4] {
+    let mut bg = bg;
+    bg[3] = ((bg[3] as f32) * opacity.clamp(0.0, 1.0)).round() as u8;
+    bg
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn background_opacity_scales_theme_alpha() {
+        assert_eq!(
+            effective_bg_color([10, 20, 30, 200], 0.5),
+            [10, 20, 30, 100]
+        );
     }
 }

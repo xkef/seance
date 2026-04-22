@@ -50,6 +50,7 @@ pub struct FrameInfo {
     pub bg_color: [u8; 4],
     pub min_contrast: f32,
     pub cursor_pos: [u16; 2],
+    pub cursor_visible: bool,
     pub cursor_color: [u8; 4],
     pub cursor_wide: bool,
 }
@@ -106,6 +107,8 @@ impl CellBuilder {
         surface_height: u32,
         window_padding: [u16; 2],
         theme: &Theme,
+        bg_color: [u8; 4],
+        min_contrast: f32,
     ) {
         let (baseline, geom) = {
             let m = backend.metrics();
@@ -142,9 +145,10 @@ impl CellBuilder {
             grid_cols: geom.grid_cols,
             grid_rows: geom.grid_rows,
             grid_padding: geom.grid_padding,
-            bg_color: theme.bg,
-            min_contrast: 1.0,
+            bg_color,
+            min_contrast,
             cursor_pos: [cursor.pos.col, cursor.pos.row],
+            cursor_visible: cursor.visible,
             cursor_color: theme.cursor,
             cursor_wide: cursor.wide,
         });
@@ -213,7 +217,10 @@ fn walk_grid(
     requests: &mut Vec<CellRequest>,
 ) {
     bg_cells.clear();
-    bg_cells.resize(geom.grid_cols as usize * geom.grid_rows as usize, theme.bg);
+    bg_cells.resize(
+        geom.grid_cols as usize * geom.grid_rows as usize,
+        [0, 0, 0, 0],
+    );
     requests.clear();
 
     let mut visitor = WalkVisitor {
@@ -374,6 +381,7 @@ mod tests {
         walk_grid(&mut source, &geom, &theme, &mut bg_cells, &mut requests);
 
         assert_eq!(bg_cells.len(), 3);
+        assert_eq!(bg_cells[0], [0, 0, 0, 0]);
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].text, "A");
         assert_eq!(requests[0].col, 0);

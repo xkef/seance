@@ -248,7 +248,8 @@ impl App {
                 return;
             }
         };
-        let diff = ConfigDiff::between(&self.config, &new_config);
+        let old_config = self.config.clone();
+        let diff = ConfigDiff::between(&old_config, &new_config);
         if diff.is_empty() {
             self.config = new_config;
             return;
@@ -256,6 +257,15 @@ impl App {
 
         log::info!("config reloaded: {diff:?}");
         self.config = new_config;
+
+        if let Some(r) = &mut self.renderer {
+            if old_config.font.min_contrast != self.config.font.min_contrast {
+                r.set_min_contrast(self.config.font.min_contrast);
+            }
+            if old_config.window.background_opacity != self.config.window.background_opacity {
+                r.set_background_opacity(self.config.window.background_opacity);
+            }
+        }
 
         if diff.font_size_changed {
             self.font_size = self.config.font.size;
@@ -520,7 +530,9 @@ impl ApplicationHandler<UserEvent> for App {
             scale: window.scale_factor(),
             font_family: self.config.font.family.clone(),
             font_size: self.font_size,
+            min_contrast: self.config.font.min_contrast,
             window_padding: [self.config.window.padding_x, self.config.window.padding_y],
+            background_opacity: self.config.window.background_opacity,
             theme,
         };
 

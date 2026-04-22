@@ -317,10 +317,10 @@ build_seance_bundle() {
 
 launch_ghostty() {
     local baseline
-    baseline="$(pgrep -x Ghostty || true)"
+    baseline="$(pgrep -x ghostty || true)"
     open -na "$GHOSTTY_APP" --args --config-file="$TMP_DIR/ghostty.config" -e "$TMP_DIR/driver.sh"
     local pid
-    pid="$(new_pid_for_name Ghostty "$baseline")" || {
+    pid="$(new_pid_for_name ghostty "$baseline")" || {
         echo "fidelity: failed to find new Ghostty pid" >&2
         exit 1
     }

@@ -33,13 +33,26 @@ impl FrameSource for LibGhosttyFrameSource<'_> {
     }
 
     fn cursor(&mut self) -> CursorInfo {
-        let vt = self.term.vt_mut();
+        let mut render_state = match RenderState::new() {
+            Ok(state) => state,
+            Err(_) => return CursorInfo::default(),
+        };
+        let snapshot = match render_state.update(self.term.vt_mut()) {
+            Ok(snapshot) => snapshot,
+            Err(_) => return CursorInfo::default(),
+        };
+        let visible = snapshot.cursor_visible().unwrap_or(true);
+        let pos = snapshot
+            .cursor_viewport()
+            .ok()
+            .flatten()
+            .map_or(GridPos::default(), |vp| GridPos {
+                col: vp.x,
+                row: vp.y,
+            });
         CursorInfo {
-            pos: GridPos {
-                col: vt.cursor_x().unwrap_or(0),
-                row: vt.cursor_y().unwrap_or(0),
-            },
-            visible: vt.is_cursor_visible().unwrap_or(true),
+            pos,
+            visible,
             wide: false,
         }
     }

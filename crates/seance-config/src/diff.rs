@@ -29,8 +29,8 @@ pub struct ConfigDiff {
     /// `window.padding_x|y` changed — caller must push the new padding to
     /// the renderer and reflow the PTY (cols/rows shrink when padding grows).
     pub window_padding_changed: bool,
-    /// Cursor/opacity/mouse-hide changed — a plain repaint is enough
-    /// (downstream consumers read `Config` directly on the next frame).
+    /// Min-contrast, cursor, opacity, or mouse-hide changed — a plain
+    /// repaint is enough once the renderer has consumed the new values.
     pub repaint_only: bool,
 }
 
@@ -47,7 +47,8 @@ impl ConfigDiff {
         // Fields whose consumers will pick up changes on the next paint.
         // Grouped together so we can request a single redraw if any of them
         // moved — we don't need a more granular signal than that.
-        let repaint_only = old.window.background_opacity != new.window.background_opacity
+        let repaint_only = old.font.min_contrast != new.font.min_contrast
+            || old.window.background_opacity != new.window.background_opacity
             || old.cursor.style != new.cursor.style
             || old.cursor.blink != new.cursor.blink
             || old.mouse.hide_while_typing != new.mouse.hide_while_typing;
@@ -121,6 +122,17 @@ mod tests {
         let a = Config::default();
         let mut b = Config::default();
         b.cursor.style = CursorStyle::Block;
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.repaint_only);
+        assert!(!d.theme_changed);
+        assert!(!d.font_size_changed);
+    }
+
+    #[test]
+    fn min_contrast_change_is_repaint_only() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.font.min_contrast = 1.1;
         let d = ConfigDiff::between(&a, &b);
         assert!(d.repaint_only);
         assert!(!d.theme_changed);
