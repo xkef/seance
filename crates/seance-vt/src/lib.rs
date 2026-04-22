@@ -13,7 +13,7 @@ pub mod selection;
 mod terminal;
 
 pub use frame::{
-    CellColor, CellView, CellVisitor, CursorInfo, FrameSource, ImageInfo, ImageVisitor,
+    CellAttrs, CellColor, CellView, CellVisitor, CursorInfo, FrameSource, ImageInfo, ImageVisitor,
     PlacementLayer, PlacementSnapshot, PlacementVisitor,
 };
 pub use frame_source::LibGhosttyFrameSource;

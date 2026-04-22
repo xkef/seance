@@ -6,17 +6,30 @@
 //! file-local change.
 
 use cosmic_text::{
-    Attrs, Buffer, CacheKey, CacheKeyFlags, Family, FontSystem, Metrics, Shaping, SwashCache,
-    SwashContent,
+    Attrs, Buffer, CacheKey, Family, FontSystem, Metrics, Shaping, Style, SwashCache, SwashContent,
+    Weight, fontdb::Query,
 };
 use rustc_hash::FxBuildHasher;
 use std::collections::HashMap;
 
 use super::backend::{
-    CellMetrics, GlyphFormat, GlyphId, RasterizedGlyph, ShapedGlyph, TextBackend,
+    CellMetrics, FontAttrs, GlyphFormat, GlyphId, RasterizedGlyph, ShapedGlyph, TextBackend,
 };
 
-const LINE_HEIGHT_SCALE: f32 = 1.2;
+const FALLBACK_LINE_HEIGHT_SCALE: f32 = 1.2;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum MetricModifier {
+    Percent(f32),
+    Absolute(i32),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FaceGridMetrics {
+    face_width: f32,
+    face_height: f32,
+    face_baseline_from_bottom: f32,
+}
 
 pub struct CosmicTextBackend {
     fs: FontSystem,
@@ -25,6 +38,7 @@ pub struct CosmicTextBackend {
     font_size: f32,
     scale: f64,
     family: String,
+    adjust_cell_height: Option<MetricModifier>,
 
     /// Intern CacheKey → stable `GlyphId` so the atlas cache can key on
     /// a small integer without knowing the cosmic-text encoding.
@@ -33,9 +47,10 @@ pub struct CosmicTextBackend {
 }
 
 impl CosmicTextBackend {
-    pub fn new(family: &str, font_size: f32, scale: f64) -> Self {
+    pub fn new(family: &str, font_size: f32, scale: f64, adjust_cell_height: Option<&str>) -> Self {
         let mut fs = FontSystem::new();
-        let metrics = compute_metrics(&mut fs, family, font_size, scale);
+        let adjust_cell_height = parse_metric_modifier(adjust_cell_height);
+        let metrics = compute_metrics(&mut fs, family, font_size, scale, adjust_cell_height);
         Self {
             fs,
             swash: SwashCache::new(),
@@ -43,6 +58,7 @@ impl CosmicTextBackend {
             font_size,
             scale,
             family: family.to_string(),
+            adjust_cell_height,
             key_to_id: HashMap::with_hasher(FxBuildHasher),
             id_to_key: Vec::new(),
         }
@@ -61,6 +77,16 @@ impl CosmicTextBackend {
     fn scaled_font_size(&self) -> f32 {
         self.font_size * self.scale as f32
     }
+
+    fn refresh_metrics(&mut self) {
+        self.metrics = compute_metrics(
+            &mut self.fs,
+            &self.family,
+            self.font_size,
+            self.scale,
+            self.adjust_cell_height,
+        );
+    }
 }
 
 impl TextBackend for CosmicTextBackend {
@@ -70,18 +96,41 @@ impl TextBackend for CosmicTextBackend {
 
     fn set_font_size(&mut self, points: f32) {
         self.font_size = points;
-        self.metrics = compute_metrics(&mut self.fs, &self.family, self.font_size, self.scale);
+        self.refresh_metrics();
         self.key_to_id.clear();
         self.id_to_key.clear();
     }
 
-    fn shape_cell(&mut self, text: &str, out: &mut Vec<ShapedGlyph>) {
+    fn set_scale(&mut self, scale: f64) {
+        self.scale = scale;
+        self.refresh_metrics();
+        self.key_to_id.clear();
+        self.id_to_key.clear();
+    }
+
+    fn set_adjust_cell_height(&mut self, value: Option<&str>) {
+        self.adjust_cell_height = parse_metric_modifier(value);
+        self.refresh_metrics();
+    }
+
+    fn shape_cell(&mut self, text: &str, attrs: FontAttrs, out: &mut Vec<ShapedGlyph>) {
         if text.is_empty() {
             return;
         }
         let scaled = self.scaled_font_size();
         let cosmic_metrics = Metrics::new(scaled, self.metrics.cell_height);
-        let attrs = Attrs::new().family(Family::Name(&self.family));
+        let attrs = Attrs::new()
+            .family(Family::Name(&self.family))
+            .weight(if attrs.bold {
+                Weight::BOLD
+            } else {
+                Weight::NORMAL
+            })
+            .style(if attrs.italic {
+                Style::Italic
+            } else {
+                Style::Normal
+            });
 
         let mut buffer = Buffer::new(&mut self.fs, cosmic_metrics);
         buffer.set_text(&mut self.fs, text, &attrs, Shaping::Advanced, None);
@@ -94,10 +143,10 @@ impl TextBackend for CosmicTextBackend {
                     CacheKey::new(
                         g.font_id,
                         g.glyph_id,
-                        scaled,
+                        g.font_size,
                         (0.0, 0.0),
-                        cosmic_text::fontdb::Weight::NORMAL,
-                        CacheKeyFlags::empty(),
+                        g.font_weight,
+                        g.cache_key_flags,
                     )
                     .0
                 })
@@ -127,36 +176,201 @@ impl TextBackend for CosmicTextBackend {
     }
 }
 
-/// Compute cell metrics by shaping a single "M". Width = glyph advance,
-/// height = `font_size × LINE_HEIGHT_SCALE`. `baseline` comes from
-/// cosmic-text's layout, which already centers ascent+descent within
-/// the line-box — using it here matches that convention.
-fn compute_metrics(fs: &mut FontSystem, family: &str, font_size: f32, scale: f64) -> CellMetrics {
-    let scaled = font_size * scale as f32;
-    let line_height = (scaled * LINE_HEIGHT_SCALE).ceil();
-    let attrs = Attrs::new().family(Family::Name(family));
+fn parse_metric_modifier(value: Option<&str>) -> Option<MetricModifier> {
+    let input = value?.trim();
+    if input.is_empty() {
+        return None;
+    }
 
-    let mut buffer = Buffer::new(fs, Metrics::new(scaled, line_height));
+    if let Some(percent) = input.strip_suffix('%') {
+        let Ok(percent) = percent.parse::<f32>() else {
+            log::warn!("invalid adjust_cell_height value: {input}");
+            return None;
+        };
+        return Some(MetricModifier::Percent((1.0 + percent / 100.0).max(0.0)));
+    }
+
+    match input.parse::<i32>() {
+        Ok(value) => Some(MetricModifier::Absolute(value)),
+        Err(_) => {
+            log::warn!("invalid adjust_cell_height value: {input}");
+            None
+        }
+    }
+}
+
+fn apply_metric_modifier(value: u32, modifier: MetricModifier) -> u32 {
+    match modifier {
+        MetricModifier::Percent(percent) => ((value as f32) * percent).round().max(0.0) as u32,
+        MetricModifier::Absolute(delta) => {
+            (i64::from(value) + i64::from(delta)).clamp(0, i64::from(u32::MAX)) as u32
+        }
+    }
+}
+
+fn face_grid_metrics(
+    fs: &mut FontSystem,
+    family: &str,
+    scaled_font_size: f32,
+) -> Option<FaceGridMetrics> {
+    let attrs = Attrs::new().family(Family::Name(family));
+    let families = [attrs.family];
+    let query = Query {
+        families: &families,
+        weight: attrs.weight,
+        stretch: attrs.stretch,
+        style: attrs.style,
+    };
+    let id = fs.db().query(&query)?;
+    let font = fs.get_font(id, attrs.weight)?;
+    let metrics = font.metrics();
+    let units_per_em = f32::from(metrics.units_per_em).max(1.0);
+    let font_scale = scaled_font_size / units_per_em;
+
+    let face_width = font
+        .monospace_em_width()
+        .map(|em_width| em_width * scaled_font_size)
+        .filter(|width| *width > 0.0)
+        .unwrap_or_else(|| measure_cell_width(fs, family, scaled_font_size));
+    let ascent = metrics.ascent * font_scale;
+    let descent = metrics.descent * font_scale;
+    let leading = metrics.leading * font_scale;
+
+    Some(FaceGridMetrics {
+        face_width,
+        face_height: (ascent - descent + leading).max(1.0),
+        face_baseline_from_bottom: leading / 2.0 - descent,
+    })
+}
+
+fn fallback_face_grid_metrics(
+    fs: &mut FontSystem,
+    family: &str,
+    scaled_font_size: f32,
+) -> FaceGridMetrics {
+    let line_height = (scaled_font_size * FALLBACK_LINE_HEIGHT_SCALE).max(1.0);
+    let (face_width, baseline_from_top) =
+        measure_cell_width_and_baseline(fs, family, scaled_font_size, line_height);
+    FaceGridMetrics {
+        face_width,
+        face_height: line_height,
+        face_baseline_from_bottom: line_height - baseline_from_top,
+    }
+}
+
+fn measure_cell_width(fs: &mut FontSystem, family: &str, scaled_font_size: f32) -> f32 {
+    measure_cell_width_and_baseline(fs, family, scaled_font_size, scaled_font_size.max(1.0)).0
+}
+
+fn measure_cell_width_and_baseline(
+    fs: &mut FontSystem,
+    family: &str,
+    scaled_font_size: f32,
+    line_height: f32,
+) -> (f32, f32) {
+    let attrs = Attrs::new().family(Family::Name(family));
+    let mut buffer = Buffer::new(fs, Metrics::new(scaled_font_size, line_height));
     buffer.set_text(fs, "M", &attrs, Shaping::Advanced, None);
     buffer.shape_until_scroll(fs, false);
 
-    let (cell_width, baseline) = match buffer.layout_runs().next() {
+    match buffer.layout_runs().next() {
         Some(run) => {
-            let w = run
+            let width = run
                 .glyphs
                 .iter()
                 .next()
-                .map(|g| g.w)
-                .unwrap_or(scaled * 0.6)
-                .ceil();
-            (w, run.line_y.round())
+                .map(|glyph| glyph.w)
+                .unwrap_or(scaled_font_size * 0.6)
+                .max(1.0);
+            (width, run.line_y)
         }
-        None => (scaled.ceil() * 0.6, (line_height * 0.8).round()),
-    };
+        None => ((scaled_font_size * 0.6).max(1.0), line_height * 0.8),
+    }
+}
+
+fn cell_metrics_from_face(
+    face: FaceGridMetrics,
+    adjust_cell_height: Option<MetricModifier>,
+) -> CellMetrics {
+    let cell_width = face.face_width.round().max(1.0);
+    let base_cell_height = face.face_height.round().max(1.0) as u32;
+    let cell_height = adjust_cell_height
+        .map(|modifier| apply_metric_modifier(base_cell_height, modifier))
+        .unwrap_or(base_cell_height)
+        .max(1) as f32;
+    let baseline_from_bottom =
+        (face.face_baseline_from_bottom - (cell_height - face.face_height) / 2.0).round();
+    let baseline = (cell_height - baseline_from_bottom).clamp(0.0, cell_height);
 
     CellMetrics {
         cell_width,
-        cell_height: line_height,
+        cell_height,
         baseline,
+    }
+}
+
+/// Compute Ghostty-like cell metrics from the font's face metrics where
+/// possible, falling back to a simple shaped-glyph estimate if fontdb lookup
+/// fails.
+fn compute_metrics(
+    fs: &mut FontSystem,
+    family: &str,
+    font_size: f32,
+    scale: f64,
+    adjust_cell_height: Option<MetricModifier>,
+) -> CellMetrics {
+    let scaled_font_size = font_size * scale as f32;
+    let face = face_grid_metrics(fs, family, scaled_font_size)
+        .unwrap_or_else(|| fallback_face_grid_metrics(fs, family, scaled_font_size));
+    cell_metrics_from_face(face, adjust_cell_height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_metric_modifier_like_ghostty() {
+        assert_eq!(
+            parse_metric_modifier(Some("20%")),
+            Some(MetricModifier::Percent(1.2))
+        );
+        assert_eq!(
+            parse_metric_modifier(Some("-20%")),
+            Some(MetricModifier::Percent(0.8))
+        );
+        assert_eq!(
+            parse_metric_modifier(Some("-100%")),
+            Some(MetricModifier::Percent(0.0))
+        );
+        assert_eq!(
+            parse_metric_modifier(Some("3")),
+            Some(MetricModifier::Absolute(3))
+        );
+        assert_eq!(parse_metric_modifier(Some("")), None);
+    }
+
+    #[test]
+    fn applies_metric_modifier_with_ghostty_rounding() {
+        assert_eq!(apply_metric_modifier(18, MetricModifier::Percent(1.2)), 22);
+        assert_eq!(apply_metric_modifier(18, MetricModifier::Percent(0.8)), 14);
+        assert_eq!(apply_metric_modifier(18, MetricModifier::Absolute(3)), 21);
+        assert_eq!(apply_metric_modifier(18, MetricModifier::Absolute(-30)), 0);
+    }
+
+    #[test]
+    fn cell_metrics_center_face_after_height_adjustment() {
+        let metrics = cell_metrics_from_face(
+            FaceGridMetrics {
+                face_width: 8.6,
+                face_height: 18.2,
+                face_baseline_from_bottom: 14.0,
+            },
+            Some(MetricModifier::Percent(1.2)),
+        );
+
+        assert_eq!(metrics.cell_width, 9.0);
+        assert_eq!(metrics.cell_height, 22.0);
+        assert_eq!(metrics.baseline, 10.0);
     }
 }

@@ -12,10 +12,8 @@ PROFILE="${1:-release}"
 BIN="$ROOT/target/$PROFILE/seance"
 DYLIB="$(find "$ROOT/target/$PROFILE/build" -path '*/ghostty-install/lib/libghostty-vt.dylib' -print -quit)"
 
-if [[ ! -x "$BIN" ]]; then
-  echo "building $PROFILE binary..."
-  cargo build ${PROFILE:+--profile=$PROFILE} 2>/dev/null || cargo build --release
-fi
+echo "building $PROFILE binary..."
+cargo build ${PROFILE:+--profile=$PROFILE} 2>/dev/null || cargo build --release
 [[ -x "$BIN" ]] || { echo "binary missing: $BIN" >&2; exit 1; }
 [[ -f "$DYLIB" ]] || { echo "dylib missing under target/$PROFILE/build" >&2; exit 1; }
 
