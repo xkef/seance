@@ -51,28 +51,27 @@ commit message, not the code — it rots as the codebase evolves.
 
 ## Working on issues
 
-Epics are tracked on GitHub under the `epic` label (M1–M9). Every non-epic
-issue must be attached to its parent epic as a sub-issue — when filing a new
-issue, identify the epic it belongs under and link it. If no existing epic
-fits, open a new epic first rather than creating an orphan issue.
+Epics are tracked on GitHub under the `epic` label (M1–M9). Every non-epic issue
+must be attached to its parent epic as a sub-issue — when filing a new issue,
+identify the epic it belongs under and link it. If no existing epic fits, open a
+new epic first rather than creating an orphan issue.
 
 When picking up a sub-issue:
 
-1. Read the parent epic for context, plus `docs/architecture.md` for the
-   section it touches.
+1. Read the parent epic for context, plus `docs/architecture.md` for the section
+   it touches.
 2. Reference the specific files/modules you intend to change in the PR
    description.
 3. Keep changes scoped to the sub-issue — do not batch unrelated cleanups.
-4. Run `cargo fmt`, `cargo clippy`, and the relevant tests before opening a
-   PR.
+4. Run `cargo fmt`, `cargo clippy`, and the relevant tests before opening a PR.
 
 ## Commit messages
 
 Use Conventional Commits (<https://www.conventionalcommits.org/>) for every
 commit and PR title: `type(scope): summary`, with `type` drawn from `feat`,
 `fix`, `refactor`, `perf`, `docs`, `test`, `chore`, `build`, `ci`. Keep the
-subject line under 72 characters. Put the why (and any design narration
-that would otherwise leak into code comments) in the body.
+subject line under 72 characters. Put the why (and any design narration that
+would otherwise leak into code comments) in the body.
 
 ## Branches
 
