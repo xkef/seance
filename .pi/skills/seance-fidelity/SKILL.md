@@ -1,12 +1,15 @@
 ---
 name: seance-fidelity
-description: Capture Ghostty and seance with matched theme, font, padding, and fixture content, then compare screenshots and metrics. Use when debugging renderer fidelity issues such as xkef/seance#19.
+description:
+  Capture Ghostty and seance with matched theme, font, padding, and fixture
+  content, then compare screenshots and metrics. Use when debugging renderer
+  fidelity issues such as xkef/seance#19.
 ---
 
 # Seance Fidelity
 
-Use this skill for visual diffs between Ghostty and `seance`, especially when the
-likely causes are renderer math rather than config drift.
+Use this skill for visual diffs between Ghostty and `seance`, especially when
+the likely causes are renderer math rather than config drift.
 
 Read `tools/fidelity/README.md` if the harness behavior or environment variables
 matter for the current task.
@@ -15,9 +18,11 @@ matter for the current task.
 
 1. Prefer an image-capable model.
 2. Run the capture harness:
+
    ```bash
    bash tools/fidelity/capture_pair.sh
    ```
+
 3. Read these outputs:
    - `tools/fidelity/artifacts/latest/ghostty.png`
    - `tools/fidelity/artifacts/latest/seance.png`
@@ -44,12 +49,11 @@ matter for the current task.
 
 - Global light/dark drift across anti-aliased text often points at
   sRGB-vs-linear mistakes or premultiplication/blend math.
-- Deltas concentrated in the low-contrast fixture rows point at
-  min-contrast handling.
-- Deltas concentrated in the `bold` ANSI row point at `bold-is-bright`
+- Deltas concentrated in the low-contrast fixture rows point at min-contrast
   handling.
-- Deltas visible only when `FIDELITY_BACKGROUND_OPACITY` is below `1.0`
-  point at background alpha/compositing.
+- Deltas concentrated in the `bold` ANSI row point at `bold-is-bright` handling.
+- Deltas visible only when `FIDELITY_BACKGROUND_OPACITY` is below `1.0` point at
+  background alpha/compositing.
 - Prefer fixing one suspected cause at a time. Re-capture after each change.
 
 ## Reporting

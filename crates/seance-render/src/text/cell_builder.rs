@@ -55,6 +55,15 @@ pub struct FrameInfo {
     pub cursor_wide: bool,
 }
 
+pub struct BuildFrameConfig<'a> {
+    pub surface_width: u32,
+    pub surface_height: u32,
+    pub window_padding: [u16; 2],
+    pub theme: &'a Theme,
+    pub bg_color: [u8; 4],
+    pub min_contrast: f32,
+}
+
 type GlyphSlots = HashMap<GlyphId, AtlasEntry, FxBuildHasher>;
 
 /// One cell's shaping request produced by [`walk_grid`] and consumed
@@ -103,12 +112,7 @@ impl CellBuilder {
         &mut self,
         source: &mut dyn FrameSource,
         backend: &mut dyn TextBackend,
-        surface_width: u32,
-        surface_height: u32,
-        window_padding: [u16; 2],
-        theme: &Theme,
-        bg_color: [u8; 4],
-        min_contrast: f32,
+        config: BuildFrameConfig<'_>,
     ) {
         let (baseline, geom) = {
             let m = backend.metrics();
@@ -116,15 +120,21 @@ impl CellBuilder {
                 source,
                 m.cell_width,
                 m.cell_height,
-                surface_width,
-                surface_height,
-                window_padding,
+                config.surface_width,
+                config.surface_height,
+                config.window_padding,
             );
             (m.baseline, g)
         };
         let cursor = source.cursor();
 
-        walk_grid(source, &geom, theme, &mut self.bg_cells, &mut self.requests);
+        walk_grid(
+            source,
+            &geom,
+            config.theme,
+            &mut self.bg_cells,
+            &mut self.requests,
+        );
 
         self.text_cells.clear();
         shape_and_pack(
@@ -145,11 +155,11 @@ impl CellBuilder {
             grid_cols: geom.grid_cols,
             grid_rows: geom.grid_rows,
             grid_padding: geom.grid_padding,
-            bg_color,
-            min_contrast,
+            bg_color: config.bg_color,
+            min_contrast: config.min_contrast,
             cursor_pos: [cursor.pos.col, cursor.pos.row],
             cursor_visible: cursor.visible,
-            cursor_color: theme.cursor,
+            cursor_color: config.theme.cursor,
             cursor_wide: cursor.wide,
         });
     }

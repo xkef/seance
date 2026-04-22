@@ -6,9 +6,9 @@ use winit::window::Window;
 
 use crate::gpu::GpuState;
 pub use crate::gpu::uniforms::CursorShape;
-use crate::text::CellBuilder;
 use crate::text::backend::TextBackend;
 use crate::text::cosmic::CosmicTextBackend;
+use crate::text::{BuildFrameConfig, CellBuilder};
 
 pub struct RendererConfig {
     pub width: u32,
@@ -119,12 +119,14 @@ impl TerminalRenderer {
         self.cell_builder.build_frame(
             source,
             self.backend.as_mut(),
-            self.surface_width,
-            self.surface_height,
-            self.window_padding,
-            &self.theme,
-            bg_color,
-            min_contrast,
+            BuildFrameConfig {
+                surface_width: self.surface_width,
+                surface_height: self.surface_height,
+                window_padding: self.window_padding,
+                theme: &self.theme,
+                bg_color,
+                min_contrast,
+            },
         );
         if let Some(fi) = self.cell_builder.last_frame() {
             self.gpu.update_image_frame(source, fi);

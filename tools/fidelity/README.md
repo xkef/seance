@@ -64,9 +64,9 @@ Supported environment variables:
 
 ## Notes
 
-- Ghostty and `seance` are captured **sequentially at the same window position**.
-  That makes transparent-background comparisons less noisy than side-by-side
-  captures.
+- Ghostty and `seance` are captured **sequentially at the same window
+  position**. That makes transparent-background comparisons less noisy than
+  side-by-side captures.
 - The harness uses `screencapture -l <window-id>`, so overlapping windows are
   less of a problem than region captures.
 - The default config disables decorations to avoid titlebar/compositor noise.
