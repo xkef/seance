@@ -13,8 +13,8 @@ pub mod theme;
 
 pub use diff::ConfigDiff;
 pub use schema::{
-    ClipboardConfig, Config, CursorConfig, CursorStyle, FontConfig, MouseConfig, ScrollbackConfig,
-    WindowConfig,
+    ClipboardConfig, Config, CursorConfig, CursorStyle, FontConfig, InputConfig, MacosOptionAsAlt,
+    MouseConfig, ScrollbackConfig, WindowConfig,
 };
 pub use theme::{Theme, load as load_theme};
 
@@ -175,6 +175,31 @@ mod tests {
         assert!(cfg.clipboard.write);
         assert!(cfg.clipboard.paste_protection);
         assert!(!cfg.clipboard.copy_on_select);
+    }
+
+    #[test]
+    fn input_section_defaults_to_none() {
+        let cfg = Config::default();
+        assert_eq!(cfg.input.macos_option_as_alt, MacosOptionAsAlt::None);
+    }
+
+    #[test]
+    fn input_macos_option_as_alt_parses_each_variant() {
+        for (raw, want) in [
+            ("none", MacosOptionAsAlt::None),
+            ("left", MacosOptionAsAlt::Left),
+            ("right", MacosOptionAsAlt::Right),
+            ("both", MacosOptionAsAlt::Both),
+        ] {
+            let src = format!(
+                r#"
+                [input]
+                macos_option_as_alt = "{raw}"
+                "#
+            );
+            let cfg: Config = toml::from_str(&src).unwrap();
+            assert_eq!(cfg.input.macos_option_as_alt, want, "raw={raw}");
+        }
     }
 
     #[test]
