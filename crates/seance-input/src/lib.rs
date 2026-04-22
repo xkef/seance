@@ -151,12 +151,15 @@ impl InputHandler {
             .set_action(keymap::map_action(event.state))
             .set_mods(mods);
 
-        // When ALT is "real" (ESC-prefix), we intentionally drop `event.text`
-        // so the encoder picks the key's layout-independent ASCII and emits
-        // `ESC <char>`. Otherwise the composed glyph (or plain typed char)
-        // flows through unchanged. `alt_as_alt` already implies Alt is held,
-        // so no separate guard is needed.
-        if !alt_as_alt && let Some(text) = &event.text {
+        // Always forward `event.text` when winit produced one. When Alt acts
+        // as Alt (ESC-prefix path), winit's `set_option_as_alt` already
+        // provides the un-composed character (e.g. `c`, not `ç`), so the
+        // encoder gets key=C + utf8="c" + ALT and emits `ESC c`. When Option
+        // is composing, ALT is cleared above and the composed glyph flows
+        // through unchanged. The encoder emits nothing without a utf8 for
+        // plain letter keys, so dropping text on the Alt path silently
+        // swallows the event.
+        if let Some(text) = &event.text {
             key_event.set_utf8(Some(text.as_str()));
         }
 
