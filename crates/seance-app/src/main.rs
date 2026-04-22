@@ -11,7 +11,9 @@ use winit::window::{Window, WindowId};
 use seance_config::{Config, ConfigDiff, MacosOptionAsAlt};
 use seance_input::{InputHandler, OptionAsAlt, VtInput};
 use seance_render::{RenderInputs, RendererConfig, TerminalRenderer};
-use seance_vt::{LibGhosttyFrameSource, Terminal, TerminalModes};
+use seance_vt::{
+    CursorShape as VtCursorShape, FrameSource, LibGhosttyFrameSource, Terminal, TerminalModes,
+};
 
 mod command;
 mod keybinds;
@@ -48,6 +50,14 @@ fn initial_window_size_from_env() -> Option<LogicalSize<u32>> {
     let width = width.parse().ok()?;
     let height = height.parse().ok()?;
     Some(LogicalSize::new(width, height))
+}
+
+fn vt_shape_from_config(style: seance_config::CursorStyle) -> VtCursorShape {
+    match style {
+        seance_config::CursorStyle::Block => VtCursorShape::Block,
+        seance_config::CursorStyle::Bar => VtCursorShape::Bar,
+        seance_config::CursorStyle::Underline => VtCursorShape::Underline,
+    }
 }
 
 fn physical_window_padding(config: &Config, scale_factor: f64) -> [u16; 2] {
@@ -114,6 +124,10 @@ struct App {
     watcher: Option<ConfigWatcher>,
     blink_on: bool,
     last_blink_edge: Instant,
+    // `None` until the VT has reported a shape via DECSCUSR; then the
+    // config's `cursor.style` acts as the fallback when the VT has no
+    // opinion (e.g. FFI error path in `LibGhosttyFrameSource::cursor`).
+    last_vt_cursor_shape: Option<VtCursorShape>,
 }
 
 impl App {
@@ -143,6 +157,7 @@ impl App {
             watcher: None,
             blink_on: true,
             last_blink_edge: Instant::now(),
+            last_vt_cursor_shape: None,
         }
     }
 
@@ -178,11 +193,20 @@ impl App {
         {
             self.content_dirty = false;
             let mut source = LibGhosttyFrameSource::new(t);
+            // Cache the VT's DECSCUSR-tracked shape (if any) before the
+            // renderer consumes the source — mode changes in neovim arrive
+            // as PTY bytes that set `content_dirty`, so this branch runs
+            // on every mode transition.
+            self.last_vt_cursor_shape = source.cursor().shape;
             r.update_frame(&mut source);
         }
-        // Refresh per-frame inputs from config so hot-reload is picked up
-        // without a dedicated wiring path in reload_config.
-        self.render_inputs.cursor_shape = self.config.cursor.style.into();
+        // Prefer the VT-reported shape; fall back to the user's configured
+        // default when the VT has no opinion. Refreshed every frame so that
+        // hot-reload of `cursor.style` is picked up without extra wiring.
+        self.render_inputs.cursor_shape = self
+            .last_vt_cursor_shape
+            .map(Into::into)
+            .unwrap_or_else(|| self.config.cursor.style.into());
         self.render_inputs.vt_cursor_visible = !self.config.cursor.blink || self.blink_on;
         if let Some(r) = &mut self.renderer {
             r.render(&self.render_inputs);
@@ -340,6 +364,11 @@ impl App {
             if let Some(w) = &self.window {
                 platform::set_option_as_alt(w, mode);
             }
+        }
+        if old_config.cursor.style != self.config.cursor.style
+            && let Some(t) = &mut self.terminal
+        {
+            t.set_cursor_shape(vt_shape_from_config(self.config.cursor.style));
         }
         if diff.repaint_only {
             self.mark_dirty();
@@ -618,10 +647,14 @@ impl ApplicationHandler<UserEvent> for App {
         self.renderer = Some(renderer);
         self.window = Some(window);
 
-        self.terminal = Some(
-            Terminal::spawn(cols, rows, size.width as u16, size.height as u16)
-                .expect("failed to spawn terminal"),
-        );
+        let mut term = Terminal::spawn(cols, rows, size.width as u16, size.height as u16)
+            .expect("failed to spawn terminal");
+        // Seed the VT's DECSCUSR state with the user's configured shape so
+        // the bash prompt doesn't inherit ghostty's hardcoded `.block`
+        // default. App-level DECSCUSR emissions (e.g. neovim mode changes)
+        // still override on subsequent frames.
+        term.set_cursor_shape(vt_shape_from_config(self.config.cursor.style));
+        self.terminal = Some(term);
         self.apply_terminal_theme(&theme);
 
         // Start watching the config dir for edits. A non-XDG environment or

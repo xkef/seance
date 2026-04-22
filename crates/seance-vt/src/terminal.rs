@@ -172,6 +172,20 @@ impl Terminal {
         got_data
     }
 
+    /// Seed the VT's cursor shape with a DECSCUSR sequence (steady
+    /// variants). Feeds bytes directly into the VT stream so the VT
+    /// state matches the caller's preferred default at frame 0;
+    /// DECSCUSR emissions from shells / editors still override on
+    /// subsequent frames. Does not touch the PTY.
+    pub fn set_cursor_shape(&mut self, shape: crate::frame::CursorShape) {
+        let seq: &[u8] = match shape {
+            crate::frame::CursorShape::Block => b"\x1b[2 q",
+            crate::frame::CursorShape::Bar => b"\x1b[6 q",
+            crate::frame::CursorShape::Underline => b"\x1b[4 q",
+        };
+        self.vt.vt_write(seq);
+    }
+
     /// Write raw bytes to the PTY (keyboard input, paste, etc.).
     pub fn write(&self, data: &[u8]) {
         let _ = self.writer.borrow_mut().write_all(data);
