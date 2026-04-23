@@ -2212,8 +2212,6 @@ dependencies = [
  "cosmic-text",
  "etagere",
  "log",
- "objc2 0.6.4",
- "raw-window-handle",
  "rustc-hash 2.1.2",
  "seance-config",
  "seance-vt",
