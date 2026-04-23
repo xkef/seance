@@ -54,7 +54,7 @@ impl Default for FontConfig {
             family: "JetBrainsMono Nerd Font".to_string(),
             size: 14.0,
             features: vec!["calt".to_string()],
-            adjust_cell_height: Some("15%".to_string()),
+            adjust_cell_height: Some("20%".to_string()),
             adjust_cell_width: None,
             min_contrast: 1.1,
             fallback: Vec::new(),
@@ -74,8 +74,8 @@ pub struct WindowConfig {
 impl Default for WindowConfig {
     fn default() -> Self {
         Self {
-            padding_x: 2,
-            padding_y: 2,
+            padding_x: 12,
+            padding_y: 0,
             decoration: true,
             background_opacity: 1.0,
         }
@@ -85,8 +85,8 @@ impl Default for WindowConfig {
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum CursorStyle {
-    Block,
     #[default]
+    Block,
     Bar,
     Underline,
 }
@@ -101,7 +101,7 @@ pub struct CursorConfig {
 impl Default for CursorConfig {
     fn default() -> Self {
         Self {
-            style: CursorStyle::Bar,
+            style: CursorStyle::Block,
             blink: false,
         }
     }
