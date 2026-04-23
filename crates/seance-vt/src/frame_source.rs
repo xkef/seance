@@ -9,8 +9,8 @@ use libghostty_vt::render::{CellIteration, CellIterator, CursorVisualStyle, RowI
 use libghostty_vt::style::{self, PaletteIndex, RgbColor};
 
 use crate::frame::{
-    CellAttrs, CellColor, CellView, CellVisitor, CursorInfo, CursorShape, FrameSource, ImageInfo,
-    ImageVisitor, PlacementLayer, PlacementSnapshot, PlacementVisitor,
+    CellAttrs, CellColor, CellView, CellVisitor, CursorInfo, CursorShape, DirtySnapshot,
+    FrameSource, ImageInfo, ImageVisitor, PlacementLayer, PlacementSnapshot, PlacementVisitor,
 };
 use crate::kitty_placeholder::{PLACEHOLDER_CP, diacritic_index};
 use crate::selection::GridPos;
@@ -68,6 +68,14 @@ impl FrameSource for LibGhosttyFrameSource<'_> {
 
     fn visit_cells(&mut self, visitor: &mut dyn CellVisitor) {
         let _ = walk(self.term, visitor);
+    }
+
+    fn dirty_rows(&mut self) -> DirtySnapshot {
+        self.term.dirty_snapshot().unwrap_or(DirtySnapshot::Full)
+    }
+
+    fn clear_dirty(&mut self) {
+        self.term.clear_dirty();
     }
 
     fn visit_placements(&mut self, layer: PlacementLayer, visitor: &mut dyn PlacementVisitor) {

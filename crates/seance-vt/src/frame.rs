@@ -112,6 +112,25 @@ pub struct CursorInfo {
     pub shape: Option<CursorShape>,
 }
 
+/// Summary of what rows have changed since the last
+/// [`FrameSource::clear_dirty`].
+///
+/// Consumers use this to skip rebuild work (shape cache, bg cells, atlas
+/// uploads) for rows whose prior state is still valid.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DirtySnapshot {
+    /// Nothing changed — the renderer may reuse the previous frame's
+    /// buffers verbatim.
+    Clean,
+    /// Only the listed row indices changed. Indices are viewport-relative
+    /// and sorted ascending.
+    Partial(Vec<u16>),
+    /// Every row must be considered dirty (scroll, resize, alt-screen
+    /// flip, theme change, or the adapter doesn't track row-level dirty
+    /// state). Callers should rebuild the full frame.
+    Full,
+}
+
 /// A snapshot of the VT grid the renderer walks to build one frame.
 pub trait FrameSource {
     /// (columns, rows) of the current grid.
@@ -126,6 +145,20 @@ pub trait FrameSource {
     /// Drive a visitor over every cell. The adapter is responsible for
     /// issuing calls in row-major order and clamping to `grid_size`.
     fn visit_cells(&mut self, visitor: &mut dyn CellVisitor);
+
+    /// Report which rows have changed since the last [`Self::clear_dirty`].
+    ///
+    /// The dirty set is preserved across repeated calls until explicitly
+    /// acknowledged — callers may sample it as many times as they like.
+    /// Default impl is [`DirtySnapshot::Full`], which is safe for adapters
+    /// that don't track row-level state.
+    fn dirty_rows(&mut self) -> DirtySnapshot {
+        DirtySnapshot::Full
+    }
+
+    /// Acknowledge the dirty set. After this call [`Self::dirty_rows`]
+    /// should report [`DirtySnapshot::Clean`] until the VT state changes.
+    fn clear_dirty(&mut self) {}
 
     /// Emit kitty graphics placements in the requested z-layer.
     ///

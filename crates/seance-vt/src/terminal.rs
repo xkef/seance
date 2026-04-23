@@ -7,12 +7,13 @@ use std::sync::Once;
 
 use libghostty_vt::alloc::{Allocator, Bytes};
 use libghostty_vt::kitty::graphics::{self, DecodePng, DecodedImage};
-use libghostty_vt::render::{CellIterator, RowIterator};
+use libghostty_vt::render::{CellIterator, Dirty, RowIterator};
 use libghostty_vt::style::RgbColor;
 use libghostty_vt::terminal::{Mode, ScrollViewport};
 use libghostty_vt::{RenderState, Terminal as VtTerminal, TerminalOptions};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
+use crate::frame::DirtySnapshot;
 use crate::modes::TerminalModes;
 use crate::selection::{GridPos, Selection, SelectionGranularity};
 
@@ -69,6 +70,11 @@ fn install_png_decoder_once() {
 /// A terminal session: VT emulator, PTY, and text selection state.
 pub struct Terminal {
     vt: Box<VtTerminal<'static, 'static>>,
+    /// Persistent render state. libghostty-vt's dirty tracking only
+    /// works when the same render state is reused across frames — each
+    /// `update(vt)` drains the VT's dirty set into the render state, and
+    /// per-row flags remain until the caller clears them.
+    render_state: RenderState<'static>,
     response_buf: Rc<RefCell<Vec<u8>>>,
     reader: Box<dyn Read + Send>,
     writer: RefCell<Box<dyn Write + Send>>,
@@ -140,8 +146,11 @@ impl Terminal {
             }
         }
 
+        let render_state = RenderState::new().ok()?;
+
         Some(Self {
             vt,
+            render_state,
             response_buf,
             reader,
             writer: RefCell::new(writer),
@@ -335,6 +344,65 @@ impl Terminal {
 
     pub(crate) fn vt(&self) -> &VtTerminal<'static, 'static> {
         &self.vt
+    }
+
+    /// Drain the VT's dirty state into the persistent render state and
+    /// report what changed. The flags remain set on the render state (and
+    /// can be re-read) until [`Self::clear_dirty`] acknowledges them.
+    ///
+    /// Returns `None` only on FFI failure — callers should treat that as
+    /// "unknown, redraw everything" for safety.
+    pub(crate) fn dirty_snapshot(&mut self) -> Option<DirtySnapshot> {
+        let Self {
+            vt, render_state, ..
+        } = self;
+        let snapshot = render_state.update(&**vt).ok()?;
+        let global = snapshot.dirty().ok()?;
+        match global {
+            Dirty::Clean => Some(DirtySnapshot::Clean),
+            Dirty::Full => Some(DirtySnapshot::Full),
+            Dirty::Partial => {
+                let mut rows_iter = RowIterator::new().ok()?;
+                let mut iter = rows_iter.update(&snapshot).ok()?;
+                let mut out: Vec<u16> = Vec::new();
+                let mut idx: u16 = 0;
+                while let Some(row) = iter.next() {
+                    if row.dirty().unwrap_or(true) {
+                        out.push(idx);
+                    }
+                    idx += 1;
+                }
+                // Global "Partial" with no dirty rows can arise when only
+                // cursor / selection / cursor-color changed. Fold to Clean
+                // so callers can short-circuit the whole rebuild.
+                if out.is_empty() {
+                    Some(DirtySnapshot::Clean)
+                } else {
+                    Some(DirtySnapshot::Partial(out))
+                }
+            }
+        }
+    }
+
+    /// Clear both the global frame-dirty signal and every per-row flag on
+    /// the persistent render state. Call after consuming a dirty snapshot.
+    pub(crate) fn clear_dirty(&mut self) {
+        let Self {
+            vt, render_state, ..
+        } = self;
+        let Ok(snapshot) = render_state.update(&**vt) else {
+            return;
+        };
+        let _ = snapshot.set_dirty(Dirty::Clean);
+        let Ok(mut rows_iter) = RowIterator::new() else {
+            return;
+        };
+        let Ok(mut iter) = rows_iter.update(&snapshot) else {
+            return;
+        };
+        while let Some(row) = iter.next() {
+            let _ = row.set_dirty(false);
+        }
     }
 
     /// Cell pixel dimensions as last passed to `vt.resize()`. Both are
