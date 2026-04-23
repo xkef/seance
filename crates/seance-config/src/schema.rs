@@ -31,6 +31,7 @@ impl Default for Config {
             clipboard: ClipboardConfig::default(),
             scrollback: ScrollbackConfig::default(),
             mouse: MouseConfig::default(),
+            input: InputConfig::default(),
         }
     }
 }
