@@ -1,3 +1,14 @@
+/// Apply macOS-only event-loop settings before `build()` (activation policy,
+/// menubar role). No-op on other platforms.
+#[cfg(target_os = "macos")]
+pub fn configure_event_loop<T: 'static>(builder: &mut winit::event_loop::EventLoopBuilder<T>) {
+    use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+    builder.with_activation_policy(ActivationPolicy::Regular);
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn configure_event_loop<T: 'static>(_builder: &mut winit::event_loop::EventLoopBuilder<T>) {}
+
 #[cfg(target_os = "macos")]
 pub fn configure_window(window: &winit::window::Window) {
     use objc2::msg_send;
@@ -85,6 +96,9 @@ pub fn configure_window(window: &winit::window::Window) {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
+pub fn configure_window(_window: &winit::window::Window) {}
+
 /// Push the macOS "option-as-alt" policy down into winit's NSView, which
 /// drives whether `event.text` contains the Option-composed glyph
 /// (e.g. CH `Opt+n` → `~`) or the raw un-composed key (e.g. `n` with ALT
@@ -108,3 +122,47 @@ pub fn set_option_as_alt(window: &winit::window::Window, mode: seance_input::Opt
 
 #[cfg(not(target_os = "macos"))]
 pub fn set_option_as_alt(_window: &winit::window::Window, _mode: seance_input::OptionAsAlt) {}
+
+/// Prevent stretching during live resize on macOS by enabling
+/// `CAMetalLayer.presentsWithTransaction`. Must run after the wgpu surface
+/// has been created (the CAMetalLayer is attached as a sublayer then) and
+/// before the first frame is presented.
+#[cfg(target_os = "macos")]
+pub fn configure_metal_layer(window: &winit::window::Window) {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::AppKit(h) = handle.as_raw() else {
+        return;
+    };
+    let Some(metal_class) = AnyClass::get(c"CAMetalLayer") else {
+        return;
+    };
+    unsafe {
+        let view: *mut AnyObject = h.ns_view.as_ptr().cast();
+        let layer: *mut AnyObject = msg_send![view, layer];
+        if layer.is_null() {
+            return;
+        }
+        let sublayers: *mut AnyObject = msg_send![layer, sublayers];
+        if sublayers.is_null() {
+            return;
+        }
+        let count: usize = msg_send![sublayers, count];
+        for i in 0..count {
+            let sub: *mut AnyObject = msg_send![sublayers, objectAtIndex: i];
+            let is_metal: bool = msg_send![sub, isKindOfClass: metal_class];
+            if is_metal {
+                let _: () = msg_send![sub, setPresentsWithTransaction: true];
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn configure_metal_layer(_window: &winit::window::Window) {}
