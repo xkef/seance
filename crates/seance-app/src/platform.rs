@@ -11,24 +11,13 @@ pub fn configure_event_loop<T: 'static>(_builder: &mut winit::event_loop::EventL
 
 #[cfg(target_os = "macos")]
 pub fn configure_window(window: &winit::window::Window) {
-    use objc2::msg_send;
-    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2::MainThreadMarker;
+    use objc2::runtime::{AnyClass, NSObjectProtocol};
+    use objc2_app_kit::{
+        NSApplication, NSTitlebarSeparatorStyle, NSView, NSWindowButton, NSWindowStyleMask,
+        NSWindowTitleVisibility,
+    };
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-
-    // NSWindowStyleMask flags.
-    const TITLED: usize = 1 << 0;
-    const CLOSABLE: usize = 1 << 1;
-    const MINIATURIZABLE: usize = 1 << 2;
-    const RESIZABLE: usize = 1 << 3;
-    const FULLSIZE_CONTENT_VIEW: usize = 1 << 15;
-
-    // NSWindowTitleVisibility::Hidden.
-    const TITLE_HIDDEN: isize = 1;
-
-    // NSTitlebarSeparatorStyle::None — suppresses the 1 px hairline AppKit
-    // otherwise draws at the titlebar/content boundary when the content view
-    // uses FULLSIZE_CONTENT_VIEW.
-    const TITLEBAR_SEPARATOR_NONE: isize = 1;
 
     let Ok(handle) = window.window_handle() else {
         return;
@@ -36,64 +25,64 @@ pub fn configure_window(window: &winit::window::Window) {
     let RawWindowHandle::AppKit(h) = handle.as_raw() else {
         return;
     };
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
 
-    unsafe {
-        let view: *mut AnyObject = h.ns_view.as_ptr().cast();
-        let nswindow: *mut AnyObject = msg_send![view, window];
-        if nswindow.is_null() {
-            return;
+    // SAFETY: winit guarantees h.ns_view points to a live NSView for the
+    // duration of this call. We're on the main thread (mtm above), so no
+    // concurrent mutation of the view hierarchy is possible.
+    let view: &NSView = unsafe { h.ns_view.cast::<NSView>().as_ref() };
+    let Some(nswindow) = view.window() else {
+        return;
+    };
+
+    let style_mask = NSWindowStyleMask::Titled
+        | NSWindowStyleMask::Closable
+        | NSWindowStyleMask::Miniaturizable
+        | NSWindowStyleMask::Resizable
+        | NSWindowStyleMask::FullSizeContentView;
+    nswindow.setStyleMask(style_mask);
+    nswindow.setTitlebarAppearsTransparent(true);
+    nswindow.setTitleVisibility(NSWindowTitleVisibility::Hidden);
+    nswindow.setTitlebarSeparatorStyle(NSTitlebarSeparatorStyle::None);
+
+    for button in [
+        NSWindowButton::CloseButton,
+        NSWindowButton::MiniaturizeButton,
+        NSWindowButton::ZoomButton,
+    ] {
+        if let Some(btn) = nswindow.standardWindowButton(button) {
+            btn.setHidden(true);
         }
-        let style_mask = TITLED | CLOSABLE | MINIATURIZABLE | RESIZABLE | FULLSIZE_CONTENT_VIEW;
-        let _: () = msg_send![nswindow, setStyleMask: style_mask];
-        let _: () = msg_send![nswindow, setTitlebarAppearsTransparent: true];
-        let _: () = msg_send![nswindow, setTitleVisibility: TITLE_HIDDEN];
-        let _: () = msg_send![
-            nswindow,
-            setTitlebarSeparatorStyle: TITLEBAR_SEPARATOR_NONE
-        ];
+    }
 
-        // Hide close, minimize, zoom buttons.
-        for i in 0_isize..3 {
-            let button: *mut AnyObject = msg_send![nswindow, standardWindowButton: i];
-            if !button.is_null() {
-                let _: () = msg_send![button, setHidden: true];
-            }
-        }
-
-        // Hide the `NSTitlebarContainerView` inside the window's theme frame.
-        // `titlebarAppearsTransparent` + `fullSizeContentView` leave this view
-        // in the hierarchy, and it paints a 1 px highlight at the top of the
-        // window regardless of `titlebarSeparatorStyle`. Mirrors Ghostty's
-        // `HiddenTitlebarTerminalWindow.reapplyHiddenStyle`.
-        if let Some(titlebar_cls) = AnyClass::get(c"NSTitlebarContainerView") {
-            let content_view: *mut AnyObject = msg_send![nswindow, contentView];
-            if !content_view.is_null() {
-                let theme_frame: *mut AnyObject = msg_send![content_view, superview];
-                if !theme_frame.is_null() {
-                    let subviews: *mut AnyObject = msg_send![theme_frame, subviews];
-                    if !subviews.is_null() {
-                        let count: usize = msg_send![subviews, count];
-                        for i in 0..count {
-                            let sub: *mut AnyObject = msg_send![subviews, objectAtIndex: i];
-                            let is_titlebar: bool = msg_send![sub, isKindOfClass: titlebar_cls];
-                            if is_titlebar {
-                                let _: () = msg_send![sub, setHidden: true];
-                                break;
-                            }
-                        }
-                    }
+    // Hide the `NSTitlebarContainerView` inside the window's theme frame.
+    // `titlebarAppearsTransparent` + `fullSizeContentView` leave this view
+    // in the hierarchy, and it paints a 1 px highlight at the top of the
+    // window regardless of `titlebarSeparatorStyle`. Mirrors Ghostty's
+    // `HiddenTitlebarTerminalWindow.reapplyHiddenStyle`. The class is
+    // AppKit-private so there's no typed wrapper — reach it by name.
+    if let Some(titlebar_cls) = AnyClass::get(c"NSTitlebarContainerView")
+        && let Some(content_view) = nswindow.contentView()
+    {
+        // SAFETY: superview is `unsafe` because its reference isn't
+        // retained; we use it immediately on the main thread before
+        // returning, so the hierarchy cannot change underneath us.
+        let theme_frame = unsafe { content_view.superview() };
+        if let Some(theme_frame) = theme_frame {
+            for sub in theme_frame.subviews().iter() {
+                if sub.isKindOfClass(titlebar_cls) {
+                    sub.setHidden(true);
+                    break;
                 }
             }
         }
-
-        if let Some(app_class) = AnyClass::get(c"NSApplication") {
-            let app: *mut AnyObject = msg_send![app_class, sharedApplication];
-            if !app.is_null() {
-                let _: () = msg_send![app, activateIgnoringOtherApps: true];
-                let _: () = msg_send![nswindow, makeKeyAndOrderFront: app];
-            }
-        }
     }
+
+    let app = NSApplication::sharedApplication(mtm);
+    app.activate();
+    nswindow.makeKeyAndOrderFront(Some(&app));
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -123,14 +112,30 @@ pub fn set_option_as_alt(window: &winit::window::Window, mode: seance_input::Opt
 #[cfg(not(target_os = "macos"))]
 pub fn set_option_as_alt(_window: &winit::window::Window, _mode: seance_input::OptionAsAlt) {}
 
+/// Translate the user's macOS-only config knob into the cross-platform
+/// `seance_input::OptionAsAlt`. The config enum is always present, but
+/// seance-input's encoder ignores the value outside macOS.
+pub fn option_as_alt_from_config(
+    cfg: seance_config::MacosOptionAsAlt,
+) -> seance_input::OptionAsAlt {
+    use seance_config::MacosOptionAsAlt;
+    use seance_input::OptionAsAlt;
+    match cfg {
+        MacosOptionAsAlt::None => OptionAsAlt::None,
+        MacosOptionAsAlt::Left => OptionAsAlt::Left,
+        MacosOptionAsAlt::Right => OptionAsAlt::Right,
+        MacosOptionAsAlt::Both => OptionAsAlt::Both,
+    }
+}
+
 /// Prevent stretching during live resize on macOS by enabling
 /// `CAMetalLayer.presentsWithTransaction`. Must run after the wgpu surface
 /// has been created (the CAMetalLayer is attached as a sublayer then) and
 /// before the first frame is presented.
 #[cfg(target_os = "macos")]
 pub fn configure_metal_layer(window: &winit::window::Window) {
-    use objc2::msg_send;
-    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2_app_kit::NSView;
+    use objc2_quartz_core::CAMetalLayer;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     let Ok(handle) = window.window_handle() else {
@@ -139,27 +144,24 @@ pub fn configure_metal_layer(window: &winit::window::Window) {
     let RawWindowHandle::AppKit(h) = handle.as_raw() else {
         return;
     };
-    let Some(metal_class) = AnyClass::get(c"CAMetalLayer") else {
+
+    // SAFETY: winit guarantees h.ns_view points to a live NSView for the
+    // duration of this call; invoked synchronously from the main thread
+    // right after renderer creation.
+    let view: &NSView = unsafe { h.ns_view.cast::<NSView>().as_ref() };
+    let Some(layer) = view.layer() else {
         return;
     };
-    unsafe {
-        let view: *mut AnyObject = h.ns_view.as_ptr().cast();
-        let layer: *mut AnyObject = msg_send![view, layer];
-        if layer.is_null() {
-            return;
-        }
-        let sublayers: *mut AnyObject = msg_send![layer, sublayers];
-        if sublayers.is_null() {
-            return;
-        }
-        let count: usize = msg_send![sublayers, count];
-        for i in 0..count {
-            let sub: *mut AnyObject = msg_send![sublayers, objectAtIndex: i];
-            let is_metal: bool = msg_send![sub, isKindOfClass: metal_class];
-            if is_metal {
-                let _: () = msg_send![sub, setPresentsWithTransaction: true];
-                break;
-            }
+    // SAFETY: `sublayers` is `unsafe` because its elements aren't retained;
+    // we read them immediately on the main thread, so the array cannot
+    // change underneath us.
+    let Some(sublayers) = (unsafe { layer.sublayers() }) else {
+        return;
+    };
+    for sub in sublayers.iter() {
+        if let Ok(metal) = sub.downcast::<CAMetalLayer>() {
+            metal.setPresentsWithTransaction(true);
+            break;
         }
     }
 }

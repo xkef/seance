@@ -3,25 +3,31 @@
 
 use seance_config::ConfigDiff;
 
-use crate::app::{App, option_as_alt_from_config, vt_shape_from_config};
+use crate::app::{App, vt_shape_from_config};
 use crate::platform;
+use crate::window_state::WindowState;
 
 impl App {
-    pub(crate) fn apply_terminal_theme(&mut self, theme: &seance_config::Theme) {
-        if let Some(term) = &mut self.terminal {
-            term.set_theme_colors(
-                theme.fg,
-                [theme.bg[0], theme.bg[1], theme.bg[2]],
-                [theme.cursor[0], theme.cursor[1], theme.cursor[2]],
-                theme.palette,
-            );
-        }
+    /// Push theme colors into the live VT. Takes `&mut WindowState` so the
+    /// caller (including `resumed`, where `self.window_state` isn't wired
+    /// yet) can apply the theme before publishing the WindowState.
+    pub(crate) fn apply_terminal_theme_to(
+        &self,
+        ws: &mut WindowState,
+        theme: &seance_config::Theme,
+    ) {
+        ws.terminal.set_theme_colors(
+            theme.fg,
+            [theme.bg[0], theme.bg[1], theme.bg[2]],
+            [theme.cursor[0], theme.cursor[1], theme.cursor[2]],
+            theme.palette,
+        );
     }
 
     /// Re-resolve the currently-configured theme and push it to the renderer.
     /// Bad theme files keep the previous theme live (#13).
     pub(crate) fn reload_theme(&mut self) {
-        if self.renderer.is_none() {
+        if self.window_state.is_none() {
             return;
         }
         let spec = seance_config::theme::ThemeSpec::parse(
@@ -37,11 +43,16 @@ impl App {
                 return;
             }
         };
-        if let Some(r) = &mut self.renderer {
-            r.set_theme(theme.clone());
+        if let Some(ws) = self.window_state.as_mut() {
+            ws.renderer.set_theme(theme.clone());
+            ws.terminal.set_theme_colors(
+                theme.fg,
+                [theme.bg[0], theme.bg[1], theme.bg[2]],
+                [theme.cursor[0], theme.cursor[1], theme.cursor[2]],
+                theme.palette,
+            );
+            ws.mark_dirty();
         }
-        self.apply_terminal_theme(&theme);
-        self.mark_dirty();
     }
 
     /// Re-parse `config.toml` and apply whatever actually changed. A bad
@@ -67,12 +78,13 @@ impl App {
         log::info!("config reloaded: {diff:?}");
         self.config = new_config;
 
-        if let Some(r) = &mut self.renderer {
+        if let Some(ws) = self.window_state.as_mut() {
             if old_config.font.min_contrast != self.config.font.min_contrast {
-                r.set_min_contrast(self.config.font.min_contrast);
+                ws.renderer.set_min_contrast(self.config.font.min_contrast);
             }
             if old_config.window.background_opacity != self.config.window.background_opacity {
-                r.set_background_opacity(self.config.window.background_opacity);
+                ws.renderer
+                    .set_background_opacity(self.config.window.background_opacity);
             }
         }
 
@@ -92,16 +104,17 @@ impl App {
             self.apply_window_padding();
         }
         if diff.input_changed {
-            let mode = option_as_alt_from_config(self.config.input.macos_option_as_alt);
+            let mode = platform::option_as_alt_from_config(self.config.input.macos_option_as_alt);
             self.input.set_option_as_alt(mode);
-            if let Some(w) = &self.window {
-                platform::set_option_as_alt(w, mode);
+            if let Some(ws) = self.window_state.as_ref() {
+                platform::set_option_as_alt(&ws.window, mode);
             }
         }
         if old_config.cursor.style != self.config.cursor.style
-            && let Some(t) = &mut self.terminal
+            && let Some(ws) = self.window_state.as_mut()
         {
-            t.set_cursor_shape(vt_shape_from_config(self.config.cursor.style));
+            ws.terminal
+                .set_cursor_shape(vt_shape_from_config(self.config.cursor.style));
         }
         if diff.repaint_only {
             self.mark_dirty();
