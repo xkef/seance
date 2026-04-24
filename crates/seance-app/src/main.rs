@@ -9,6 +9,7 @@ mod mouse;
 mod platform;
 mod reload;
 mod watcher;
+mod window_state;
 
 use app::App;
 
