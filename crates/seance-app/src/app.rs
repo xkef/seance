@@ -2,31 +2,34 @@
 //!
 //! Owns process-lifetime state (config, input handler, config watcher) and
 //! a single `window_state: Option<WindowState>` for everything that exists
-//! only while a window is up. Hot-reload methods live in the `reload` module.
+//! only while a window is up.
+//!
+//! Peer modules:
+//! - `events.rs` — winit event handlers (keyboard, mouse).
+//! - `apply.rs`  — propagate settings changes (font, scale, padding) into
+//!   the renderer and reflow the PTY.
+//! - `reload.rs` — hot-reload config / theme files.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalSize, PhysicalPosition};
-use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::dpi::LogicalSize;
+use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::window::{Window, WindowId};
 
 use seance_config::Config;
-use seance_input::{InputHandler, VtInput};
+use seance_input::InputHandler;
 use seance_render::{RenderInputs, RendererConfig, TerminalRenderer};
 use seance_vt::{CursorShape as VtCursorShape, FrameSource, LibGhosttyFrameSource, Terminal};
 
 use crate::UserEvent;
-use crate::command::AppCommand;
 use crate::keybinds::Keybinds;
 use crate::platform;
 use crate::watcher::ConfigWatcher;
 use crate::window_state::WindowState;
 
-const FONT_SIZE_MIN: f32 = 6.0;
-const FONT_SIZE_MAX: f32 = 72.0;
 const POLL_INTERVAL: Duration = Duration::from_millis(4);
 // Half-period of the cursor blink cycle; on + off = 1 s. The tick rides on
 // POLL_INTERVAL wakeups — once M2 #24 lands we should drive it from the
@@ -36,7 +39,7 @@ const BLINK_HALF_PERIOD: Duration = Duration::from_millis(500);
 pub(crate) struct App {
     pub(crate) window_state: Option<WindowState>,
     pub(crate) input: InputHandler,
-    keybinds: Keybinds,
+    pub(crate) keybinds: Keybinds,
     pub(crate) config: Config,
     pub(crate) font_size: f32,
     proxy: EventLoopProxy<UserEvent>,
@@ -117,199 +120,6 @@ impl App {
             ws.mark_dirty();
         }
     }
-
-    fn apply_font_size(&mut self) {
-        let font_size = self.font_size;
-        if let Some(ws) = self.ws_mut() {
-            ws.renderer.set_font_size(font_size);
-            ws.reflow(ws.window.inner_size());
-        }
-    }
-
-    pub(crate) fn apply_font_metrics(
-        &mut self,
-        font_size_changed: bool,
-        adjust_cell_height_changed: bool,
-    ) {
-        let font_size = self.font_size;
-        let adjust = self.config.font.adjust_cell_height.clone();
-        if let Some(ws) = self.ws_mut() {
-            if adjust_cell_height_changed {
-                ws.renderer.set_adjust_cell_height(adjust.as_deref());
-            }
-            if font_size_changed {
-                ws.renderer.set_font_size(font_size);
-            }
-            ws.reflow(ws.window.inner_size());
-        }
-    }
-
-    fn apply_scale_factor(&mut self, scale_factor: f64) {
-        let padding = physical_window_padding(&self.config, scale_factor);
-        if let Some(ws) = self.ws_mut() {
-            ws.renderer.set_scale(scale_factor);
-            ws.renderer.set_window_padding(padding);
-            ws.reflow(ws.window.inner_size());
-        }
-    }
-
-    /// Push the configured window padding to the renderer and reflow the PTY.
-    /// `grid_size()` shrinks when padding grows, so a reflow is required to
-    /// keep the shell's SIGWINCH in sync.
-    pub(crate) fn apply_window_padding(&mut self) {
-        let config = &self.config;
-        if let Some(ws) = self.window_state.as_mut() {
-            let padding = physical_window_padding(config, ws.window.scale_factor());
-            ws.renderer.set_window_padding(padding);
-            ws.reflow(ws.window.inner_size());
-        }
-    }
-
-    fn on_keyboard_input(&mut self, event_loop: &ActiveEventLoop, event: &winit::event::KeyEvent) {
-        let modes = self
-            .window_state
-            .as_ref()
-            .map(|ws| ws.terminal_modes())
-            .unwrap_or_default();
-        let modifiers = self
-            .window_state
-            .as_ref()
-            .map(|ws| ws.modifiers)
-            .unwrap_or_default();
-
-        if let Some(cmd) = self.keybinds.match_event(event, &modifiers) {
-            let preserves_selection = matches!(cmd, AppCommand::Copy | AppCommand::SelectAll);
-            if !preserves_selection
-                && let Some(ws) = self.ws_mut()
-                && ws.has_selection()
-            {
-                ws.clear_selection();
-            }
-            self.execute_app_command(event_loop, cmd);
-            self.mark_dirty();
-            return;
-        }
-
-        let input = self.input.handle_key(event, &modifiers, modes);
-
-        if let Some(ws) = self.ws_mut() {
-            if event.state == ElementState::Pressed
-                && !matches!(input, VtInput::Ignore)
-                && ws.has_selection()
-            {
-                ws.clear_selection();
-            }
-            if let VtInput::Write(bytes) = input {
-                ws.terminal.write(&bytes);
-            }
-            ws.mark_dirty();
-        }
-    }
-
-    fn execute_app_command(&mut self, event_loop: &ActiveEventLoop, cmd: AppCommand) {
-        match cmd {
-            AppCommand::Quit | AppCommand::CloseWindow => event_loop.exit(),
-            AppCommand::Copy => {
-                if let Some(ws) = self.ws_mut() {
-                    ws.copy_selection_to_clipboard();
-                    ws.clear_selection();
-                }
-            }
-            AppCommand::Paste => {
-                if let Some(ws) = self.ws_mut() {
-                    ws.paste_from_clipboard();
-                }
-            }
-            AppCommand::SelectAll => {
-                if let Some(ws) = self.ws_mut() {
-                    ws.terminal.select_all();
-                    ws.sync_selection_to_overlay();
-                }
-            }
-            AppCommand::FontSizeDelta(delta) => {
-                self.font_size =
-                    (self.font_size + f32::from(delta)).clamp(FONT_SIZE_MIN, FONT_SIZE_MAX);
-                self.apply_font_size();
-            }
-            AppCommand::FontSizeReset => {
-                self.font_size = self.config.font.size;
-                self.apply_font_size();
-            }
-        }
-    }
-
-    fn on_mouse_wheel(&mut self, delta: winit::event::MouseScrollDelta) {
-        let Some(ws) = self.window_state.as_mut() else {
-            return;
-        };
-        let lines = match delta {
-            winit::event::MouseScrollDelta::LineDelta(_, y) => y as i32,
-            winit::event::MouseScrollDelta::PixelDelta(pos) => {
-                let ch = ws.cell_size[1].max(1.0);
-                (pos.y / f64::from(ch)) as i32
-            }
-        };
-        if lines == 0 {
-            return;
-        }
-        let modes = ws.terminal_modes();
-        if let Some(data) = self.input.encode_mouse_wheel(lines, modes) {
-            ws.terminal.write(&data);
-        } else {
-            ws.terminal.scroll_lines(-lines);
-        }
-        ws.mark_dirty();
-    }
-
-    fn on_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
-        let Some(ws) = self.window_state.as_mut() else {
-            return;
-        };
-        ws.mouse.cursor_pos = position;
-        if !ws.mouse.is_down {
-            return;
-        }
-        let (col, row) = ws.renderer.pixel_to_grid(position.x, position.y);
-        ws.terminal.update_selection(col, row);
-        ws.sync_selection_to_overlay();
-        ws.mark_dirty();
-    }
-
-    fn on_mouse_input(&mut self, state: ElementState, button: MouseButton) {
-        if button != MouseButton::Left {
-            return;
-        }
-        let Some(ws) = self.window_state.as_mut() else {
-            return;
-        };
-        match state {
-            ElementState::Pressed => handle_mouse_press(ws),
-            ElementState::Released => {
-                ws.mouse.is_down = false;
-                ws.copy_selection_to_clipboard();
-            }
-        }
-    }
-}
-
-fn handle_mouse_press(ws: &mut WindowState) {
-    if ws.modifiers.state().super_key() {
-        let _ = ws.window.drag_window();
-        return;
-    }
-    let (col, row) = ws
-        .renderer
-        .pixel_to_grid(ws.mouse.cursor_pos.x, ws.mouse.cursor_pos.y);
-    let clicks = ws.mouse.register_click(col, row);
-    match clicks {
-        1 => ws.terminal.start_selection(col, row),
-        2 => ws.terminal.start_word_selection(col, row),
-        3 => ws.terminal.start_line_selection(row),
-        _ => {}
-    }
-    ws.sync_selection_to_overlay();
-    ws.mouse.is_down = true;
-    ws.mark_dirty();
 }
 
 impl ApplicationHandler<UserEvent> for App {

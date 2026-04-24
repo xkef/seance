@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use winit::event_loop::EventLoop;
 
 mod app;
+mod apply;
 mod command;
+mod events;
 mod keybinds;
 mod mouse;
 mod platform;
