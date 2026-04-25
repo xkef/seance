@@ -353,10 +353,7 @@ impl Terminal {
     /// Returns `None` only on FFI failure — callers should treat that as
     /// "unknown, redraw everything" for safety.
     pub(crate) fn dirty_snapshot(&mut self) -> Option<DirtySnapshot> {
-        let Self {
-            vt, render_state, ..
-        } = self;
-        let snapshot = render_state.update(&**vt).ok()?;
+        let snapshot = self.render_state.update(&self.vt).ok()?;
         let global = snapshot.dirty().ok()?;
         match global {
             Dirty::Clean => Some(DirtySnapshot::Clean),
@@ -387,10 +384,7 @@ impl Terminal {
     /// Clear both the global frame-dirty signal and every per-row flag on
     /// the persistent render state. Call after consuming a dirty snapshot.
     pub(crate) fn clear_dirty(&mut self) {
-        let Self {
-            vt, render_state, ..
-        } = self;
-        let Ok(snapshot) = render_state.update(&**vt) else {
+        let Ok(snapshot) = self.render_state.update(&self.vt) else {
             return;
         };
         let _ = snapshot.set_dirty(Dirty::Clean);
