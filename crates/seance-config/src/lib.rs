@@ -119,9 +119,9 @@ mod tests {
         let def = Config::default();
         assert_eq!(cfg.font.family, def.font.family);
         assert_eq!(cfg.font.size, def.font.size);
-        assert_eq!(cfg.window.padding_x, 16);
-        assert_eq!(cfg.cursor.style, CursorStyle::Bar);
-        assert!(cfg.theme.is_none());
+        assert_eq!(cfg.window.padding_x, 12);
+        assert_eq!(cfg.cursor.style, CursorStyle::Block);
+        assert_eq!(cfg.theme.as_deref(), Some("Catppuccin Frappe"));
     }
 
     #[test]
@@ -138,8 +138,8 @@ mod tests {
         assert_eq!(cfg.theme.as_deref(), Some("Catppuccin Mocha"));
         assert_eq!(cfg.font.family, "Berkeley Mono");
         assert_eq!(cfg.font.size, 16.0);
-        assert_eq!(cfg.font.min_contrast, 1.0);
-        assert!(cfg.font.features.is_empty());
+        assert_eq!(cfg.font.min_contrast, 1.1);
+        assert_eq!(cfg.font.features, vec!["calt".to_string()]);
     }
 
     #[test]
@@ -229,7 +229,7 @@ mod tests {
         let path = env::temp_dir().join("seance-definitely-missing.toml");
         let _ = fs::remove_file(&path);
         let cfg = try_load_from(&path).unwrap();
-        assert!(cfg.theme.is_none());
+        assert_eq!(cfg.theme.as_deref(), Some("Catppuccin Frappe"));
     }
 
     #[test]
