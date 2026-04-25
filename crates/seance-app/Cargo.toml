@@ -27,4 +27,6 @@ workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
+objc2-app-kit = "0.3"
+objc2-quartz-core = "0.3"
 raw-window-handle = "0.6"

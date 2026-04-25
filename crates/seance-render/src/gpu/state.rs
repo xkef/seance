@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use wgpu::util::DeviceExt;
 use wgpu::*;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
+use super::atlas_texture::{atlas_view, write_atlas_plane};
+use super::dynamic_buffer::DynamicBuffer;
 use super::pipeline::Pipelines;
 use super::uniforms::Uniforms;
 use crate::image::ImageRenderer;
@@ -41,54 +42,11 @@ pub(crate) struct GpuState {
     surface_dirty: bool,
 }
 
-/// A GPU buffer that grows on demand when the upload doesn't fit.
-struct DynamicBuffer {
-    buffer: Option<Buffer>,
-    bind_group: Option<BindGroup>,
-    usage: BufferUsages,
-    label: &'static str,
-}
-
-impl DynamicBuffer {
-    fn new(usage: BufferUsages, label: &'static str) -> Self {
-        Self {
-            buffer: None,
-            bind_group: None,
-            usage,
-            label,
-        }
-    }
-
-    /// Upload `data`, growing the buffer if needed. Returns whether a
-    /// new buffer was allocated (callers must rebuild any bind group).
-    fn upload(&mut self, device: &Device, queue: &Queue, data: &[u8]) -> bool {
-        let needs_new = self
-            .buffer
-            .as_ref()
-            .is_none_or(|b| b.size() < data.len() as u64);
-        if needs_new {
-            self.buffer = Some(device.create_buffer_init(&util::BufferInitDescriptor {
-                label: Some(self.label),
-                contents: data,
-                usage: self.usage,
-            }));
-            self.bind_group = None;
-            true
-        } else {
-            queue.write_buffer(self.buffer.as_ref().unwrap(), 0, data);
-            false
-        }
-    }
-}
-
 impl GpuState {
     pub(crate) async fn new(window: Arc<Window>) -> Self {
         let size = window.inner_size();
         let instance = Instance::default();
         let surface = instance.create_surface(window.clone()).unwrap();
-
-        #[cfg(target_os = "macos")]
-        configure_metal_layer(&window);
 
         let adapter = instance
             .request_adapter(&RequestAdapterOptions {
@@ -413,124 +371,5 @@ impl GpuState {
             PlacementLayer::AboveText,
             &self.uniform_bind_group,
         );
-    }
-}
-
-fn bytes_per_pixel(format: TextureFormat) -> u32 {
-    match format {
-        TextureFormat::R8Unorm => 1,
-        TextureFormat::Rgba8Unorm => 4,
-        _ => panic!("unsupported atlas format: {format:?}"),
-    }
-}
-
-/// Write `data` into an atlas plane, (re-)creating the texture if the
-/// size changed. Returns `true` if a new texture was allocated.
-fn write_atlas_plane(
-    device: &Device,
-    queue: &Queue,
-    slot: &mut Option<Texture>,
-    data: &[u8],
-    size: u32,
-    format: TextureFormat,
-    label: &str,
-) -> bool {
-    let extent = Extent3d {
-        width: size,
-        height: size,
-        depth_or_array_layers: 1,
-    };
-    let needs_new = slot
-        .as_ref()
-        .is_none_or(|t| t.width() != size || t.height() != size);
-    if needs_new {
-        *slot = Some(device.create_texture(&TextureDescriptor {
-            label: Some(label),
-            size: extent,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format,
-            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-            view_formats: &[],
-        }));
-    }
-    queue.write_texture(
-        TexelCopyTextureInfo {
-            texture: slot.as_ref().unwrap(),
-            mip_level: 0,
-            origin: Origin3d::ZERO,
-            aspect: TextureAspect::All,
-        },
-        data,
-        TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(size * bytes_per_pixel(format)),
-            rows_per_image: None,
-        },
-        extent,
-    );
-    needs_new
-}
-
-/// View for the given atlas texture, or a 1×1 placeholder when absent.
-fn atlas_view(device: &Device, tex: Option<&Texture>, format: TextureFormat) -> TextureView {
-    match tex {
-        Some(t) => t.create_view(&TextureViewDescriptor::default()),
-        None => device
-            .create_texture(&TextureDescriptor {
-                label: Some("atlas_placeholder"),
-                size: Extent3d {
-                    width: 1,
-                    height: 1,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format,
-                usage: TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-            .create_view(&TextureViewDescriptor::default()),
-    }
-}
-
-/// Prevent stretching during live resize on macOS by enabling
-/// `CAMetalLayer.presentsWithTransaction`.
-#[cfg(target_os = "macos")]
-fn configure_metal_layer(window: &Window) {
-    use objc2::msg_send;
-    use objc2::runtime::{AnyClass, AnyObject};
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-
-    let Ok(handle) = window.window_handle() else {
-        return;
-    };
-    let RawWindowHandle::AppKit(h) = handle.as_raw() else {
-        return;
-    };
-    let Some(metal_class) = AnyClass::get(c"CAMetalLayer") else {
-        return;
-    };
-    unsafe {
-        let view: *mut AnyObject = h.ns_view.as_ptr().cast();
-        let layer: *mut AnyObject = msg_send![view, layer];
-        if layer.is_null() {
-            return;
-        }
-        let sublayers: *mut AnyObject = msg_send![layer, sublayers];
-        if sublayers.is_null() {
-            return;
-        }
-        let count: usize = msg_send![sublayers, count];
-        for i in 0..count {
-            let sub: *mut AnyObject = msg_send![sublayers, objectAtIndex: i];
-            let is_metal: bool = msg_send![sub, isKindOfClass: metal_class];
-            if is_metal {
-                let _: () = msg_send![sub, setPresentsWithTransaction: true];
-                break;
-            }
-        }
     }
 }
