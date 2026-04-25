@@ -85,8 +85,8 @@ impl Default for WindowConfig {
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum CursorStyle {
-    #[default]
     Block,
+    #[default]
     Bar,
     Underline,
 }
@@ -101,7 +101,7 @@ pub struct CursorConfig {
 impl Default for CursorConfig {
     fn default() -> Self {
         Self {
-            style: CursorStyle::Block,
+            style: CursorStyle::Bar,
             blink: false,
         }
     }
