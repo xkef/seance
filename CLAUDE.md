@@ -91,7 +91,12 @@ subject; the PR body is the commit body. Apply these rules to both.
 - Wrap every line at 72 columns.
 - Explain _why_, not _what_. The diff already shows what changed.
 - Separate the subject from the body with a blank line.
-- Footers (optional, last block): `Breaking-Change:`, `Refs: #<issue>`.
+- Footers (last block): `Closes #<issue>` is REQUIRED whenever the PR
+  addresses one or more issues — list one per line so GitHub auto-closes
+  them on merge. Use `Refs: #<issue>` only for issues the PR references
+  but does not fully resolve. `Breaking-Change:` is optional.
+- If the PR genuinely addresses no tracked issue, say so explicitly in
+  the body rather than omitting the footer silently.
 
 ### Forbidden in PRs and commits
 
