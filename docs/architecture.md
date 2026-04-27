@@ -245,7 +245,7 @@ decoration = true
 background_opacity = 1.0
 
 [cursor]
-style = "block"          # block | bar | underline
+style = "bar"            # block | bar | underline
 blink = false
 
 [clipboard]

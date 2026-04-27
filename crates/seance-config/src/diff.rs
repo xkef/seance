@@ -146,7 +146,7 @@ mod tests {
     fn cursor_style_change_is_repaint_only() {
         let a = Config::default();
         let mut b = Config::default();
-        b.cursor.style = CursorStyle::Bar;
+        b.cursor.style = CursorStyle::Block;
         let d = ConfigDiff::between(&a, &b);
         assert!(d.repaint_only);
         assert!(!d.theme_changed);
