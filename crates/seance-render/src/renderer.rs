@@ -144,6 +144,7 @@ impl TerminalRenderer {
             fi,
             self.cell_builder.bg_cells(),
             self.cell_builder.text_cells(),
+            self.cell_builder.last_dirty(),
             self.cell_builder.atlas(),
             inputs,
             &self.theme,

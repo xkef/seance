@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use rustc_hash::FxBuildHasher;
 use seance_config::Theme;
-use seance_vt::{CellColor, CellView, CellVisitor, FrameSource};
+use seance_vt::{CellColor, CellView, CellVisitor, DirtySnapshot, FrameSource};
 
 use super::atlas::{AtlasEntry, GlyphAtlas};
 use super::backend::{FontAttrs, GlyphFormat, GlyphId, ShapedGlyph, TextBackend};
@@ -96,6 +96,7 @@ pub struct CellBuilder {
     requests: Vec<CellRequest>,
     shape_scratch: Vec<ShapedGlyph>,
     last_frame: Option<FrameInfo>,
+    last_dirty: DirtySnapshot,
 }
 
 impl CellBuilder {
@@ -108,6 +109,9 @@ impl CellBuilder {
             requests: Vec::new(),
             shape_scratch: Vec::new(),
             last_frame: None,
+            // First frame must be a full upload — there's nothing on the
+            // GPU yet for a `Partial` write to layer onto.
+            last_dirty: DirtySnapshot::Full,
         }
     }
 
@@ -117,6 +121,13 @@ impl CellBuilder {
         backend: &mut dyn TextBackend,
         config: BuildFrameConfig<'_>,
     ) {
+        // Sample the dirty set first so the rest of the build can mutate
+        // the source freely. The snapshot is owned by the builder; the
+        // matching `clear_dirty` call below acknowledges it on the VT
+        // side so the next frame reports only post-snapshot changes.
+        self.last_dirty = source.dirty_rows();
+        source.clear_dirty();
+
         let (baseline, geom) = {
             let m = backend.metrics();
             let g = geometry(
@@ -187,6 +198,10 @@ impl CellBuilder {
 
     pub fn last_frame(&self) -> Option<&FrameInfo> {
         self.last_frame.as_ref()
+    }
+
+    pub fn last_dirty(&self) -> &DirtySnapshot {
+        &self.last_dirty
     }
 }
 
@@ -343,12 +358,33 @@ impl CellVisitor for WalkVisitor<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::text::backend::{
+        CellMetrics, FontAttrs, GlyphId, RasterizedGlyph, ShapedGlyph, TextBackend,
+    };
     use seance_vt::{CellAttrs, CellColor, CellVisitor, CursorInfo, GridPos};
 
     struct FakeFrame<'a> {
         cols: u16,
         rows: u16,
         cells: &'a [(&'a str, CellColor, CellColor, CellAttrs)],
+        dirty: DirtySnapshot,
+        clear_count: u32,
+    }
+
+    impl<'a> FakeFrame<'a> {
+        fn new(
+            cols: u16,
+            rows: u16,
+            cells: &'a [(&'a str, CellColor, CellColor, CellAttrs)],
+        ) -> Self {
+            Self {
+                cols,
+                rows,
+                cells,
+                dirty: DirtySnapshot::Full,
+                clear_count: 0,
+            }
+        }
     }
 
     impl FrameSource for FakeFrame<'_> {
@@ -376,6 +412,87 @@ mod tests {
                 );
             }
         }
+        fn dirty_rows(&mut self) -> DirtySnapshot {
+            self.dirty.clone()
+        }
+        fn clear_dirty(&mut self) {
+            self.clear_count += 1;
+            self.dirty = DirtySnapshot::Clean;
+        }
+    }
+
+    struct StubBackend {
+        metrics: CellMetrics,
+    }
+
+    impl StubBackend {
+        fn new() -> Self {
+            Self {
+                metrics: CellMetrics {
+                    cell_width: 10.0,
+                    cell_height: 20.0,
+                    baseline: 16.0,
+                },
+            }
+        }
+    }
+
+    impl TextBackend for StubBackend {
+        fn metrics(&self) -> &CellMetrics {
+            &self.metrics
+        }
+        fn set_font_size(&mut self, _points: f32) {}
+        fn set_scale(&mut self, _scale: f64) {}
+        fn set_adjust_cell_height(&mut self, _value: Option<&str>) {}
+        fn shape_cell(&mut self, _text: &str, _attrs: FontAttrs, _out: &mut Vec<ShapedGlyph>) {}
+        fn rasterize(&mut self, _glyph: GlyphId) -> Option<RasterizedGlyph> {
+            None
+        }
+    }
+
+    fn build_config(theme: &Theme) -> BuildFrameConfig<'_> {
+        BuildFrameConfig {
+            surface_width: 100,
+            surface_height: 100,
+            window_padding: [0, 0],
+            theme,
+            bg_color: [0, 0, 0, 255],
+            min_contrast: 1.0,
+        }
+    }
+
+    #[test]
+    fn build_frame_captures_dirty_snapshot_and_acknowledges_source() {
+        let theme = Theme::blank();
+        let cells = [(
+            "A",
+            CellColor::Default,
+            CellColor::Default,
+            CellAttrs::default(),
+        )];
+        let mut source = FakeFrame::new(1, 1, &cells);
+        source.dirty = DirtySnapshot::Partial(vec![0]);
+        let mut backend = StubBackend::new();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+
+        assert_eq!(*builder.last_dirty(), DirtySnapshot::Partial(vec![0]));
+        assert_eq!(source.clear_count, 1);
+        // Sticky-clear simulation: the second build sees Clean because
+        // the fake reset itself in clear_dirty.
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        assert_eq!(*builder.last_dirty(), DirtySnapshot::Clean);
+        assert_eq!(source.clear_count, 2);
+    }
+
+    #[test]
+    fn build_frame_first_call_defaults_last_dirty_to_full_until_sampled() {
+        // Before any build_frame, last_dirty is Full so the first GPU
+        // upload is the full path. After build_frame, last_dirty mirrors
+        // whatever the source reported.
+        let builder = CellBuilder::new();
+        assert_eq!(*builder.last_dirty(), DirtySnapshot::Full);
     }
 
     #[test]
@@ -401,11 +518,7 @@ mod tests {
                 CellAttrs::default(),
             ),
         ];
-        let mut source = FakeFrame {
-            cols: 3,
-            rows: 1,
-            cells: &cells,
-        };
+        let mut source = FakeFrame::new(3, 1, &cells);
         let geom = FrameGeometry {
             cell_width: 10.0,
             cell_height: 20.0,
@@ -441,11 +554,7 @@ mod tests {
                 ..CellAttrs::default()
             },
         )];
-        let mut source = FakeFrame {
-            cols: 1,
-            rows: 1,
-            cells: &cells,
-        };
+        let mut source = FakeFrame::new(1, 1, &cells);
         let geom = FrameGeometry {
             cell_width: 10.0,
             cell_height: 20.0,
@@ -474,11 +583,7 @@ mod tests {
                 ..CellAttrs::default()
             },
         )];
-        let mut source = FakeFrame {
-            cols: 1,
-            rows: 1,
-            cells: &cells,
-        };
+        let mut source = FakeFrame::new(1, 1, &cells);
         let geom = FrameGeometry {
             cell_width: 10.0,
             cell_height: 20.0,
@@ -510,11 +615,7 @@ mod tests {
                 ..CellAttrs::default()
             },
         )];
-        let mut source = FakeFrame {
-            cols: 1,
-            rows: 1,
-            cells: &cells,
-        };
+        let mut source = FakeFrame::new(1, 1, &cells);
         let geom = FrameGeometry {
             cell_width: 10.0,
             cell_height: 20.0,
@@ -544,11 +645,7 @@ mod tests {
                 ..CellAttrs::default()
             },
         )];
-        let mut source = FakeFrame {
-            cols: 1,
-            rows: 1,
-            cells: &cells,
-        };
+        let mut source = FakeFrame::new(1, 1, &cells);
         let geom = FrameGeometry {
             cell_width: 10.0,
             cell_height: 20.0,
@@ -574,11 +671,7 @@ mod tests {
     #[test]
     fn geometry_honors_user_padding() {
         let cells: [(&str, CellColor, CellColor, CellAttrs); 0] = [];
-        let mut source = FakeFrame {
-            cols: 10,
-            rows: 5,
-            cells: &cells,
-        };
+        let mut source = FakeFrame::new(10, 5, &cells);
         let g = geometry(&mut source, 10.0, 20.0, 200, 200, [12, 6]);
         assert_eq!(g.grid_padding, [12.0, 6.0, 12.0, 6.0]);
     }
@@ -586,11 +679,7 @@ mod tests {
     #[test]
     fn geometry_clamps_padding_to_surface() {
         let cells: [(&str, CellColor, CellColor, CellAttrs); 0] = [];
-        let mut source = FakeFrame {
-            cols: 10,
-            rows: 5,
-            cells: &cells,
-        };
+        let mut source = FakeFrame::new(10, 5, &cells);
         let g = geometry(&mut source, 10.0, 20.0, 110, 110, [50, 40]);
         assert_eq!(g.grid_padding[0], 10.0);
         assert_eq!(g.grid_padding[1], 10.0);
