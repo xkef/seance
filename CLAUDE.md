@@ -34,7 +34,17 @@ cargo check --workspace
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+
+# Markdown / prose checks (CI runs both against **/*.md):
+npx --yes prettier --check "**/*.md"
+npx --yes markdownlint-cli2 "**/*.md"
 ```
+
+CI gates every push on `prettier --check` and `markdownlint-cli2`. Any change
+that touches a `.md` file (including `CLAUDE.md`, `README.md`, and anything
+under `docs/`) MUST pass both locally before you commit — run
+`npx --yes prettier --write <files>` to auto-fix wrap/indent issues, and re-run
+`--check` until it is clean. Do not push first and let CI catch it.
 
 ## Code comments
 
@@ -64,6 +74,11 @@ When picking up a sub-issue:
    description.
 3. Keep changes scoped to the sub-issue — do not batch unrelated cleanups.
 4. Run `cargo fmt`, `cargo clippy`, and the relevant tests before opening a PR.
+   If the change touches any `.md` file, also run
+   `npx --yes prettier --check "**/*.md"` and
+   `npx --yes markdownlint-cli2 "**/*.md"` and resolve every diagnostic before
+   pushing — these are the same commands CI runs, so a green local run is the
+   bar.
 
 ## Commit messages
 
@@ -91,7 +106,12 @@ subject; the PR body is the commit body. Apply these rules to both.
 - Wrap every line at 72 columns.
 - Explain _why_, not _what_. The diff already shows what changed.
 - Separate the subject from the body with a blank line.
-- Footers (optional, last block): `Breaking-Change:`, `Refs: #<issue>`.
+- Footers (last block): `Closes #<issue>` is REQUIRED whenever the PR addresses
+  one or more issues — list one per line so GitHub auto-closes them on merge.
+  Use `Refs: #<issue>` only for issues the PR references but does not fully
+  resolve. `Breaking-Change:` is optional.
+- If the PR genuinely addresses no tracked issue, say so explicitly in the body
+  rather than omitting the footer silently.
 
 ### Forbidden in PRs and commits
 
