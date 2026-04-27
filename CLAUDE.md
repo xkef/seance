@@ -108,5 +108,18 @@ verbatim — do not append any auto-generated trailer.
 
 ## Branches
 
-Development branches follow `claude/<short-slug>-<suffix>`. Never push directly
-to `main`.
+Branch names follow Conventional Commits, mirroring the commit `type` and
+optional `scope`: `<type>/<short-kebab-summary>` or
+`<type>-<scope>/<short-kebab-summary>`.
+
+- `type` is one of the Conventional Commit types listed above.
+- The summary is lowercase, kebab-cased, and describes the change — not the
+  author or the agent.
+- No `claude/` (or other agent/author) prefix.
+- No random hash, timestamp, or session suffix at the end.
+- Keep it short; aim for ≤40 characters total.
+
+Examples: `feat/dirty-row-tracking`, `fix-cursor/honor-decscusr`,
+`docs/architecture-vt-section`, `refactor/split-platform-modules`.
+
+Never push directly to `main`.
