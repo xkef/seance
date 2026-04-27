@@ -13,8 +13,8 @@ pub mod selection;
 mod terminal;
 
 pub use frame::{
-    CellAttrs, CellColor, CellView, CellVisitor, CursorInfo, CursorShape, FrameSource, ImageInfo,
-    ImageVisitor, PlacementLayer, PlacementSnapshot, PlacementVisitor,
+    CellAttrs, CellColor, CellView, CellVisitor, CursorInfo, CursorShape, DirtySnapshot,
+    FrameSource, ImageInfo, ImageVisitor, PlacementLayer, PlacementSnapshot, PlacementVisitor,
 };
 pub use frame_source::LibGhosttyFrameSource;
 pub use modes::TerminalModes;
