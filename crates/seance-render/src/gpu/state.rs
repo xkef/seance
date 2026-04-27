@@ -12,10 +12,18 @@ use crate::image::ImageRenderer;
 use crate::renderer::RenderInputs;
 use crate::text::{CellText, FrameInfo, GlyphAtlas};
 use seance_config::Theme;
-use seance_vt::{FrameSource, PlacementLayer};
+use seance_vt::{DirtySnapshot, FrameSource, PlacementLayer};
 
 const ATLAS_GRAYSCALE_FORMAT: TextureFormat = TextureFormat::R8Unorm;
 const ATLAS_COLOR_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
+
+/// Per-frame cell data the GPU layer consumes — bundled to keep
+/// `render_frame`'s arg count down.
+pub(crate) struct CellFrame<'a> {
+    pub bg_cells: &'a [[u8; 4]],
+    pub text_cells: &'a [CellText],
+    pub dirty: &'a DirtySnapshot,
+}
 
 pub(crate) struct GpuState {
     surface: Surface<'static>,
@@ -159,8 +167,7 @@ impl GpuState {
     pub(crate) fn render_frame(
         &mut self,
         frame_info: &FrameInfo,
-        bg_cells: &[[u8; 4]],
-        text_cells: &[CellText],
+        cells: CellFrame<'_>,
         atlas: &GlyphAtlas,
         inputs: &RenderInputs,
         theme: &Theme,
@@ -175,7 +182,12 @@ impl GpuState {
         };
 
         self.upload_uniforms(frame_info, inputs, theme);
-        self.upload_cell_data(bg_cells, text_cells);
+        self.upload_cell_data(
+            cells.bg_cells,
+            cells.text_cells,
+            cells.dirty,
+            frame_info.grid_cols,
+        );
         self.upload_atlas(atlas);
         self.ensure_atlas_bind_group();
 
@@ -222,26 +234,84 @@ impl GpuState {
             .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
     }
 
-    fn upload_cell_data(&mut self, bg_cells: &[[u8; 4]], text_cells: &[CellText]) {
-        if !bg_cells.is_empty() {
-            let data = bytemuck::cast_slice(bg_cells);
-            if self.bg_cells.upload(&self.device, &self.queue, data) {
-                self.bg_cells.bind_group =
-                    Some(self.device.create_bind_group(&BindGroupDescriptor {
-                        label: Some("bg_cells_bg"),
-                        layout: &self.pipelines.bg_cells_bgl,
-                        entries: &[BindGroupEntry {
-                            binding: 0,
-                            resource: self.bg_cells.buffer.as_ref().unwrap().as_entire_binding(),
-                        }],
-                    }));
+    fn upload_cell_data(
+        &mut self,
+        bg_cells: &[[u8; 4]],
+        text_cells: &[CellText],
+        dirty: &DirtySnapshot,
+        grid_cols: u16,
+    ) {
+        // `Clean` short-circuits both buffers — the GPU still holds last
+        // frame's data and the CPU rebuild is byte-identical, so the
+        // upload is wasted bandwidth. `text_instance_count` is intentionally
+        // left at its previous value (the count is unchanged on Clean).
+        if matches!(dirty, DirtySnapshot::Clean) {
+            return;
+        }
+
+        let bg_bytes: &[u8] = bytemuck::cast_slice(bg_cells);
+
+        // Partial upload is only safe when the existing buffer already
+        // covers the full slice. On first frame / resize the buffer is
+        // either absent or smaller, so degrade to Full and let
+        // `DynamicBuffer::upload` reallocate.
+        let bg_buffer_covers = self
+            .bg_cells
+            .buffer
+            .as_ref()
+            .is_some_and(|b| b.size() >= bg_bytes.len() as u64);
+
+        match dirty {
+            DirtySnapshot::Clean => unreachable!("handled above"),
+            DirtySnapshot::Full => {
+                self.upload_bg_full(bg_bytes);
+            }
+            DirtySnapshot::Partial(_) if !bg_buffer_covers => {
+                // Defensive: VT marks resize as Full so this path is
+                // unlikely in practice, but we handle it anyway.
+                self.upload_bg_full(bg_bytes);
+            }
+            DirtySnapshot::Partial(rows) => {
+                // `Terminal::dirty_snapshot` folds empty Partial -> Clean,
+                // so `rows` is non-empty here. Indices are sorted ascending,
+                // so first/last give a contiguous min..=max span.
+                let row_min = *rows.first().expect("non-empty Partial") as usize;
+                let row_max = *rows.last().expect("non-empty Partial") as usize;
+                let (offset, len) = bg_byte_range(row_min, row_max, grid_cols as usize);
+                let buffer = self
+                    .bg_cells
+                    .buffer
+                    .as_ref()
+                    .expect("bg_buffer_covers checked");
+                self.queue
+                    .write_buffer(buffer, offset, &bg_bytes[offset as usize..][..len]);
             }
         }
 
+        // text_cells is glyph-indexed (densely packed; a row → instance
+        // mapping isn't stable across frames), so the partial-by-row
+        // strategy doesn't apply. Re-upload the full buffer whenever the
+        // VT reported any change. Skipping on Clean is the dominant win.
         self.text_instance_count = text_cells.len() as u32;
         if !text_cells.is_empty() {
             self.text_instances
                 .upload(&self.device, &self.queue, bytemuck::cast_slice(text_cells));
+        }
+    }
+
+    fn upload_bg_full(&mut self, bg_bytes: &[u8]) {
+        if bg_bytes.is_empty() {
+            return;
+        }
+        if self.bg_cells.upload(&self.device, &self.queue, bg_bytes) {
+            self.bg_cells.bind_group = Some(self.device.create_bind_group(&BindGroupDescriptor {
+                label: Some("bg_cells_bg"),
+                layout: &self.pipelines.bg_cells_bgl,
+                entries: &[BindGroupEntry {
+                    binding: 0,
+                    resource: self.bg_cells.buffer.as_ref().unwrap().as_entire_binding(),
+                }],
+            }));
         }
     }
 
@@ -371,5 +441,39 @@ impl GpuState {
             PlacementLayer::AboveText,
             &self.uniform_bind_group,
         );
+    }
+}
+
+/// Translate an inclusive row range into a byte `(offset, len)` over a
+/// row-major `[u8; 4]`-per-cell buffer.
+fn bg_byte_range(row_min: usize, row_max: usize, grid_cols: usize) -> (u64, usize) {
+    debug_assert!(row_min <= row_max);
+    let stride = grid_cols * size_of::<[u8; 4]>();
+    let offset = (row_min * stride) as u64;
+    let len = (row_max - row_min + 1) * stride;
+    (offset, len)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bg_byte_range;
+
+    #[test]
+    fn bg_byte_range_single_row_zero() {
+        assert_eq!(bg_byte_range(0, 0, 80), (0, 80 * 4));
+    }
+
+    #[test]
+    fn bg_byte_range_single_row_n() {
+        let (offset, len) = bg_byte_range(7, 7, 80);
+        assert_eq!(offset, 7 * 80 * 4);
+        assert_eq!(len, 80 * 4);
+    }
+
+    #[test]
+    fn bg_byte_range_inclusive_span() {
+        let (offset, len) = bg_byte_range(5, 10, 80);
+        assert_eq!(offset, 5 * 80 * 4);
+        assert_eq!(len, 6 * 80 * 4); // rows 5..=10 inclusive
     }
 }
