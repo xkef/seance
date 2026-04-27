@@ -69,14 +69,14 @@ When picking up a sub-issue:
 
 Use Conventional Commits (<https://www.conventionalcommits.org/>) for every
 commit and PR title: `type(scope): summary`, with `type` drawn from `feat`,
-`fix`, `refactor`, `perf`, `docs`, `test`, `style`, `chore`, `build`, `ci`.
-Keep the subject line under 72 characters. Put the why (and any design
-narration that would otherwise leak into code comments) in the body.
+`fix`, `refactor`, `perf`, `docs`, `test`, `style`, `chore`, `build`, `ci`. Keep
+the subject line under 72 characters. Put the why (and any design narration that
+would otherwise leak into code comments) in the body.
 
 ## Pull requests
 
-PRs opened by Claude MUST follow the same format as commits. The PR title is
-the subject; the PR body is the commit body. Apply these rules to both.
+PRs opened by Claude MUST follow the same format as commits. The PR title is the
+subject; the PR body is the commit body. Apply these rules to both.
 
 ### Subject (PR title / commit subject)
 
@@ -89,7 +89,7 @@ the subject; the PR body is the commit body. Apply these rules to both.
 ### Body (PR body / commit body)
 
 - Wrap every line at 72 columns.
-- Explain *why*, not *what*. The diff already shows what changed.
+- Explain _why_, not _what_. The diff already shows what changed.
 - Separate the subject from the body with a blank line.
 - Footers (optional, last block): `Breaking-Change:`, `Refs: #<issue>`.
 
@@ -103,8 +103,8 @@ the subject; the PR body is the commit body. Apply these rules to both.
 - No HTML comments, no `<details>` collapsibles, no checkbox "test plan"
   templates unless the user explicitly asks for one.
 
-When using the GitHub MCP tools to open a PR, pass the title and body
-verbatim — do not append any auto-generated trailer.
+When using the GitHub MCP tools to open a PR, pass the title and body verbatim —
+do not append any auto-generated trailer.
 
 ## Branches
 
