@@ -4,8 +4,8 @@ use seance_config::Theme;
 use seance_vt::{FrameSource, GridPos};
 use winit::window::Window;
 
-use crate::gpu::GpuState;
 pub use crate::gpu::uniforms::CursorShape;
+use crate::gpu::{CellFrame, GpuState};
 use crate::text::backend::TextBackend;
 use crate::text::cosmic::CosmicTextBackend;
 use crate::text::{BuildFrameConfig, CellBuilder};
@@ -142,9 +142,11 @@ impl TerminalRenderer {
         };
         self.gpu.render_frame(
             fi,
-            self.cell_builder.bg_cells(),
-            self.cell_builder.text_cells(),
-            self.cell_builder.last_dirty(),
+            CellFrame {
+                bg_cells: self.cell_builder.bg_cells(),
+                text_cells: self.cell_builder.text_cells(),
+                dirty: self.cell_builder.last_dirty(),
+            },
             self.cell_builder.atlas(),
             inputs,
             &self.theme,

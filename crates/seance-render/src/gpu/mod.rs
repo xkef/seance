@@ -4,4 +4,4 @@ mod pipeline;
 mod state;
 pub(crate) mod uniforms;
 
-pub(crate) use state::GpuState;
+pub(crate) use state::{CellFrame, GpuState};

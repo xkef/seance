@@ -17,6 +17,14 @@ use seance_vt::{DirtySnapshot, FrameSource, PlacementLayer};
 const ATLAS_GRAYSCALE_FORMAT: TextureFormat = TextureFormat::R8Unorm;
 const ATLAS_COLOR_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 
+/// Per-frame cell data the GPU layer consumes — bundled to keep
+/// `render_frame`'s arg count down.
+pub(crate) struct CellFrame<'a> {
+    pub bg_cells: &'a [[u8; 4]],
+    pub text_cells: &'a [CellText],
+    pub dirty: &'a DirtySnapshot,
+}
+
 pub(crate) struct GpuState {
     surface: Surface<'static>,
     device: Device,
@@ -159,9 +167,7 @@ impl GpuState {
     pub(crate) fn render_frame(
         &mut self,
         frame_info: &FrameInfo,
-        bg_cells: &[[u8; 4]],
-        text_cells: &[CellText],
-        dirty: &DirtySnapshot,
+        cells: CellFrame<'_>,
         atlas: &GlyphAtlas,
         inputs: &RenderInputs,
         theme: &Theme,
@@ -176,7 +182,12 @@ impl GpuState {
         };
 
         self.upload_uniforms(frame_info, inputs, theme);
-        self.upload_cell_data(bg_cells, text_cells, dirty, frame_info.grid_cols);
+        self.upload_cell_data(
+            cells.bg_cells,
+            cells.text_cells,
+            cells.dirty,
+            frame_info.grid_cols,
+        );
         self.upload_atlas(atlas);
         self.ensure_atlas_bind_group();
 
