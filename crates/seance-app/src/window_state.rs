@@ -67,13 +67,12 @@ impl WindowState {
         self.request_redraw();
     }
 
-    /// Read pending PTY output. Returns `false` when the child has exited —
-    /// caller should tear the window down.
-    pub(crate) fn poll_pty(&mut self) -> bool {
-        if self.terminal.poll() {
-            self.content_dirty = true;
-        }
-        self.terminal.is_alive()
+    /// Feed PTY output into the VT and request a redraw. Called from the
+    /// `UserEvent::PtyData` handler; the read itself happens on the IO
+    /// thread spawned in `App::resumed`.
+    pub(crate) fn feed_pty(&mut self, data: &[u8]) {
+        self.terminal.feed(data);
+        self.mark_dirty();
     }
 
     /// Resize the surface and reflow the VT grid.

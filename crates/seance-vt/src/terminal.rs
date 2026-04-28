@@ -76,7 +76,9 @@ pub struct Terminal {
     /// per-row flags remain until the caller clears them.
     render_state: RenderState<'static>,
     response_buf: Rc<RefCell<Vec<u8>>>,
-    reader: Box<dyn Read + Send>,
+    /// `None` after [`Self::take_reader`]: the reader has been moved off
+    /// to a dedicated thread that does blocking PTY reads.
+    reader: Option<Box<dyn Read + Send>>,
     writer: RefCell<Box<dyn Write + Send>>,
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
@@ -137,22 +139,13 @@ impl Terminal {
         let reader = pair.master.try_clone_reader().ok()?;
         let writer = pair.master.take_writer().ok()?;
 
-        // Non-blocking so poll() never blocks the event loop.
-        #[cfg(unix)]
-        if let Some(fd) = pair.master.as_raw_fd() {
-            unsafe {
-                let flags = libc::fcntl(fd, libc::F_GETFL);
-                libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
-            }
-        }
-
         let render_state = RenderState::new().ok()?;
 
         Some(Self {
             vt,
             render_state,
             response_buf,
-            reader,
+            reader: Some(reader),
             writer: RefCell::new(writer),
             master: pair.master,
             child,
@@ -162,23 +155,28 @@ impl Terminal {
         })
     }
 
-    /// Read pending PTY output, feed the VT, flush device responses.
-    /// Returns true if new data arrived.
-    pub fn poll(&mut self) -> bool {
-        let mut buf = [0u8; READ_CHUNK];
-        let mut got_data = false;
-        while let Ok(n) = self.reader.read(&mut buf) {
-            if n == 0 {
-                break;
-            }
-            self.vt.vt_write(&buf[..n]);
-            got_data = true;
+    /// Move the PTY reader out of the terminal so a dedicated IO thread
+    /// can own the blocking `read()`. Returns `None` if a previous caller
+    /// already took it. After this, [`Self::feed`] is the only path that
+    /// drives PTY bytes into the VT.
+    pub fn take_reader(&mut self) -> Option<Box<dyn Read + Send>> {
+        self.reader.take()
+    }
+
+    /// Suggested chunk size for the IO thread reading PTY output.
+    pub const READ_CHUNK_SIZE: usize = READ_CHUNK;
+
+    /// Feed PTY output into the VT and flush any device responses the VT
+    /// produced (cursor reports, DA1, etc.) back to the shell. Replaces
+    /// the old `poll()` path; the read itself happens on the IO thread.
+    pub fn feed(&mut self, data: &[u8]) {
+        if !data.is_empty() {
+            self.vt.vt_write(data);
         }
         let responses = self.response_buf.take();
         if !responses.is_empty() {
             let _ = self.writer.borrow_mut().write_all(&responses);
         }
-        got_data
     }
 
     /// Seed the VT's cursor shape with a DECSCUSR sequence (steady
