@@ -10,6 +10,28 @@ build:
 run:
     tools/run.sh
 
+make-app:
+    tools/make-app.sh
+
+# Clean & rebuild
+clean:
+    cargo clean
+
+# Terminal-parented `cargo run`. May hit macOS focus quirks (see tools/run.sh).
+clean-run:
+    cargo clean
+    cargo run
+
+clean-run-app:
+    cargo clean
+    tools/run.sh
+
+# Skips vendor setup vs. clean-run-app; assumes setup has already been staged.
+clean-make-app-run:
+    cargo clean
+    tools/make-app.sh
+    open target/Seance.app
+
 # Format & lint
 fmt:
     cargo fmt --all
@@ -42,11 +64,17 @@ md-check:
 md-fmt:
     npx --yes prettier --write "**/*.md"
 
-# Vendored toolchain setup (re-run after cargo clean)
-setup:
+# Vendored toolchain setup (re-run after cargo clean or libghostty-vt bumps)
+setup-ghostty-src:
     tools/setup-ghostty-src.sh
+
+setup-themes:
     tools/setup-themes.sh
+
+setup-sysroot:
     tools/setup-sysroot.sh
+
+setup: setup-ghostty-src setup-themes setup-sysroot
 
 # Run every CI gate locally
 ci: fmt-check clippy test md-check
