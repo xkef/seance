@@ -87,6 +87,10 @@ jobs:
           experimental: true
       - name: Setup vendored ghostty-src
         run: tools/setup-ghostty-src.sh
+      - name: Setup vendored ghostty themes
+        run: tools/setup-themes.sh
+      - name: Setup macOS sysroot
+        run: tools/setup-sysroot.sh
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
