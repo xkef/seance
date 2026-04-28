@@ -183,10 +183,8 @@ fn fs_cell_bg(in: FullScreenOut) -> @location(0) vec4<f32> {
             let thickness = max(2.0, uniforms.cell_size.y * 0.12);
             draw = local.y >= (uniforms.cell_size.y - thickness);
         } else if uniforms.overlay_shape == 3u {
-            let thickness = max(2.0, uniforms.cell_size.x * 0.12);
-            let top = uniforms.baseline * 0.3;
-            let bottom = uniforms.baseline + (uniforms.cell_size.y - uniforms.baseline) * 0.85;
-            draw = local.x < thickness && local.y >= top && local.y < bottom;
+            let thickness = max(2.0, uniforms.cell_size.x * 0.1);
+            draw = local.x < thickness;
         }
 
         if draw {
