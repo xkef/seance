@@ -25,6 +25,8 @@
     "node_modules/**",
     "target/**",
     "vendor/**",
-    ".claude/**"
+    ".claude/**",
+    ".claude-notes/**",
+    ".git/**"
   ]
 }
