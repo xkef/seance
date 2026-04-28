@@ -43,17 +43,17 @@ clippy:
     cargo clippy --workspace --all-targets -- -D warnings
 
 # Tests
-test:
+test: install-tools
     cargo nextest run --workspace
 
-test-render:
+test-render: install-tools
     cargo nextest run -p seance-render-test
 
 # Phase A snapshot harness
-snap-review:
+snap-review: install-tools
     cargo insta review -p seance-render-test
 
-snap-bless:
+snap-bless: install-tools
     INSTA_UPDATE=always cargo nextest run -p seance-render-test
 
 # Markdown (CI gates **/*.md against both)
@@ -75,6 +75,11 @@ setup-sysroot:
     tools/setup-sysroot.sh
 
 setup: setup-ghostty-src setup-themes setup-sysroot
+
+# Cargo subcommands used by test / snap-review. Idempotent — skips if installed.
+install-tools:
+    @command -v cargo-nextest >/dev/null 2>&1 || cargo install --locked cargo-nextest
+    @command -v cargo-insta >/dev/null 2>&1 || cargo install --locked cargo-insta
 
 # Run every CI gate locally
 ci: fmt-check clippy test md-check
