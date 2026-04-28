@@ -25,15 +25,15 @@ use seance_render::{RenderInputs, RendererConfig, TerminalRenderer};
 use seance_vt::{CursorShape as VtCursorShape, FrameSource, LibGhosttyFrameSource, Terminal};
 
 use crate::UserEvent;
+use crate::io::spawn_pty_reader;
 use crate::keybinds::Keybinds;
 use crate::platform;
 use crate::watcher::ConfigWatcher;
 use crate::window_state::WindowState;
 
-const POLL_INTERVAL: Duration = Duration::from_millis(4);
-// Half-period of the cursor blink cycle; on + off = 1 s. The tick rides on
-// POLL_INTERVAL wakeups — once M2 #24 lands we should drive it from the
-// deadline scheduler instead.
+/// Half-period of the cursor blink cycle; on + off = 1 s. Drives the
+/// deadline scheduler — when blink is enabled, the next animation wake
+/// is `last_blink_edge + BLINK_HALF_PERIOD`.
 const BLINK_HALF_PERIOD: Duration = Duration::from_millis(500);
 
 pub(crate) struct App {
@@ -103,7 +103,9 @@ impl App {
         ws.renderer.render(&ws.render_inputs);
     }
 
-    fn tick_blink(&mut self) {
+    /// Advance the cursor blink state if we have crossed an edge. Called
+    /// from `about_to_wait` after the deadline-scheduled wake fires.
+    fn step_blink(&mut self) {
         let Some(ws) = self.window_state.as_mut() else {
             return;
         };
@@ -118,6 +120,24 @@ impl App {
             ws.blink_on = !ws.blink_on;
             ws.last_blink_edge = Instant::now();
             ws.mark_dirty();
+        }
+    }
+
+    /// Earliest instant at which any animation source needs the next
+    /// wake. `None` means the terminal is idle — `about_to_wait` will
+    /// drop into `ControlFlow::Wait` and the OS suspends us until either
+    /// a window event arrives or the IO thread signals via the proxy.
+    fn next_animation_deadline(&self) -> Option<Instant> {
+        let ws = self.window_state.as_ref()?;
+        // Occluded windows skip rendering anyway, so don't bother
+        // running the blink cycle while the window is hidden.
+        if ws.occluded {
+            return None;
+        }
+        if self.config.cursor.blink {
+            Some(ws.last_blink_edge + BLINK_HALF_PERIOD)
+        } else {
+            None
         }
     }
 }
@@ -176,6 +196,14 @@ impl ApplicationHandler<UserEvent> for App {
         // still override on subsequent frames.
         term.set_cursor_shape(vt_shape_from_config(self.config.cursor.style));
 
+        // Move the PTY reader onto a dedicated thread; from here the UI
+        // wakes only when the IO thread forwards `PtyData` / `PtyExited`
+        // through the proxy or when an animation deadline fires.
+        let reader = term
+            .take_reader()
+            .expect("Terminal::spawn must hand out the PTY reader");
+        spawn_pty_reader(reader, self.proxy.clone());
+
         let render_inputs = RenderInputs {
             cursor_shape: self.config.cursor.style.into(),
             ..RenderInputs::default()
@@ -193,10 +221,19 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::ConfigFileChanged => self.reload_config(),
             UserEvent::ThemeFileChanged(path) => self.on_theme_file_changed(&path),
+            UserEvent::PtyData(bytes) => {
+                if let Some(ws) = self.ws_mut() {
+                    ws.feed_pty(&bytes);
+                }
+            }
+            UserEvent::PtyExited => {
+                self.window_state = None;
+                event_loop.exit();
+            }
         }
     }
 
@@ -241,23 +278,25 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if let Some(ws) = self.ws_mut()
-            && !ws.poll_pty()
-        {
-            self.window_state = None;
-        }
         if self.window_state.is_none() {
             event_loop.exit();
             return;
         }
-        self.tick_blink();
+        self.step_blink();
         if let Some(ws) = self.window_state.as_ref()
             && ws.content_dirty
             && !ws.occluded
         {
             ws.request_redraw();
         }
-        event_loop.set_control_flow(ControlFlow::wait_duration(POLL_INTERVAL));
+        // Deadline-scheduled redraw: sleep until the next animation
+        // edge, or fully `Wait` when nothing is animating. PTY output
+        // wakes us out-of-band via `UserEvent::PtyData` from the reader
+        // thread, so an idle terminal really does park the event loop.
+        match self.next_animation_deadline() {
+            Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
+            None => event_loop.set_control_flow(ControlFlow::Wait),
+        }
     }
 }
 

@@ -6,7 +6,6 @@ license.workspace = true
 description = "VT emulator wrapper, PTY, and selection for seance"
 
 [dependencies]
-libc.workspace = true
 libghostty-vt.workspace = true
 log.workspace = true
 png = "0.18"

@@ -6,6 +6,7 @@ mod app;
 mod apply;
 mod command;
 mod events;
+mod io;
 mod keybinds;
 mod mouse;
 mod platform;
@@ -15,15 +16,23 @@ mod window_state;
 
 use app::App;
 
-/// Events forwarded from the config watcher into the winit event loop. Using
-/// `EventLoopProxy` keeps reloads single-threaded with rendering — no torn
-/// reads of `Config` mid-frame.
+/// Events forwarded from background threads into the winit event loop.
+/// Using `EventLoopProxy` keeps every off-thread signal — config reloads,
+/// PTY output, child exit — funnelled onto the single UI thread that owns
+/// the renderer and VT, so there are no torn reads of `Config` or races
+/// against frame state.
 #[derive(Debug, Clone)]
 pub enum UserEvent {
     /// `config.toml` at `$XDG_CONFIG_HOME/seance/` changed.
     ConfigFileChanged,
     /// A file under `$XDG_CONFIG_HOME/seance/themes/` changed.
     ThemeFileChanged(PathBuf),
+    /// A chunk of PTY output read by the reader thread. Drives the VT and
+    /// the redraw request — every wake from idle goes through here.
+    PtyData(Vec<u8>),
+    /// The PTY reader thread saw EOF or an unrecoverable error. The child
+    /// has gone; the UI tears down its window state and exits.
+    PtyExited,
 }
 
 fn main() {
