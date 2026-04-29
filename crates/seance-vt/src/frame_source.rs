@@ -34,13 +34,11 @@ impl FrameSource for LibGhosttyFrameSource<'_> {
     }
 
     fn cursor(&mut self) -> CursorInfo {
-        let mut render_state = match RenderState::new() {
-            Ok(state) => state,
-            Err(_) => return CursorInfo::default(),
+        let Ok(mut render_state) = RenderState::new() else {
+            return CursorInfo::default();
         };
-        let snapshot = match render_state.update(self.term.vt_mut()) {
-            Ok(snapshot) => snapshot,
-            Err(_) => return CursorInfo::default(),
+        let Ok(snapshot) = render_state.update(self.term.vt_mut()) else {
+            return CursorInfo::default();
         };
         let visible = snapshot.cursor_visible().unwrap_or(true);
         let pos = snapshot
@@ -224,9 +222,8 @@ fn walk_placements(
         let Some(image) = graphics.image(image_id) else {
             continue;
         };
-        let vpos = match p.viewport_pos(&image, vt) {
-            Ok(Some(vp)) => vp,
-            _ => continue,
+        let Ok(Some(vpos)) = p.viewport_pos(&image, vt) else {
+            continue;
         };
         let Ok(pxs) = p.pixel_size(&image, vt) else {
             continue;
@@ -299,9 +296,8 @@ fn walk_images(term: &Terminal, visitor: &mut dyn ImageVisitor) -> Option<()> {
         let Ok(format) = image.format() else { continue };
         let Ok(data) = image.data() else { continue };
 
-        let rgba = match expand_to_rgba(format, width, height, data, &mut scratch) {
-            Some(slice) => slice,
-            None => continue,
+        let Some(rgba) = expand_to_rgba(format, width, height, data, &mut scratch) else {
+            continue;
         };
         log::debug!(
             "walk_images uploading id={image_id} {width}x{height} format={format:?} bytes={}",

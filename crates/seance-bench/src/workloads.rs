@@ -42,15 +42,17 @@ fn static_ls() -> Workload {
 /// High-churn output — `cat /dev/urandom | hexdump` proxy.
 /// Every cell on every line changes; worst case for any per-row cache.
 fn random_hexdump() -> Workload {
+    use std::fmt::Write;
+
     let mut bytes = Vec::with_capacity(8192);
-    let mut state: u32 = 0x9E3779B9;
+    let mut state: u32 = 0x9E37_79B9;
     for row in 0..50 {
         let mut line = format!("{:08x}  ", row * 16);
         for _ in 0..16 {
             state ^= state << 13;
             state ^= state >> 17;
             state ^= state << 5;
-            line.push_str(&format!("{:02x} ", state as u8));
+            let _ = write!(line, "{:02x} ", state as u8);
         }
         line.push_str("\r\n");
         bytes.extend_from_slice(line.as_bytes());
@@ -109,7 +111,7 @@ mod tests {
     fn names_are_unique() {
         let all = Workload::all();
         let mut names: Vec<_> = all.iter().map(|w| w.name).collect();
-        names.sort();
+        names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), Workload::all().len());
     }

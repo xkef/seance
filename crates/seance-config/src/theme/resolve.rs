@@ -33,12 +33,12 @@ impl ThemeSpec {
     pub fn parse(raw: &str) -> Self {
         let s = raw.trim();
         if Path::new(s).is_absolute() {
-            return ThemeSpec::Path(PathBuf::from(s));
+            return Self::Path(PathBuf::from(s));
         }
         if let Some((a, b)) = split_light_dark(s) {
-            return ThemeSpec::LightDark { light: a, dark: b };
+            return Self::LightDark { light: a, dark: b };
         }
-        ThemeSpec::Named(s.to_string())
+        Self::Named(s.to_string())
     }
 }
 

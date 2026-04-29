@@ -45,10 +45,10 @@ pub enum OptionAsAlt {
 impl OptionAsAlt {
     fn to_libghostty(self) -> key::OptionAsAlt {
         match self {
-            OptionAsAlt::None => key::OptionAsAlt::False,
-            OptionAsAlt::Left => key::OptionAsAlt::Left,
-            OptionAsAlt::Right => key::OptionAsAlt::Right,
-            OptionAsAlt::Both => key::OptionAsAlt::True,
+            Self::None => key::OptionAsAlt::False,
+            Self::Left => key::OptionAsAlt::Left,
+            Self::Right => key::OptionAsAlt::Right,
+            Self::Both => key::OptionAsAlt::True,
         }
     }
 }
