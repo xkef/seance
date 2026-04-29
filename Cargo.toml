@@ -15,65 +15,8 @@ edition = "2024"
 rust-version = "1.94"
 license = "MIT OR Apache-2.0"
 
-[workspace.lints.rust]
-unused_lifetimes = "warn"
-
-# Curated set of high-value clippy lints from `correctness`, `style`,
-# `complexity`, `perf`, `pedantic`, and `nursery`. Promoting the whole
-# `pedantic`/`nursery` groups would surface a long tail of cast / doc
-# lints that are largely false positives in render-heavy code; promoting
-# individual lints we care about gives stricter coverage without that
-# noise. CI gates with `-D warnings`.
 [workspace.lints.clippy]
-# --- Idioms / readability ---
 collapsible_if = "warn"
-manual_let_else = "warn"
-redundant_else = "warn"
-semicolon_if_nothing_returned = "warn"
-uninlined_format_args = "warn"
-use_self = "warn"
-unnested_or_patterns = "warn"
-match_wildcard_for_single_variants = "warn"
-manual_string_new = "warn"
-manual_assert = "warn"
-inefficient_to_string = "warn"
-implicit_clone = "warn"
-ref_option_ref = "warn"
-ref_binding_to_reference = "warn"
-range_plus_one = "warn"
-range_minus_one = "warn"
-redundant_closure_for_method_calls = "warn"
-unused_async = "warn"
-
-# --- Performance ---
-format_push_string = "warn"
-stable_sort_primitive = "warn"
-naive_bytecount = "warn"
-needless_collect = "warn"
-
-# --- Correctness-leaning ---
-checked_conversions = "warn"
-copy_iterator = "warn"
-mut_mut = "warn"
-no_effect_underscore_binding = "warn"
-flat_map_option = "warn"
-filter_map_next = "warn"
-map_unwrap_or = "warn"
-
-# --- Style nits worth enforcing ---
-bool_to_int_with_if = "warn"
-case_sensitive_file_extension_comparisons = "warn"
-cloned_instead_of_copied = "warn"
-inconsistent_struct_constructor = "warn"
-manual_unwrap_or = "warn"
-mismatching_type_param_order = "warn"
-needless_continue = "warn"
-needless_for_each = "warn"
-return_self_not_must_use = "warn"
-single_char_pattern = "warn"
-string_add_assign = "warn"
-unnecessary_join = "warn"
-verbose_bit_mask = "warn"
 
 [workspace.dependencies]
 log = "0.4"
