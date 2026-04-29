@@ -2,34 +2,21 @@
 //!
 //! [`TextBackend::shape_cell`]: super::backend::TextBackend::shape_cell
 //!
-//! Today every non-empty cell is independently shaped: a fresh
-//! [`cosmic_text::Buffer`] is allocated and a `shape_until_scroll` pass
-//! runs every frame, regardless of whether the cell changed. On an idle
-//! 80×24 neovim screen that is ~1900 redundant shape passes per frame.
+//! Memoizes shape output keyed by `(font flags, text bytes)`:
 //!
-//! [`cosmic_text::Buffer`]: cosmic_text::Buffer
-//!
-//! This cache memoizes shape output keyed by `(font flags, text bytes)`:
-//!
-//! - 256 buckets, 8 slots per bucket. Bucket index = `hash & 0xff`.
+//! - 256 buckets × 8 slots per bucket. Bucket index = `hash & 0xff`.
 //! - Per-cache monotonic generation counter for LRU; on miss with a full
 //!   bucket the lowest-generation slot is evicted.
 //! - Total capacity is 2048 entries — comfortable for typical terminal
 //!   working sets (~300–400 unique cells × style flags).
 //! - Inline key storage of [`KEY_INLINE_BYTES`] bytes. Keys longer than
-//!   that bypass the cache and call the backend directly; this is rare
-//!   for terminal cells (single grapheme) but happens for unusually
-//!   long ZWJ emoji sequences.
+//!   that bypass the cache and call the backend directly.
 //!
-//! ## Why fg/bg are NOT in the key
-//!
-//! Issue #21 spec'd a key including fg/bg colors. We deliberately omit
-//! them: color is applied **after** shaping in
-//! [`super::cell_builder`] (the `req.fg` field is baked into
-//! `CellText.color` once `shape_cell` returns), so shaping itself is
-//! color-agnostic. Including fg/bg would multiply key cardinality by
-//! ~256³ for truecolor content with no correctness benefit, collapsing
-//! hit rate on workloads like the bench's `ansi-rainbow` pass.
+//! The key omits fg/bg because color is applied post-shape in
+//! [`super::cell_builder`]: `CellText.color` is baked from `req.fg`
+//! after `shape_cell` returns. Shaping is color-agnostic; including
+//! colors would multiply key cardinality by ~256³ for truecolor content
+//! with no correctness benefit.
 
 use std::hash::Hasher;
 
@@ -183,6 +170,7 @@ impl ShapeCache {
         self.stats = CacheStats::default();
     }
 
+    #[cfg(test)]
     pub fn stats(&self) -> &CacheStats {
         &self.stats
     }

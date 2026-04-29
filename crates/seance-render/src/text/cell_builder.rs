@@ -92,9 +92,6 @@ pub struct CellBuilder {
     /// Stable map from backend-issued `GlyphId` to its atlas slot.
     /// Survives across frames; cleared by [`Self::reset_glyphs`].
     glyph_slots: GlyphSlots,
-    /// Memoized `shape_cell` output keyed by `(font flags, text)`.
-    /// Cleared alongside `glyph_slots` because both are tied to the
-    /// active font size / scale.
     shape_cache: ShapeCache,
     bg_cells: Vec<[u8; 4]>,
     text_cells: Vec<CellText>,
@@ -186,10 +183,10 @@ impl CellBuilder {
     }
 
     /// Drop all atlas-cached glyphs and shape cache entries. Call on
-    /// font size / scale change. A future font-family-change API
-    /// must also call this — the cache key omits the family because
-    /// it is implicit backend state, so swapping families without a
-    /// reset would return stale glyph IDs.
+    /// any change that invalidates shape output: font size, scale, or
+    /// font family. Family is implicit backend state and not in the
+    /// cache key, so swapping families without resetting returns
+    /// stale glyph IDs.
     pub fn reset_glyphs(&mut self) {
         self.atlas.reset();
         self.glyph_slots.clear();
@@ -465,9 +462,6 @@ mod tests {
 
     struct StubBackend {
         metrics: CellMetrics,
-        /// Tracks how many times `shape_cell` was invoked. The cache
-        /// integration tests assert this hits zero on a warm second
-        /// frame — that's the whole point of the cache.
         shape_calls: u32,
     }
 
@@ -796,10 +790,9 @@ mod tests {
 
     #[test]
     fn shape_cache_unaffected_by_color_changes() {
-        // The fg/bg-omission decision means the same character shaped
-        // under different theme colors must still hit the cache. This
-        // is the test that fails if a future refactor accidentally
-        // bakes color into the key.
+        // Same text under different theme colors must still hit the
+        // cache — the key omits color. Guards against a refactor
+        // that bakes color into the key.
         let theme = Theme::blank();
         let plain = CellAttrs::default();
         let warm = [
@@ -851,12 +844,10 @@ mod tests {
 
     #[test]
     fn shape_cache_warm_hit_rate_above_95_percent() {
-        // Synthesize a small but realistic page: 80×24 of repeating
-        // ASCII printable characters with a ~10% bold mix. After one
-        // warmup frame the working set is bounded by `unique chars × 2
-        // styles` ≈ 200 keys; at 1920 cells per frame, hit rate is
-        // ~99% on frame 2. Asserting ≥95% gives margin for future
-        // changes.
+        // 80×24 of repeating ASCII printable chars with ~10% bold.
+        // Working set ≈ 94 chars × 2 styles ≈ 200 keys; warm hit rate
+        // is near 100%. The 95% threshold leaves margin for any
+        // future change to the key shape.
         let theme = Theme::blank();
         let bold = CellAttrs {
             bold: true,
