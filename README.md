@@ -43,22 +43,28 @@ No hand-rolled VT parser. No bespoke graphics abstraction.
 - winit key/mouse encoding through `libghostty-vt`'s key encoder; SGR 1006 mouse
   reporting.
 - Kitty graphics protocol transmission (recently added).
-- 250 Hz PTY poll, redraw only when content is dirty, AutoVsync presentation.
+- Deadline-scheduled redraw — idle terminal draws nothing; PTY wakes are
+  out-of-band via a dedicated reader thread + `EventLoopProxy`. AutoVsync
+  presentation.
 - macOS IOSurface + `presentsWithTransaction` for clean live-resize.
 
 ### What's planned
 
-Tracked as GitHub epics M1–M7:
+Tracked as GitHub epics M1–M11:
 
-| Epic   | Theme                          | Highlights                                                                                  |
-| ------ | ------------------------------ | ------------------------------------------------------------------------------------------- |
-| **M1** | Config & themes                | TOML config, hot-reload, theme files, user keybind table                                    |
-| **M2** | Rendering performance          | Shape cache, row-dirty flags, DEC 2026 sync output, deadline-driven redraw, atlas batching  |
-| **M3** | Visual fidelity                | Procedural box-drawing/Powerline glyphs, WCAG min-contrast, OSC 52 clipboard                |
-| **M4** | Z-layer architecture           | `RenderLayer` enum, per-layer vertex buffers, offscreen front/back textures for post-passes |
-| **M5** | Image protocols                | Kitty placements, virtual placeholders (U+10EEEE), animated frames                          |
-| **M6** | **Multiplexing** (the big one) | `seance-mux` crate, tabs, splits, floating modals, IME preedit                              |
-| **M7** | Custom shaders                 | Shadertoy-compatible post-pass with ping-pong textures                                      |
+| Epic    | Theme                          | Highlights                                                                                  |
+| ------- | ------------------------------ | ------------------------------------------------------------------------------------------- |
+| **M1**  | Config & themes                | TOML config, hot-reload, theme files, user keybind table                                    |
+| **M2**  | Rendering performance          | Shape cache, row-dirty flags, DEC 2026 sync output, deadline redraw, IO thread              |
+| **M3**  | Visual fidelity                | Procedural box-drawing/Powerline glyphs, WCAG min-contrast, OSC 52 clipboard                |
+| **M4**  | Z-layer architecture           | `RenderLayer` enum, per-layer vertex buffers, offscreen front/back textures for post-passes |
+| **M5**  | Image protocols                | Kitty placements, virtual placeholders (U+10EEEE), animated frames, iTerm2                  |
+| **M6**  | **Multiplexing** (the big one) | `seance-mux` crate, tabs, splits, floating modals, IME preedit                              |
+| **M7**  | Custom shaders                 | Shadertoy-compatible post-pass with ping-pong textures                                      |
+| **M8**  | Lua scripting                  | Plugin host, widget system, agent-callable extensions                                       |
+| **M9**  | Release pipeline               | Distribution via Homebrew, AUR, apt; signed macOS bundles                                   |
+| **M10** | Agent Plane                    | In-PTY control, UI ownership coordination, agent permission model                           |
+| **M11** | Test harness                   | Layered LLM-readable harness (L1 logic, L4 frame snapshots, L5 GPU, …)                      |
 
 The `seance-mux` crate (M6) is the one that delivers on the project's name. It
 will be a `Domain → Window → Tab → SplitTree → Pane` tree that walks itself into
