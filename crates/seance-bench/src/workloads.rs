@@ -82,7 +82,7 @@ fn ansi_rainbow() -> Workload {
     for row in 0..30 {
         for col in 0..80 {
             let fg = 31 + ((row + col) % 7) as u8;
-            bytes.extend_from_slice(format!("\x1b[{}m#", fg).as_bytes());
+            bytes.extend_from_slice(format!("\x1b[{fg}m#").as_bytes());
         }
         bytes.extend_from_slice(b"\x1b[0m\r\n");
     }

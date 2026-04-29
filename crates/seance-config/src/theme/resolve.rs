@@ -69,11 +69,11 @@ pub enum LoadError {
 impl std::fmt::Display for LoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LoadError::NotFound(name) => {
+            Self::NotFound(name) => {
                 write!(f, "theme '{name}' not found in user dir or bundled themes")
             }
-            LoadError::Io(p, e) => write!(f, "reading theme file {}: {e}", p.display()),
-            LoadError::Parse(src, e) => write!(f, "parsing theme {src}: {e}"),
+            Self::Io(p, e) => write!(f, "reading theme file {}: {e}", p.display()),
+            Self::Parse(src, e) => write!(f, "parsing theme {src}: {e}"),
         }
     }
 }
@@ -85,13 +85,10 @@ impl std::error::Error for LoadError {}
 /// bundled default so the terminal still launches.
 pub fn load(spec: Option<&str>) -> Theme {
     let spec = ThemeSpec::parse(spec.unwrap_or(DEFAULT_THEME_NAME));
-    match try_load(&spec) {
-        Ok(t) => t,
-        Err(err) => {
-            log::warn!("theme load failed ({err}); falling back to {DEFAULT_THEME_NAME}");
-            fallback_bundled(DEFAULT_THEME_NAME)
-        }
-    }
+    try_load(&spec).unwrap_or_else(|err| {
+        log::warn!("theme load failed ({err}); falling back to {DEFAULT_THEME_NAME}");
+        fallback_bundled(DEFAULT_THEME_NAME)
+    })
 }
 
 /// Lower-level entrypoint that surfaces errors instead of logging. Useful
@@ -127,19 +124,18 @@ fn load_path(path: &Path) -> Result<Theme, LoadError> {
 }
 
 fn fallback_bundled(name: &str) -> Theme {
-    match bundled::get(name).and_then(|t| parse_source(t).ok()) {
-        Some(t) => t,
-        // If even the default bundled theme can't be parsed, the vendor dir
-        // is broken. We still return *something* so the app starts and the
-        // user sees a terminal (just with xterm colors).
-        None => {
+    // If even the default bundled theme can't be parsed, the vendor dir
+    // is broken. We still return *something* so the app starts and the
+    // user sees a terminal (just with xterm colors).
+    bundled::get(name)
+        .and_then(|t| parse_source(t).ok())
+        .unwrap_or_else(|| {
             log::error!(
                 "default bundled theme '{name}' missing or unparseable — \
                  run tools/setup-themes.sh"
             );
             Theme::blank()
-        }
-    }
+        })
 }
 
 #[cfg(test)]

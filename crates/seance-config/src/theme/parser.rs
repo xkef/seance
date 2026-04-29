@@ -32,7 +32,7 @@ pub enum LineError {
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParseError::Line { line, kind } => write!(f, "line {line}: {kind}"),
+            Self::Line { line, kind } => write!(f, "line {line}: {kind}"),
         }
     }
 }
@@ -40,13 +40,13 @@ impl std::fmt::Display for ParseError {
 impl std::fmt::Display for LineError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LineError::MissingEquals => write!(f, "missing '=' separator"),
-            LineError::EmptyKey => write!(f, "empty key"),
-            LineError::PaletteIndex(s) => write!(f, "palette index '{s}' is not 0..=255"),
-            LineError::PaletteNoEquals => {
+            Self::MissingEquals => write!(f, "missing '=' separator"),
+            Self::EmptyKey => write!(f, "empty key"),
+            Self::PaletteIndex(s) => write!(f, "palette index '{s}' is not 0..=255"),
+            Self::PaletteNoEquals => {
                 write!(f, "palette value missing '=' (expected `N=#RRGGBB`)")
             }
-            LineError::BadColor(s) => write!(f, "could not parse color '{s}'"),
+            Self::BadColor(s) => write!(f, "could not parse color '{s}'"),
         }
     }
 }
@@ -66,15 +66,13 @@ pub fn parse_source(text: &str) -> Result<Theme, ParseError> {
         if line.is_empty() {
             continue;
         }
-        let (key, value) = match line.split_once('=') {
-            Some((k, v)) => (k.trim(), v.trim()),
-            None => {
-                return Err(ParseError::Line {
-                    line: line_no,
-                    kind: LineError::MissingEquals,
-                });
-            }
+        let Some((key, value)) = line.split_once('=') else {
+            return Err(ParseError::Line {
+                line: line_no,
+                kind: LineError::MissingEquals,
+            });
         };
+        let (key, value) = (key.trim(), value.trim());
         if key.is_empty() {
             return Err(ParseError::Line {
                 line: line_no,

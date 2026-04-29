@@ -176,13 +176,10 @@ impl InputHandler {
             #[cfg(not(target_os = "macos"))]
             let all_mods: Option<&str> = None;
             log::trace!(
-                "encode_key: code={:?} text={:?} logical={:?} all_mods={:?} mods={:?} -> {:02x?}",
-                code,
+                "encode_key: code={code:?} text={:?} logical={logical:?} all_mods={all_mods:?} \
+                 mods={:?} -> {buf:02x?}",
                 event.text.as_deref(),
-                logical,
-                all_mods,
                 key_event.mods(),
-                buf,
             );
         }
 

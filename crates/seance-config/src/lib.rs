@@ -35,8 +35,8 @@ pub enum ConfigError {
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ConfigError::Io(p, e) => write!(f, "reading {}: {e}", p.display()),
-            ConfigError::Parse(p, e) => write!(f, "parsing {}: {e}", p.display()),
+            Self::Io(p, e) => write!(f, "reading {}: {e}", p.display()),
+            Self::Parse(p, e) => write!(f, "parsing {}: {e}", p.display()),
         }
     }
 }
@@ -61,13 +61,11 @@ pub fn config_file_path() -> Option<PathBuf> {
 
 /// Load the config. Missing file or parse error yields defaults.
 pub fn load() -> Config {
-    match config_file_path() {
-        Some(path) => load_from(&path),
-        None => {
-            log::debug!("no XDG_CONFIG_HOME or HOME set; using compile-time config defaults");
-            Config::default()
-        }
-    }
+    let Some(path) = config_file_path() else {
+        log::debug!("no XDG_CONFIG_HOME or HOME set; using compile-time config defaults");
+        return Config::default();
+    };
+    load_from(&path)
 }
 
 /// Load from an explicit path. Logs and returns defaults on any failure.

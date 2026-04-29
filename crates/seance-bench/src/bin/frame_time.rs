@@ -86,7 +86,7 @@ fn print_row(workload: &str, phase: &str, s: &Summary) {
 fn fmt(d: Duration) -> String {
     let ns = d.as_nanos();
     if ns < 10_000 {
-        format!("{}ns", ns)
+        format!("{ns}ns")
     } else if ns < 10_000_000 {
         format!("{:.1}µs", ns as f64 / 1_000.0)
     } else {

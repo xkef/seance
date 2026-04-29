@@ -15,8 +15,15 @@ edition = "2024"
 rust-version = "1.94"
 license = "MIT OR Apache-2.0"
 
+[workspace.lints.rust]
+unused_lifetimes = "warn"
+
 [workspace.lints.clippy]
 collapsible_if = "warn"
+manual_let_else = "warn"
+redundant_else = "warn"
+semicolon_if_nothing_returned = "warn"
+uninlined_format_args = "warn"
 
 [workspace.dependencies]
 log = "0.4"

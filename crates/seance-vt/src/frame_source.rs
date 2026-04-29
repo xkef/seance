@@ -262,7 +262,7 @@ fn walk_placements(
         emitted += 1;
     }
     if emitted > 0 {
-        log::debug!("walk_placements layer={:?} emitted={}", layer, emitted);
+        log::debug!("walk_placements layer={layer:?} emitted={emitted}");
     }
     Some(())
 }
@@ -304,11 +304,7 @@ fn walk_images(term: &Terminal, visitor: &mut dyn ImageVisitor) -> Option<()> {
             None => continue,
         };
         log::debug!(
-            "walk_images uploading id={} {}x{} format={:?} bytes={}",
-            image_id,
-            width,
-            height,
-            format,
+            "walk_images uploading id={image_id} {width}x{height} format={format:?} bytes={}",
             rgba.len()
         );
         visitor.image(&ImageInfo {
@@ -453,8 +449,7 @@ fn walk_virtual_placements(
         return Some(());
     }
     log::debug!(
-        "walk_virtual_placements layer={:?} virtual_infos={}",
-        layer,
+        "walk_virtual_placements layer={layer:?} virtual_infos={}",
         infos.len()
     );
 
@@ -502,11 +497,8 @@ fn walk_virtual_placements(
     }
     if placeholder_cells > 0 {
         log::debug!(
-            "walk_virtual_placements layer={:?} placeholder_cells={} cell_px={}x{}",
-            layer,
-            placeholder_cells,
-            cell_w,
-            cell_h
+            "walk_virtual_placements layer={layer:?} placeholder_cells={placeholder_cells} \
+             cell_px={cell_w}x{cell_h}"
         );
     }
     Some(())
