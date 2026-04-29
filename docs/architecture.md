@@ -189,6 +189,18 @@ Deadline-scheduled: one `Timer` at `min(next_due)` across all animation sources
 custom-shader animation. Idle terminal = 0 fps. Modelled on WezTerm's
 `has_animation: RefCell<Option<Instant>>` pattern.
 
+### Threading model
+
+VT parsing and PTY I/O move off the winit thread under [M2][m2]. Today a
+dedicated `seance-pty-reader` thread does blocking reads and forwards bytes to
+the UI via `EventLoopProxy::send_event(UserEvent::PtyData(_))`; the parse still
+runs on the UI thread inside `App::user_event`. The v1 target adopts Alacritty's
+two-thread shape — one IO thread owns VT + PTY behind
+`Arc<parking_lot::FairMutex<VtState>>`, UI snapshots cells under the lock and
+rebuilds outside it (Ghostty's `Critical` pattern). The full design, including
+mailbox protocol, lock budget, DEC 2026 watchdog, shutdown ordering, and the
+renderer-thread revisit metric, lives in [`docs/threading.md`](./threading.md).
+
 ---
 
 ## Multiplexing model [PLANNED: [M6][m6]]
