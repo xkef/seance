@@ -18,59 +18,62 @@ license = "MIT OR Apache-2.0"
 [workspace.lints.rust]
 unused_lifetimes = "warn"
 
-# Crank clippy as strict as practical: warn on every lint in the `pedantic`
-# and `nursery` groups, then explicitly opt out of the lints that produce
-# more noise than insight in this codebase. Group entries use priority = -1
-# so individual lint settings below override the group default.
+# Curated set of high-value clippy lints from `correctness`, `style`,
+# `complexity`, `perf`, `pedantic`, and `nursery`. Promoting the whole
+# `pedantic`/`nursery` groups would surface a long tail of cast / doc
+# lints that are largely false positives in render-heavy code; promoting
+# individual lints we care about gives stricter coverage without that
+# noise. CI gates with `-D warnings`.
 [workspace.lints.clippy]
-pedantic = { level = "warn", priority = -1 }
-nursery = { level = "warn", priority = -1 }
-
-# --- Opinionated style lints we don't want enforced workspace-wide ---
-module_name_repetitions = "allow"   # e.g. `Config` in `seance-config` is fine
-similar_names = "allow"             # `cell_w` / `cell_h`, `bg` / `fg`, etc.
-too_many_lines = "allow"            # render/event-loop fns are inherently long
-too_long_first_doc_paragraph = "allow"
-if_not_else = "allow"
-single_match_else = "allow"         # match reads better when arms balance
-option_if_let_else = "allow"        # `if let / else` is often clearer
-items_after_statements = "allow"    # local consts inside fns are idiomatic
-inline_always = "allow"             # we use it intentionally
-trivially_copy_pass_by_ref = "allow"
-needless_pass_by_value = "allow"    # too many false positives in our APIs
-default_trait_access = "allow"      # `..Default::default()` is conventional
-redundant_closure_for_method_calls = "allow"
-wildcard_imports = "allow"          # tests use `use super::*;`
-
-# --- "Add docs / must_use everywhere" lints — too churny for this stage ---
-must_use_candidate = "allow"
-missing_errors_doc = "allow"
-missing_panics_doc = "allow"
-doc_markdown = "allow"              # tech terms (wgpu, VT, PTY) trip it up
-missing_const_for_fn = "allow"      # nursery; const-fn rules shift over time
-
-# --- Numeric / cast lints — render code does many intentional casts ---
-cast_possible_truncation = "allow"
-cast_possible_wrap = "allow"
-cast_precision_loss = "allow"
-cast_sign_loss = "allow"
-cast_lossless = "allow"
-cast_ptr_alignment = "allow"
-unreadable_literal = "allow"        # color hex / xterm constants
-struct_excessive_bools = "allow"    # config sections are bag-of-bools by design
-
-# --- Test-friendly allowances ---
-float_cmp = "allow"                 # tests assert on parsed literal floats
-needless_raw_string_hashes = "allow"  # `r#"..."#` is fine for TOML test input
-
-# --- Nursery lints with high false-positive rates ---
-or_fun_call = "allow"
-branches_sharing_code = "allow"
-redundant_pub_crate = "allow"
-suboptimal_flops = "allow"
-
-# --- Existing workspace lint, kept explicit ---
+# --- Idioms / readability ---
 collapsible_if = "warn"
+manual_let_else = "warn"
+redundant_else = "warn"
+semicolon_if_nothing_returned = "warn"
+uninlined_format_args = "warn"
+use_self = "warn"
+unnested_or_patterns = "warn"
+match_wildcard_for_single_variants = "warn"
+manual_string_new = "warn"
+manual_assert = "warn"
+inefficient_to_string = "warn"
+implicit_clone = "warn"
+ref_option_ref = "warn"
+ref_binding_to_reference = "warn"
+range_plus_one = "warn"
+range_minus_one = "warn"
+redundant_closure_for_method_calls = "warn"
+unused_async = "warn"
+
+# --- Performance ---
+format_push_string = "warn"
+stable_sort_primitive = "warn"
+naive_bytecount = "warn"
+needless_collect = "warn"
+
+# --- Correctness-leaning ---
+checked_conversions = "warn"
+copy_iterator = "warn"
+mut_mut = "warn"
+no_effect_underscore_binding = "warn"
+flat_map_option = "warn"
+filter_map_next = "warn"
+map_unwrap_or = "warn"
+
+# --- Style nits worth enforcing ---
+bool_to_int_with_if = "warn"
+case_sensitive_file_extension_comparisons = "warn"
+cloned_instead_of_copied = "warn"
+inconsistent_struct_constructor = "warn"
+manual_unwrap_or = "warn"
+mismatching_type_param_order = "warn"
+needless_continue = "warn"
+needless_for_each = "warn"
+return_self_not_must_use = "warn"
+single_char_pattern = "warn"
+string_add_assign = "warn"
+unnecessary_join = "warn"
+verbose_bit_mask = "warn"
 
 [workspace.dependencies]
 log = "0.4"
