@@ -15,6 +15,7 @@ use seance_vt::{CellColor, CellView, CellVisitor, DirtySnapshot, FrameSource};
 
 use super::atlas::{AtlasEntry, GlyphAtlas};
 use super::backend::{FontAttrs, GlyphFormat, GlyphId, ShapedGlyph, TextBackend};
+use super::shape_cache::ShapeCache;
 
 /// Resolve a VT-reported color into concrete RGB.
 /// `None` means "use the theme default" (caller decides fg vs bg).
@@ -91,6 +92,10 @@ pub struct CellBuilder {
     /// Stable map from backend-issued `GlyphId` to its atlas slot.
     /// Survives across frames; cleared by [`Self::reset_glyphs`].
     glyph_slots: GlyphSlots,
+    /// Memoized `shape_cell` output keyed by `(font flags, text)`.
+    /// Cleared alongside `glyph_slots` because both are tied to the
+    /// active font size / scale.
+    shape_cache: ShapeCache,
     bg_cells: Vec<[u8; 4]>,
     text_cells: Vec<CellText>,
     requests: Vec<CellRequest>,
@@ -104,6 +109,7 @@ impl CellBuilder {
         Self {
             atlas: GlyphAtlas::new(),
             glyph_slots: HashMap::with_hasher(FxBuildHasher),
+            shape_cache: ShapeCache::new(),
             bg_cells: Vec::new(),
             text_cells: Vec::new(),
             requests: Vec::new(),
@@ -156,6 +162,7 @@ impl CellBuilder {
             backend,
             &mut self.atlas,
             &mut self.glyph_slots,
+            &mut self.shape_cache,
             &mut self.shape_scratch,
             &mut self.text_cells,
         );
@@ -178,10 +185,15 @@ impl CellBuilder {
         });
     }
 
-    /// Drop all atlas-cached glyphs. Call on font size / scale change.
+    /// Drop all atlas-cached glyphs and shape cache entries. Call on
+    /// font size / scale change. A future font-family-change API
+    /// must also call this — the cache key omits the family because
+    /// it is implicit backend state, so swapping families without a
+    /// reset would return stale glyph IDs.
     pub fn reset_glyphs(&mut self) {
         self.atlas.reset();
         self.glyph_slots.clear();
+        self.shape_cache.clear();
     }
 
     pub fn atlas(&self) -> &GlyphAtlas {
@@ -202,6 +214,11 @@ impl CellBuilder {
 
     pub fn last_dirty(&self) -> &DirtySnapshot {
         &self.last_dirty
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shape_cache_stats(&self) -> super::shape_cache::CacheStats {
+        *self.shape_cache.stats()
     }
 }
 
@@ -261,18 +278,25 @@ fn walk_grid(
     source.visit_cells(&mut visitor);
 }
 
-/// Text-aware, VT-free pass: shape, cache glyphs, emit instance records.
+/// Text-aware, VT-free pass: shape (with cache), cache glyphs, emit
+/// instance records.
 fn shape_and_pack(
     requests: &[CellRequest],
     backend: &mut dyn TextBackend,
     atlas: &mut GlyphAtlas,
     glyph_slots: &mut GlyphSlots,
+    shape_cache: &mut ShapeCache,
     shape_scratch: &mut Vec<ShapedGlyph>,
     out: &mut Vec<CellText>,
 ) {
     for req in requests {
-        shape_scratch.clear();
-        backend.shape_cell(&req.text, req.font_attrs, shape_scratch);
+        shape_with_cache(
+            shape_cache,
+            backend,
+            &req.text,
+            req.font_attrs,
+            shape_scratch,
+        );
         for glyph in &*shape_scratch {
             let Some(entry) = ensure_glyph_slot(glyph_slots, atlas, backend, glyph.id) else {
                 continue;
@@ -287,6 +311,24 @@ fn shape_and_pack(
             });
         }
     }
+}
+
+/// Run `text` through the shape cache, falling through to `backend`
+/// on miss and inserting the result. Always leaves `scratch` holding
+/// the shaped glyphs for the caller.
+fn shape_with_cache(
+    cache: &mut ShapeCache,
+    backend: &mut dyn TextBackend,
+    text: &str,
+    attrs: FontAttrs,
+    scratch: &mut Vec<ShapedGlyph>,
+) {
+    scratch.clear();
+    if cache.lookup_into(text, attrs, scratch) {
+        return;
+    }
+    backend.shape_cell(text, attrs, scratch);
+    cache.insert(text, attrs, scratch);
 }
 
 fn ensure_glyph_slot(
@@ -423,6 +465,10 @@ mod tests {
 
     struct StubBackend {
         metrics: CellMetrics,
+        /// Tracks how many times `shape_cell` was invoked. The cache
+        /// integration tests assert this hits zero on a warm second
+        /// frame — that's the whole point of the cache.
+        shape_calls: u32,
     }
 
     impl StubBackend {
@@ -433,6 +479,7 @@ mod tests {
                     cell_height: 20.0,
                     baseline: 16.0,
                 },
+                shape_calls: 0,
             }
         }
     }
@@ -444,7 +491,16 @@ mod tests {
         fn set_font_size(&mut self, _points: f32) {}
         fn set_scale(&mut self, _scale: f64) {}
         fn set_adjust_cell_height(&mut self, _value: Option<&str>) {}
-        fn shape_cell(&mut self, _text: &str, _attrs: FontAttrs, _out: &mut Vec<ShapedGlyph>) {}
+        fn shape_cell(&mut self, text: &str, _attrs: FontAttrs, out: &mut Vec<ShapedGlyph>) {
+            self.shape_calls += 1;
+            // Deterministic single-glyph result keyed off the first
+            // codepoint so cache round-trips are observable.
+            if let Some(c) = text.chars().next() {
+                out.push(ShapedGlyph {
+                    id: GlyphId(u64::from(u32::from(c))),
+                });
+            }
+        }
         fn rasterize(&mut self, _glyph: GlyphId) -> Option<RasterizedGlyph> {
             None
         }
@@ -683,5 +739,163 @@ mod tests {
         let g = geometry(&mut source, 10.0, 20.0, 110, 110, [50, 40]);
         assert_eq!(g.grid_padding[0], 10.0);
         assert_eq!(g.grid_padding[1], 10.0);
+    }
+
+    fn ascii_cells_3() -> [(&'static str, CellColor, CellColor, CellAttrs); 3] {
+        let plain = CellAttrs::default();
+        [
+            ("A", CellColor::Default, CellColor::Default, plain),
+            ("B", CellColor::Default, CellColor::Default, plain),
+            ("C", CellColor::Default, CellColor::Default, plain),
+        ]
+    }
+
+    #[test]
+    fn shape_cache_skips_backend_on_warm_second_frame() {
+        let theme = Theme::blank();
+        let cells = ascii_cells_3();
+        let mut source = FakeFrame::new(3, 1, &cells);
+        let mut backend = StubBackend::new();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        let warmup_calls = backend.shape_calls;
+        assert_eq!(warmup_calls, 3, "frame 1 must shape every non-empty cell");
+        assert_eq!(builder.shape_cache_stats().misses, 3);
+        assert_eq!(builder.shape_cache_stats().hits, 0);
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        assert_eq!(
+            backend.shape_calls, warmup_calls,
+            "frame 2 must hit the cache for every cell — no new backend calls"
+        );
+        assert_eq!(builder.shape_cache_stats().hits, 3);
+    }
+
+    #[test]
+    fn shape_cache_repopulates_after_reset_glyphs() {
+        let theme = Theme::blank();
+        let cells = ascii_cells_3();
+        let mut source = FakeFrame::new(3, 1, &cells);
+        let mut backend = StubBackend::new();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        assert_eq!(backend.shape_calls, 3);
+
+        builder.reset_glyphs();
+        assert_eq!(builder.shape_cache_stats().hits, 0);
+        assert_eq!(builder.shape_cache_stats().misses, 0);
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        assert_eq!(
+            backend.shape_calls, 6,
+            "after reset_glyphs the cache must be cold again"
+        );
+    }
+
+    #[test]
+    fn shape_cache_unaffected_by_color_changes() {
+        // The fg/bg-omission decision means the same character shaped
+        // under different theme colors must still hit the cache. This
+        // is the test that fails if a future refactor accidentally
+        // bakes color into the key.
+        let theme = Theme::blank();
+        let plain = CellAttrs::default();
+        let warm = [
+            ("X", CellColor::Rgb(255, 0, 0), CellColor::Default, plain),
+            ("X", CellColor::Rgb(0, 255, 0), CellColor::Default, plain),
+            ("X", CellColor::Rgb(0, 0, 255), CellColor::Default, plain),
+        ];
+        let mut source = FakeFrame::new(3, 1, &warm);
+        let mut backend = StubBackend::new();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        // First "X" is a miss, the next two should hit because the
+        // cache key omits color.
+        assert_eq!(backend.shape_calls, 1);
+        assert_eq!(builder.shape_cache_stats().hits, 2);
+        assert_eq!(builder.shape_cache_stats().misses, 1);
+    }
+
+    #[test]
+    fn shape_cache_distinguishes_bold_and_italic() {
+        let theme = Theme::blank();
+        let bold = CellAttrs {
+            bold: true,
+            ..CellAttrs::default()
+        };
+        let italic = CellAttrs {
+            italic: true,
+            ..CellAttrs::default()
+        };
+        let plain = CellAttrs::default();
+        let cells = [
+            ("a", CellColor::Default, CellColor::Default, plain),
+            ("a", CellColor::Default, CellColor::Default, bold),
+            ("a", CellColor::Default, CellColor::Default, italic),
+            ("a", CellColor::Default, CellColor::Default, plain),
+        ];
+        let mut source = FakeFrame::new(4, 1, &cells);
+        let mut backend = StubBackend::new();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        // 3 unique (text, attrs) keys: plain, bold, italic. The fourth
+        // cell repeats `plain` so it must hit.
+        assert_eq!(backend.shape_calls, 3);
+        assert_eq!(builder.shape_cache_stats().hits, 1);
+        assert_eq!(builder.shape_cache_stats().misses, 3);
+    }
+
+    #[test]
+    fn shape_cache_warm_hit_rate_above_95_percent() {
+        // Synthesize a small but realistic page: 80×24 of repeating
+        // ASCII printable characters with a ~10% bold mix. After one
+        // warmup frame the working set is bounded by `unique chars × 2
+        // styles` ≈ 200 keys; at 1920 cells per frame, hit rate is
+        // ~99% on frame 2. Asserting ≥95% gives margin for future
+        // changes.
+        let theme = Theme::blank();
+        let bold = CellAttrs {
+            bold: true,
+            ..CellAttrs::default()
+        };
+        let plain = CellAttrs::default();
+        let texts: Vec<String> = (0..(80 * 24))
+            .map(|i| {
+                let c = (b'!' + (i % 94) as u8) as char;
+                c.to_string()
+            })
+            .collect();
+        let cells: Vec<(&str, CellColor, CellColor, CellAttrs)> = texts
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let attrs = if i % 11 == 0 { bold } else { plain };
+                (t.as_str(), CellColor::Default, CellColor::Default, attrs)
+            })
+            .collect();
+        let mut source = FakeFrame::new(80, 24, &cells);
+        let mut backend = StubBackend::new();
+        let mut builder = CellBuilder::new();
+
+        // Warmup frame.
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        let pre = builder.shape_cache_stats();
+
+        // Steady-state frame: identical content.
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        let post = builder.shape_cache_stats();
+
+        let frame2_hits = post.hits - pre.hits;
+        let frame2_misses = post.misses - pre.misses;
+        let frame2_lookups = frame2_hits + frame2_misses;
+        let hit_rate = frame2_hits as f64 / frame2_lookups as f64;
+        assert!(
+            hit_rate >= 0.95,
+            "warm hit rate {hit_rate:.4} < 0.95 (hits={frame2_hits}, lookups={frame2_lookups})"
+        );
     }
 }
