@@ -487,8 +487,5 @@ Reference-terminal source citations:
 
 Internal:
 
-- `docs/architecture.md` — pipeline overview, "Event loop & redraw" section.
-- `docs/LIBGHOSTTY_ANALYSIS.md`, `docs/libghostty_renderer_patterns.md`,
-  `docs/libghostty_vt_architecture.md` — Ghostty renderer notes.
-- `docs/NOTES.md`, `docs/NOTES2.md`, `docs/NOTES3.md` — cross-terminal research
-  (Alacritty, WezTerm, Ghostty).
+- [`docs/architecture.md`](./architecture.md) — pipeline overview, "Event loop &
+  redraw" section, component choices.

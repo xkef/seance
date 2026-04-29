@@ -8,13 +8,17 @@ Epic index:
 
 - **[M1][m1]** — Config & theme foundations
 - **[M2][m2]** — Rendering performance (shape cache, dirty rows, sync output,
-  deadline redraw)
+  deadline redraw, IO thread)
 - **[M3][m3]** — Visual fidelity (procedural glyphs, WCAG contrast, clipboard)
 - **[M4][m4]** — Z-layer architecture refactor
-- **[M5][m5]** — Image protocols (Kitty graphics, animated frames)
+- **[M5][m5]** — Image protocols (Kitty graphics residuals, animation, iTerm2)
 - **[M6][m6]** — Multiplexing (`seance-mux` crate, tabs, splits, floating
   modals)
 - **[M7][m7]** — Custom shaders (Shadertoy-compatible post-pass)
+- **[M8][m8]** — Lua scripting + widget system
+- **[M9][m9]** — Release pipeline & distribution (Homebrew, AUR, apt)
+- **[M10][m10]** — Agent Plane (in-PTY control, UI ownership, coordination)
+- **[M11][m11]** — Test harness (layered, LLM-readable)
 
 [m1]: https://github.com/xkef/seance/issues/4
 [m2]: https://github.com/xkef/seance/issues/5
@@ -23,6 +27,10 @@ Epic index:
 [m5]: https://github.com/xkef/seance/issues/8
 [m6]: https://github.com/xkef/seance/issues/9
 [m7]: https://github.com/xkef/seance/issues/10
+[m8]: https://github.com/xkef/seance/issues/65
+[m9]: https://github.com/xkef/seance/issues/152
+[m10]: https://github.com/xkef/seance/issues/194
+[m11]: https://github.com/xkef/seance/issues/201
 
 ---
 
@@ -39,14 +47,15 @@ Epic index:
 └──────────────────────────────────────────────────────────────────────┘
 
 ┌─ PTY read pump ──────────────────────────────────────────────────────┐
-│ MasterPty.read() → raw bytes                                         │
-│ libghostty-vt.write() → VT state machine mutates grid                │
+│ seance-pty-reader thread: MasterPty.read() → UserEvent::PtyData      │
+│ UI thread: libghostty-vt.write() → VT state machine mutates grid     │
+│ row-dirty bitmap [IMPLEMENTED]                                       │
 │ DEC 2026 synchronized output [PLANNED: M2]                           │
-│ row-dirty bitmap [PLANNED: M2]                                       │
+│ IO-thread parse + Critical-snapshot [PLANNED: M2 — see threading.md] │
 └──────────────────────────────────────────────────────────────────────┘
 
-┌─ render pass (wakes on dirty + animation deadline [PLANNED: M2]) ────┐
-│ rebuild_cells(only_dirty_rows [PLANNED: M2]):                        │
+┌─ render pass (wakes on dirty + animation deadline) ──────────────────┐
+│ rebuild_cells(only_dirty_rows [PARTIAL: bg_cells]):                  │
 │   for each row: run-iterator → TextRuns                              │
 │     shape_cache.get_or_shape(run_hash)  [PLANNED: M2]                │
 │       cosmic-text Buffer::shape_until_scroll                         │
@@ -82,8 +91,9 @@ Epic index:
   CSI/OSC/DCS, alt screen, scrollback, mouse modes, Kitty keyboard.
 - **portable-pty** [IMPLEMENTED] — cross-platform PTY (ConPTY on Windows).
 - **FrameSource** trait [IMPLEMENTED] — exposes `visit_cells()` to the renderer.
-- **Row-dirty flags** [PLANNED: [M2][m2]] — add `dirty_rows()` iterator so the
-  renderer can skip unchanged rows.
+- **Row-dirty flags** [IMPLEMENTED] — `dirty_rows()` iterator over the VT grid
+  (#191). The renderer uses it for partial `bg_cells` upload (#196); text-cell
+  rebuild still walks the full grid pending shape cache (#21).
 - **DEC 2026 synchronized output** [PLANNED: [M2][m2]] — `is_sync_active()` +
   timeout, suppress rebuild while mode is set.
 - **OSC 52 clipboard** [PLANNED: [M3][m3]] — read/write with paste-protection
@@ -112,9 +122,11 @@ Epic index:
 ### CellBuilder
 
 - **Current** [IMPLEMENTED] — iterates entire VT grid each frame, shapes every
-  visible cell, writes `text_cells` + `bg_cells` vertex/SSBO data.
+  visible cell, writes `text_cells` SSBO data; `bg_cells` upload is
+  dirty-row-batched (#196).
 - **Target** — takes `&[PositionedPane]` [PLANNED: [M6][m6]], only iterates
-  dirty rows [PLANNED: [M2][m2]], skips shape when cached [PLANNED: [M2][m2]].
+  dirty rows for text rebuild [PLANNED: [M2][m2]], skips shape when cached
+  [PLANNED: [M2][m2]].
 
 ### CellText instance layout (matches WGSL, 32 bytes)
 
@@ -179,27 +191,21 @@ batching [PLANNED: [M2][m2]].
 
 ### Current [IMPLEMENTED]
 
-`ControlFlow::wait_duration(POLL_INTERVAL = 4ms)` — 250 Hz PTY poll, redraw only
-when `content_dirty`, `AutoVsync` surface present mode.
-
-### Target [PLANNED: [M2][m2]]
-
-Deadline-scheduled: one `Timer` at `min(next_due)` across all animation sources
-— cursor blink, SGR blink, bell, Kitty GIF frames, DEC 2026 sync timeout,
+Deadline-scheduled (`cf4a1b1`, #24): `ControlFlow::WaitUntil(next_due)` across
+all animation sources — cursor blink, SGR blink, bell, Kitty GIF frames,
 custom-shader animation. Idle terminal = 0 fps. Modelled on WezTerm's
-`has_animation: RefCell<Option<Instant>>` pattern.
+`has_animation` pattern. PTY wakes are out-of-band via `EventLoopProxy`, fed by
+the `seance-pty-reader` thread (`crates/seance-app/src/io.rs`).
 
 ### Threading model
 
-VT parsing and PTY I/O move off the winit thread under [M2][m2]. Today a
-dedicated `seance-pty-reader` thread does blocking reads and forwards bytes to
-the UI via `EventLoopProxy::send_event(UserEvent::PtyData(_))`; the parse still
-runs on the UI thread inside `App::user_event`. The v1 target adopts Alacritty's
-two-thread shape — one IO thread owns VT + PTY behind
-`Arc<parking_lot::FairMutex<VtState>>`, UI snapshots cells under the lock and
-rebuilds outside it (Ghostty's `Critical` pattern). The full design, including
-mailbox protocol, lock budget, DEC 2026 watchdog, shutdown ordering, and the
-renderer-thread revisit metric, lives in [`docs/threading.md`](./threading.md).
+VT parsing still runs on the winit thread inside `App::user_event(PtyData)`.
+[M2][m2] moves it to a dedicated IO thread that owns VT + PTY behind
+`Arc<parking_lot::FairMutex<VtState>>`; the UI takes a brief locked snapshot
+each frame and rebuilds cells outside the lock (Ghostty's `Critical` pattern).
+Full design, mailbox protocol, lock budget, DEC 2026 watchdog, shutdown
+ordering, and the renderer-thread revisit metric: see
+[`docs/threading.md`](./threading.md).
 
 ---
 
@@ -319,21 +325,21 @@ caches; keybind → rebuild action table).
 
 ## Appendix — component choices
 
-| Problem                   | Component                                                     | Why                                                                                                                                         |
-| ------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| GPU API                   | `wgpu`                                                        | One abstraction for Metal/Vulkan/DX12/GL4/WebGPU. Dual-source blending (for LCD subpixel AA) gated behind `Features::DUAL_SOURCE_BLENDING`. |
-| Window + input            | `winit`                                                       | Only serious cross-platform option.                                                                                                         |
-| VT state machine          | `libghostty-vt` via FFI                                       | Battle-tested, handles DEC 2026, mouse, Kitty keyboard, iTerm OSC, selection. Don't reinvent.                                               |
-| PTY                       | `portable-pty`                                                | Cross-plat, correct ConPTY on Windows.                                                                                                      |
-| Font discovery            | `fontdb` (via cosmic-text)                                    | fontconfig / CoreText / DirectWrite backed.                                                                                                 |
-| Shaping                   | `cosmic-text` (rustybuzz + unicode-bidi)                      | BiDi, graphemes, per-font features.                                                                                                         |
-| Rasterization             | `swash` (via `SwashCache`)                                    | COLR v0/v1, SVG, CBDT.                                                                                                                      |
-| Atlas packing             | `etagere`                                                     | Shelf-bin with deallocation (alacritty's row-packer cannot evict).                                                                          |
-| Procedural glyphs         | `tiny-skia`                                                   | Software vector rasterizer for box-drawing / Powerline sprites [PLANNED: [M3][m3]].                                                         |
-| Layout (modals/box model) | `taffy`                                                       | Flexbox + Grid for floating UI [PLANNED: [M6][m6]].                                                                                         |
-| Animation                 | In-house `ColorEase` + deadline scheduler [PLANNED: [M2][m2]] | Cubic-bezier ease, one `Timer` at `min(next_due)` — power-efficient.                                                                        |
-| Config                    | `toml` + `serde` + `notify`                                   | Hot-reload with targeted invalidation.                                                                                                      |
-| Logging                   | `tracing` + `tracing-subscriber`                              | Per-subsystem spans.                                                                                                                        |
+| Problem                   | Component                                               | Why                                                                                                                                         |
+| ------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| GPU API                   | `wgpu`                                                  | One abstraction for Metal/Vulkan/DX12/GL4/WebGPU. Dual-source blending (for LCD subpixel AA) gated behind `Features::DUAL_SOURCE_BLENDING`. |
+| Window + input            | `winit`                                                 | Only serious cross-platform option.                                                                                                         |
+| VT state machine          | `libghostty-vt` via FFI                                 | Battle-tested, handles DEC 2026, mouse, Kitty keyboard, iTerm OSC, selection. Don't reinvent.                                               |
+| PTY                       | `portable-pty`                                          | Cross-plat, correct ConPTY on Windows.                                                                                                      |
+| Font discovery            | `fontdb` (via cosmic-text)                              | fontconfig / CoreText / DirectWrite backed.                                                                                                 |
+| Shaping                   | `cosmic-text` (rustybuzz + unicode-bidi)                | BiDi, graphemes, per-font features.                                                                                                         |
+| Rasterization             | `swash` (via `SwashCache`)                              | COLR v0/v1, SVG, CBDT.                                                                                                                      |
+| Atlas packing             | `etagere`                                               | Shelf-bin with deallocation (alacritty's row-packer cannot evict).                                                                          |
+| Procedural glyphs         | `tiny-skia`                                             | Software vector rasterizer for box-drawing / Powerline sprites [PLANNED: [M3][m3]].                                                         |
+| Layout (modals/box model) | `taffy`                                                 | Flexbox + Grid for floating UI [PLANNED: [M6][m6]].                                                                                         |
+| Animation                 | In-house `ColorEase` + deadline scheduler [IMPLEMENTED] | Cubic-bezier ease, `ControlFlow::WaitUntil(min(next_due))` — power-efficient.                                                               |
+| Config                    | `toml` + `serde` + `notify`                             | Hot-reload with targeted invalidation.                                                                                                      |
+| Logging                   | `tracing` + `tracing-subscriber`                        | Per-subsystem spans.                                                                                                                        |
 
 **Deliberately avoided:** `fontdue` (no COLRv1/SVG), `glyphon` (locks layout),
 `vello`/`wgpu_glyph` (wrong abstraction level for terminals), hand-rolled VT
@@ -343,12 +349,6 @@ parsers (tarpit — every terminal team regrets them).
 
 ## Reference terminals
 
-For design rationale on any section, see the corresponding reports in `docs/`:
-
-- `docs/LIBGHOSTTY_ANALYSIS.md`, `docs/libghostty_renderer_patterns.md`,
-  `docs/libghostty_vt_architecture.md` — Ghostty renderer
-- `docs/NOTES.md`, `docs/NOTES2.md`, `docs/NOTES3.md` — cross-terminal research
-  (Alacritty, WezTerm, Ghostty)
-
-Side-by-side summary of the three references → see the synthesis in the design
-discussion leading up to this plan.
+For threading-model rationale (Ghostty / Alacritty / WezTerm side-by-side), see
+[`docs/threading.md`](./threading.md). Source citations into each upstream tree
+live there, not here.
