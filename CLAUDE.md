@@ -59,6 +59,12 @@ specific bug.
 Design-decision narration ("this crate holds no X", "replaces Y") belongs in the
 commit message, not the code — it rots as the codebase evolves.
 
+The same rule kills time-bound narration: "Today every X is recomputed", "We
+currently do Y", "Without this change…". The moment the PR merges, those
+sentences describe a state that no longer exists. Describe the current invariant
+in tense-neutral terms — "this cache memoizes X", "cells are shaped on miss" —
+and put the before-state in the commit body where it belongs.
+
 ## Working on issues
 
 Epics are tracked on GitHub under the `epic` label (M1–M9). Every non-epic issue

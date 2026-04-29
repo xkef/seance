@@ -9,6 +9,7 @@ mod atlas;
 pub mod backend;
 mod cell_builder;
 pub mod cosmic;
+mod shape_cache;
 
 pub(crate) use atlas::GlyphAtlas;
 pub(crate) use cell_builder::{BuildFrameConfig, CellBuilder, CellText, FrameInfo};
