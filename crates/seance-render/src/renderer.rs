@@ -7,7 +7,7 @@ use winit::window::Window;
 pub use crate::gpu::uniforms::CursorShape;
 use crate::gpu::{CellFrame, GpuState};
 use crate::text::backend::TextBackend;
-use crate::text::cosmic::CosmicTextBackend;
+use crate::text::cosmic::{BackendConfig, CosmicTextBackend};
 use crate::text::{BuildFrameConfig, CellBuilder};
 
 pub struct RendererConfig {
@@ -17,6 +17,14 @@ pub struct RendererConfig {
     pub font_family: String,
     pub font_size: f32,
     pub adjust_cell_height: Option<String>,
+    pub adjust_cell_width: Option<String>,
+    /// OpenType feature tags to enable on every shape ("calt", "liga",
+    /// "ss01", …). Empty means the shaper applies its own defaults.
+    pub font_features: Vec<String>,
+    /// Fallback families consulted when the primary `font_family` lacks
+    /// a glyph. Stored verbatim; cosmic-text already iterates through
+    /// loaded fonts on miss, so the list is a hint for future wiring.
+    pub font_fallback: Vec<String>,
     pub min_contrast: f32,
     /// Inner gutter between window edges and the cell grid, in physical
     /// pixels. `[x, y]`. The area outside the grid is filled by the
@@ -59,12 +67,15 @@ pub struct TerminalRenderer {
 
 impl TerminalRenderer {
     pub async fn new(window: Arc<Window>, config: RendererConfig) -> Option<Self> {
-        let backend: Box<dyn TextBackend> = Box::new(CosmicTextBackend::new(
-            &config.font_family,
-            config.font_size,
-            config.scale,
-            config.adjust_cell_height.as_deref(),
-        ));
+        let backend: Box<dyn TextBackend> = Box::new(CosmicTextBackend::new(BackendConfig {
+            family: &config.font_family,
+            font_size: config.font_size,
+            scale: config.scale,
+            adjust_cell_height: config.adjust_cell_height.as_deref(),
+            adjust_cell_width: config.adjust_cell_width.as_deref(),
+            features: &config.font_features,
+            fallback: &config.font_fallback,
+        }));
         let m = backend.metrics();
         let cell_size = [m.cell_width, m.cell_height];
         let gpu = GpuState::new(window).await;
@@ -171,6 +182,27 @@ impl TerminalRenderer {
         self.backend.set_adjust_cell_height(value);
         let m = self.backend.metrics();
         self.cell_size = [m.cell_width, m.cell_height];
+    }
+
+    pub fn set_adjust_cell_width(&mut self, value: Option<&str>) {
+        self.backend.set_adjust_cell_width(value);
+        let m = self.backend.metrics();
+        self.cell_size = [m.cell_width, m.cell_height];
+    }
+
+    /// Replace the active OpenType feature list. The renderer drops its
+    /// shape and glyph caches because the same `(text, attrs)` key may
+    /// resolve to different glyphs under the new feature set.
+    pub fn set_font_features(&mut self, features: &[String]) {
+        self.backend.set_features(features);
+        self.cell_builder.reset_glyphs();
+    }
+
+    /// Replace the fallback family list. Drops shape and glyph caches so
+    /// the next miss reconsiders the new fallback order.
+    pub fn set_font_fallback(&mut self, fallback: &[String]) {
+        self.backend.set_fallback(fallback);
+        self.cell_builder.reset_glyphs();
     }
 
     /// Swap the theme. The theme is consumed CPU-side during the next

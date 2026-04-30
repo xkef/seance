@@ -36,10 +36,17 @@ pub struct FontAttrs {
     pub italic: bool,
 }
 
-/// A shaped glyph produced by [`TextBackend::shape_cell`].
+/// A shaped glyph produced by [`TextBackend::shape_run`].
+///
+/// `cluster` is the byte offset within the run input where the source
+/// cluster (one or more codepoints, possibly joined by ZWJ) starts.
+/// Multiple glyphs may share a cluster (mark + base, multi-glyph
+/// fallback) and a single glyph may cover several clusters
+/// (ligatures, regional flag pairs).
 #[derive(Debug, Clone, Copy)]
 pub struct ShapedGlyph {
     pub id: GlyphId,
+    pub cluster: u32,
 }
 
 /// Whether a rasterized glyph is a grayscale alpha mask or a full
@@ -74,8 +81,23 @@ pub trait TextBackend {
 
     fn set_adjust_cell_height(&mut self, value: Option<&str>);
 
-    /// Shape a single cell's text into glyphs. Appends to `out`.
-    fn shape_cell(&mut self, text: &str, attrs: FontAttrs, out: &mut Vec<ShapedGlyph>);
+    fn set_adjust_cell_width(&mut self, value: Option<&str>);
+
+    /// Replace the active OpenType feature list ("calt", "liga", "ss01", …).
+    /// Callers must drop their shape caches; the same `(text, attrs)` key
+    /// can map to different glyphs once features change.
+    fn set_features(&mut self, features: &[String]);
+
+    /// Replace the fallback family list. Callers must drop their shape
+    /// caches.
+    fn set_fallback(&mut self, fallback: &[String]);
+
+    /// Shape a contiguous run of text into glyphs. Each emitted glyph
+    /// carries the byte offset of its source cluster within `text`, so
+    /// callers driving multi-cell input (ligatures, ZWJ sequences, flag
+    /// pairs) can attribute composed glyphs back to the originating
+    /// cell. Appends to `out`.
+    fn shape_run(&mut self, text: &str, attrs: FontAttrs, out: &mut Vec<ShapedGlyph>);
 
     /// Rasterize a previously shaped glyph. Returns `None` for zero-
     /// sized glyphs (whitespace etc.) — callers should skip those.

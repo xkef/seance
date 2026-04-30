@@ -97,6 +97,12 @@ pub struct CellBuilder {
     text_cells: Vec<CellText>,
     requests: Vec<CellRequest>,
     shape_scratch: Vec<ShapedGlyph>,
+    /// Reused per-run scratch — concatenated text and a cursor of byte
+    /// offsets into that text, one per cell in the run, plus a sentinel
+    /// `text.len()` at the tail. Built fresh for every run; held on the
+    /// builder to avoid reallocating on each frame.
+    run_text: String,
+    run_cell_starts: Vec<u32>,
     last_frame: Option<FrameInfo>,
     last_dirty: DirtySnapshot,
 }
@@ -111,6 +117,8 @@ impl CellBuilder {
             text_cells: Vec::new(),
             requests: Vec::new(),
             shape_scratch: Vec::new(),
+            run_text: String::new(),
+            run_cell_starts: Vec::new(),
             last_frame: None,
             // First frame must be a full upload — there's nothing on the
             // GPU yet for a `Partial` write to layer onto.
@@ -161,6 +169,8 @@ impl CellBuilder {
             &mut self.glyph_slots,
             &mut self.shape_cache,
             &mut self.shape_scratch,
+            &mut self.run_text,
+            &mut self.run_cell_starts,
             &mut self.text_cells,
         );
 
@@ -275,8 +285,15 @@ fn walk_grid(
     source.visit_cells(&mut visitor);
 }
 
-/// Text-aware, VT-free pass: shape (with cache), cache glyphs, emit
-/// instance records.
+/// Text-aware, VT-free pass: group contiguous same-style cells into
+/// shape runs, shape (with cache), cache glyphs, emit instance records.
+///
+/// Multi-cell shaping is required to render ligatures (`==`, `=>`,
+/// `!=`, …), regional-indicator flag pairs, ZWJ sequences (skin-tone
+/// emoji, family glyphs), and combining marks: harfbuzz can only
+/// compose a glyph when it sees the whole cluster. Anchoring each
+/// emitted glyph at the column of its source cluster keeps the GPU
+/// layout in lock-step with the VT grid.
 fn shape_and_pack(
     requests: &[CellRequest],
     backend: &mut dyn TextBackend,
@@ -284,20 +301,27 @@ fn shape_and_pack(
     glyph_slots: &mut GlyphSlots,
     shape_cache: &mut ShapeCache,
     shape_scratch: &mut Vec<ShapedGlyph>,
+    run_text: &mut String,
+    run_cell_starts: &mut Vec<u32>,
     out: &mut Vec<CellText>,
 ) {
-    for req in requests {
+    let mut start = 0;
+    while start < requests.len() {
+        let end = run_end(requests, start);
+        build_run_text(&requests[start..end], run_text, run_cell_starts);
         shape_with_cache(
             shape_cache,
             backend,
-            &req.text,
-            req.font_attrs,
+            run_text,
+            requests[start].font_attrs,
             shape_scratch,
         );
         for glyph in &*shape_scratch {
             let Some(entry) = ensure_glyph_slot(glyph_slots, atlas, backend, glyph.id) else {
                 continue;
             };
+            let cell_idx = cluster_to_cell(run_cell_starts, glyph.cluster);
+            let req = &requests[start + cell_idx];
             out.push(CellText {
                 glyph_pos: entry.pos,
                 glyph_size: entry.size,
@@ -307,6 +331,54 @@ fn shape_and_pack(
                 atlas_and_flags: u32::from(entry.is_color),
             });
         }
+        start = end;
+    }
+}
+
+/// Largest `end` such that `requests[start..end]` is a single shaping
+/// run: same row, same `font_attrs`, columns strictly contiguous (no
+/// gap from an empty cell, since `walk_grid` skips emit-time-empty
+/// cells entirely).
+fn run_end(requests: &[CellRequest], start: usize) -> usize {
+    let head = &requests[start];
+    let mut end = start + 1;
+    while end < requests.len() {
+        let next = &requests[end];
+        if next.row != head.row
+            || next.font_attrs != head.font_attrs
+            || next.col != requests[end - 1].col + 1
+        {
+            break;
+        }
+        end += 1;
+    }
+    end
+}
+
+/// Concatenate `run`'s cell texts into `text`, recording byte offsets
+/// where each cell starts. The trailing entry equals `text.len()` so
+/// [`cluster_to_cell`] can binary-search without bounds gymnastics.
+fn build_run_text(run: &[CellRequest], text: &mut String, cell_starts: &mut Vec<u32>) {
+    text.clear();
+    cell_starts.clear();
+    cell_starts.reserve(run.len() + 1);
+    for cell in run {
+        cell_starts.push(text.len() as u32);
+        text.push_str(&cell.text);
+    }
+    cell_starts.push(text.len() as u32);
+}
+
+/// Map a glyph's source-cluster byte offset to the cell index within
+/// its run. The largest `i` whose `cell_starts[i] <= cluster` is the
+/// originating cell; ligatures with `cluster = 0` always anchor at the
+/// run's first cell, matching Ghostty's anchor-at-cluster-start rule.
+fn cluster_to_cell(cell_starts: &[u32], cluster: u32) -> usize {
+    debug_assert!(cell_starts.len() >= 2);
+    let inner = &cell_starts[..cell_starts.len() - 1];
+    match inner.binary_search(&cluster) {
+        Ok(idx) => idx,
+        Err(idx) => idx.saturating_sub(1),
     }
 }
 
@@ -324,7 +396,7 @@ fn shape_with_cache(
     if cache.lookup_into(text, attrs, scratch) {
         return;
     }
-    backend.shape_cell(text, attrs, scratch);
+    backend.shape_run(text, attrs, scratch);
     cache.insert(text, attrs, scratch);
 }
 
@@ -485,14 +557,22 @@ mod tests {
         fn set_font_size(&mut self, _points: f32) {}
         fn set_scale(&mut self, _scale: f64) {}
         fn set_adjust_cell_height(&mut self, _value: Option<&str>) {}
-        fn shape_cell(&mut self, text: &str, _attrs: FontAttrs, out: &mut Vec<ShapedGlyph>) {
+        fn set_adjust_cell_width(&mut self, _value: Option<&str>) {}
+        fn set_features(&mut self, _features: &[String]) {}
+        fn set_fallback(&mut self, _fallback: &[String]) {}
+        fn shape_run(&mut self, text: &str, _attrs: FontAttrs, out: &mut Vec<ShapedGlyph>) {
             self.shape_calls += 1;
-            // Deterministic single-glyph result keyed off the first
-            // codepoint so cache round-trips are observable.
-            if let Some(c) = text.chars().next() {
+            // Deterministic per-character glyph result keyed off the
+            // codepoint so cache round-trips and run-grouping are both
+            // observable. Each char becomes one glyph at its byte
+            // offset so tests can verify cluster mapping.
+            let mut byte_offset = 0u32;
+            for c in text.chars() {
                 out.push(ShapedGlyph {
                     id: GlyphId(u64::from(u32::from(c))),
+                    cluster: byte_offset,
                 });
+                byte_offset += c.len_utf8() as u32;
             }
         }
         fn rasterize(&mut self, _glyph: GlyphId) -> Option<RasterizedGlyph> {
@@ -748,20 +828,24 @@ mod tests {
     fn shape_cache_skips_backend_on_warm_second_frame() {
         let theme = Theme::blank();
         let cells = ascii_cells_3();
-        let mut source = FakeFrame::new(3, 1, &cells);
+        // One cell per row keeps each request in its own run so the
+        // per-run cache hits we measure are meaningful (a single row of
+        // contiguous same-style cells would collapse to one run anyway,
+        // hiding whether the cache fired three times or once).
+        let mut source = FakeFrame::new(1, 3, &cells);
         let mut backend = StubBackend::new();
         let mut builder = CellBuilder::new();
 
         builder.build_frame(&mut source, &mut backend, build_config(&theme));
         let warmup_calls = backend.shape_calls;
-        assert_eq!(warmup_calls, 3, "frame 1 must shape every non-empty cell");
+        assert_eq!(warmup_calls, 3, "frame 1 must shape every distinct run");
         assert_eq!(builder.shape_cache_stats().misses, 3);
         assert_eq!(builder.shape_cache_stats().hits, 0);
 
         builder.build_frame(&mut source, &mut backend, build_config(&theme));
         assert_eq!(
             backend.shape_calls, warmup_calls,
-            "frame 2 must hit the cache for every cell — no new backend calls"
+            "frame 2 must hit the cache for every run — no new backend calls"
         );
         assert_eq!(builder.shape_cache_stats().hits, 3);
     }
@@ -770,7 +854,7 @@ mod tests {
     fn shape_cache_repopulates_after_reset_glyphs() {
         let theme = Theme::blank();
         let cells = ascii_cells_3();
-        let mut source = FakeFrame::new(3, 1, &cells);
+        let mut source = FakeFrame::new(1, 3, &cells);
         let mut backend = StubBackend::new();
         let mut builder = CellBuilder::new();
 
@@ -792,7 +876,9 @@ mod tests {
     fn shape_cache_unaffected_by_color_changes() {
         // Same text under different theme colors must still hit the
         // cache — the key omits color. Guards against a refactor
-        // that bakes color into the key.
+        // that bakes color into the key. One cell per row keeps the
+        // three "X"s in separate runs (otherwise they collapse to a
+        // single "XXX" run and the test no longer probes the key).
         let theme = Theme::blank();
         let plain = CellAttrs::default();
         let warm = [
@@ -800,7 +886,7 @@ mod tests {
             ("X", CellColor::Rgb(0, 255, 0), CellColor::Default, plain),
             ("X", CellColor::Rgb(0, 0, 255), CellColor::Default, plain),
         ];
-        let mut source = FakeFrame::new(3, 1, &warm);
+        let mut source = FakeFrame::new(1, 3, &warm);
         let mut backend = StubBackend::new();
         let mut builder = CellBuilder::new();
 
@@ -830,6 +916,8 @@ mod tests {
             ("a", CellColor::Default, CellColor::Default, italic),
             ("a", CellColor::Default, CellColor::Default, plain),
         ];
+        // Differing attrs already split the run, so a single-row layout
+        // exercises the cache key correctly.
         let mut source = FakeFrame::new(4, 1, &cells);
         let mut backend = StubBackend::new();
         let mut builder = CellBuilder::new();
@@ -840,6 +928,236 @@ mod tests {
         assert_eq!(backend.shape_calls, 3);
         assert_eq!(builder.shape_cache_stats().hits, 1);
         assert_eq!(builder.shape_cache_stats().misses, 3);
+    }
+
+    #[test]
+    fn run_grouping_collapses_contiguous_same_style_cells() {
+        // 5 contiguous plain cells on row 0 must shape as one run.
+        let theme = Theme::blank();
+        let plain = CellAttrs::default();
+        let cells = [
+            ("h", CellColor::Default, CellColor::Default, plain),
+            ("e", CellColor::Default, CellColor::Default, plain),
+            ("l", CellColor::Default, CellColor::Default, plain),
+            ("l", CellColor::Default, CellColor::Default, plain),
+            ("o", CellColor::Default, CellColor::Default, plain),
+        ];
+        let mut source = FakeFrame::new(5, 1, &cells);
+        let mut backend = StubBackend::new();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        assert_eq!(
+            backend.shape_calls, 1,
+            "5 contiguous plain cells must collapse into one shape_run call"
+        );
+    }
+
+    #[test]
+    fn run_grouping_breaks_on_attr_change() {
+        // [plain plain bold plain] → [plain plain] | [bold] | [plain]
+        // = 3 runs. Different attrs cannot share a run because cosmic-text
+        // shapes one (text, attrs) at a time.
+        let theme = Theme::blank();
+        let plain = CellAttrs::default();
+        let bold = CellAttrs {
+            bold: true,
+            ..CellAttrs::default()
+        };
+        let cells = [
+            ("a", CellColor::Default, CellColor::Default, plain),
+            ("b", CellColor::Default, CellColor::Default, plain),
+            ("c", CellColor::Default, CellColor::Default, bold),
+            ("d", CellColor::Default, CellColor::Default, plain),
+        ];
+        let mut source = FakeFrame::new(4, 1, &cells);
+        let mut backend = StubBackend::new();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        assert_eq!(backend.shape_calls, 3);
+    }
+
+    #[test]
+    fn run_grouping_breaks_on_empty_cell_gap() {
+        // An empty middle cell never reaches `shape_and_pack` (walk_grid
+        // skips empty cells), so the contiguity check splits the run.
+        let theme = Theme::blank();
+        let plain = CellAttrs::default();
+        let cells = [
+            ("a", CellColor::Default, CellColor::Default, plain),
+            ("b", CellColor::Default, CellColor::Default, plain),
+            ("", CellColor::Default, CellColor::Default, plain),
+            ("c", CellColor::Default, CellColor::Default, plain),
+            ("d", CellColor::Default, CellColor::Default, plain),
+        ];
+        let mut source = FakeFrame::new(5, 1, &cells);
+        let mut backend = StubBackend::new();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        assert_eq!(backend.shape_calls, 2);
+    }
+
+    #[test]
+    fn run_grouping_breaks_across_rows() {
+        // Same style, but different rows means different runs — a
+        // ligature cannot span a line break.
+        let theme = Theme::blank();
+        let plain = CellAttrs::default();
+        let cells = [
+            ("a", CellColor::Default, CellColor::Default, plain),
+            ("b", CellColor::Default, CellColor::Default, plain),
+        ];
+        let mut source = FakeFrame::new(1, 2, &cells);
+        let mut backend = StubBackend::new();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        assert_eq!(backend.shape_calls, 2);
+    }
+
+    #[test]
+    fn cluster_to_cell_anchors_glyphs_at_their_source_cells() {
+        // The stub backend emits one glyph per char with cluster set to
+        // the byte offset, so a 3-cell ASCII run must produce three
+        // CellTexts at cols 0, 1, 2 — proving the cluster→cell mapping
+        // distributes glyphs back to the originating column rather than
+        // piling them onto the run anchor.
+        let theme = Theme::blank();
+        let plain = CellAttrs::default();
+        let cells = [
+            ("X", CellColor::Default, CellColor::Default, plain),
+            ("Y", CellColor::Default, CellColor::Default, plain),
+            ("Z", CellColor::Default, CellColor::Default, plain),
+        ];
+        let mut source = FakeFrame::new(3, 1, &cells);
+        // Backend that returns a non-zero atlas entry — needed so the
+        // CellText emit isn't suppressed by the rasterize→None path.
+        struct OneGlyphBackend {
+            metrics: CellMetrics,
+            shape_calls: u32,
+        }
+        impl TextBackend for OneGlyphBackend {
+            fn metrics(&self) -> &CellMetrics {
+                &self.metrics
+            }
+            fn set_font_size(&mut self, _: f32) {}
+            fn set_scale(&mut self, _: f64) {}
+            fn set_adjust_cell_height(&mut self, _: Option<&str>) {}
+            fn set_adjust_cell_width(&mut self, _: Option<&str>) {}
+            fn set_features(&mut self, _: &[String]) {}
+            fn set_fallback(&mut self, _: &[String]) {}
+            fn shape_run(&mut self, text: &str, _: FontAttrs, out: &mut Vec<ShapedGlyph>) {
+                self.shape_calls += 1;
+                let mut byte = 0u32;
+                for c in text.chars() {
+                    out.push(ShapedGlyph {
+                        id: GlyphId(u64::from(u32::from(c))),
+                        cluster: byte,
+                    });
+                    byte += c.len_utf8() as u32;
+                }
+            }
+            fn rasterize(&mut self, _: GlyphId) -> Option<RasterizedGlyph> {
+                Some(RasterizedGlyph {
+                    data: vec![255],
+                    width: 1,
+                    height: 1,
+                    bearing_x: 0,
+                    bearing_y: 0,
+                    format: GlyphFormat::Alpha,
+                })
+            }
+        }
+        let mut backend = OneGlyphBackend {
+            metrics: CellMetrics {
+                cell_width: 10.0,
+                cell_height: 20.0,
+                baseline: 16.0,
+            },
+            shape_calls: 0,
+        };
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        let cols: Vec<u16> = builder.text_cells().iter().map(|c| c.grid_pos[0]).collect();
+        assert_eq!(cols, vec![0, 1, 2]);
+        assert_eq!(backend.shape_calls, 1);
+    }
+
+    #[test]
+    fn ligature_glyph_anchors_at_cluster_zero() {
+        // Two-cell run "==" with a backend that emits a single ligature
+        // glyph at cluster 0 — the produced CellText must land on the
+        // first cell's column. This is the multi-cell shaping path that
+        // ligatures rely on.
+        let theme = Theme::blank();
+        let plain = CellAttrs::default();
+        let cells = [
+            ("=", CellColor::Default, CellColor::Default, plain),
+            ("=", CellColor::Default, CellColor::Default, plain),
+        ];
+        let mut source = FakeFrame::new(2, 1, &cells);
+        struct LigatureBackend {
+            metrics: CellMetrics,
+        }
+        impl TextBackend for LigatureBackend {
+            fn metrics(&self) -> &CellMetrics {
+                &self.metrics
+            }
+            fn set_font_size(&mut self, _: f32) {}
+            fn set_scale(&mut self, _: f64) {}
+            fn set_adjust_cell_height(&mut self, _: Option<&str>) {}
+            fn set_adjust_cell_width(&mut self, _: Option<&str>) {}
+            fn set_features(&mut self, _: &[String]) {}
+            fn set_fallback(&mut self, _: &[String]) {}
+            fn shape_run(&mut self, text: &str, _: FontAttrs, out: &mut Vec<ShapedGlyph>) {
+                if text == "==" {
+                    out.push(ShapedGlyph {
+                        id: GlyphId(0xEE),
+                        cluster: 0,
+                    });
+                }
+            }
+            fn rasterize(&mut self, _: GlyphId) -> Option<RasterizedGlyph> {
+                Some(RasterizedGlyph {
+                    data: vec![255],
+                    width: 1,
+                    height: 1,
+                    bearing_x: 0,
+                    bearing_y: 0,
+                    format: GlyphFormat::Alpha,
+                })
+            }
+        }
+        let mut backend = LigatureBackend {
+            metrics: CellMetrics {
+                cell_width: 10.0,
+                cell_height: 20.0,
+                baseline: 16.0,
+            },
+        };
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        assert_eq!(builder.text_cells().len(), 1);
+        assert_eq!(builder.text_cells()[0].grid_pos, [0, 0]);
+    }
+
+    #[test]
+    fn cluster_to_cell_handles_in_range_lookups() {
+        // 3 cells starting at byte offsets 0, 1, 3 (cell 1 is "é" = 2
+        // bytes), with a sentinel of 4 at the tail.
+        let cell_starts = [0u32, 1, 3, 4];
+        assert_eq!(cluster_to_cell(&cell_starts, 0), 0);
+        assert_eq!(cluster_to_cell(&cell_starts, 1), 1);
+        assert_eq!(
+            cluster_to_cell(&cell_starts, 2),
+            1,
+            "mid-cluster falls into the cell that opened it"
+        );
+        assert_eq!(cluster_to_cell(&cell_starts, 3), 2);
     }
 
     #[test]

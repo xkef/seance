@@ -91,8 +91,27 @@ impl App {
         if diff.font_size_changed {
             self.font_size = self.config.font.size;
         }
-        if diff.font_size_changed || diff.font_adjust_cell_height_changed {
-            self.apply_font_metrics(diff.font_size_changed, diff.font_adjust_cell_height_changed);
+        if diff.font_size_changed
+            || diff.font_adjust_cell_height_changed
+            || diff.font_adjust_cell_width_changed
+        {
+            self.apply_font_metrics(
+                diff.font_size_changed,
+                diff.font_adjust_cell_height_changed,
+                diff.font_adjust_cell_width_changed,
+            );
+        }
+        if diff.font_features_changed
+            && let Some(ws) = self.window_state.as_mut()
+        {
+            ws.renderer.set_font_features(&self.config.font.features);
+            ws.mark_dirty();
+        }
+        if diff.font_fallback_changed
+            && let Some(ws) = self.window_state.as_mut()
+        {
+            ws.renderer.set_font_fallback(&self.config.font.fallback);
+            ws.mark_dirty();
         }
         if diff.font_family_changed {
             log::info!("font.family change takes effect on restart (live swap not yet supported)");
