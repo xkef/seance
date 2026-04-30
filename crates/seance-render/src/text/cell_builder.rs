@@ -165,13 +165,15 @@ impl CellBuilder {
         shape_and_pack(
             &self.requests,
             backend,
-            &mut self.atlas,
-            &mut self.glyph_slots,
-            &mut self.shape_cache,
-            &mut self.shape_scratch,
-            &mut self.run_text,
-            &mut self.run_cell_starts,
-            &mut self.text_cells,
+            &mut ShapePass {
+                atlas: &mut self.atlas,
+                glyph_slots: &mut self.glyph_slots,
+                shape_cache: &mut self.shape_cache,
+                shape_scratch: &mut self.shape_scratch,
+                run_text: &mut self.run_text,
+                run_cell_starts: &mut self.run_cell_starts,
+                out: &mut self.text_cells,
+            },
         );
 
         self.atlas.clear_dirty();
@@ -285,6 +287,20 @@ fn walk_grid(
     source.visit_cells(&mut visitor);
 }
 
+/// Per-frame mutable state `shape_and_pack` consumes. Bundled because
+/// individually-borrowed buffers would otherwise blow past clippy's
+/// `too_many_arguments` ceiling once the per-run text and cluster
+/// scratch were added.
+struct ShapePass<'a> {
+    atlas: &'a mut GlyphAtlas,
+    glyph_slots: &'a mut GlyphSlots,
+    shape_cache: &'a mut ShapeCache,
+    shape_scratch: &'a mut Vec<ShapedGlyph>,
+    run_text: &'a mut String,
+    run_cell_starts: &'a mut Vec<u32>,
+    out: &'a mut Vec<CellText>,
+}
+
 /// Text-aware, VT-free pass: group contiguous same-style cells into
 /// shape runs, shape (with cache), cache glyphs, emit instance records.
 ///
@@ -297,32 +313,27 @@ fn walk_grid(
 fn shape_and_pack(
     requests: &[CellRequest],
     backend: &mut dyn TextBackend,
-    atlas: &mut GlyphAtlas,
-    glyph_slots: &mut GlyphSlots,
-    shape_cache: &mut ShapeCache,
-    shape_scratch: &mut Vec<ShapedGlyph>,
-    run_text: &mut String,
-    run_cell_starts: &mut Vec<u32>,
-    out: &mut Vec<CellText>,
+    pass: &mut ShapePass<'_>,
 ) {
     let mut start = 0;
     while start < requests.len() {
         let end = run_end(requests, start);
-        build_run_text(&requests[start..end], run_text, run_cell_starts);
+        build_run_text(&requests[start..end], pass.run_text, pass.run_cell_starts);
         shape_with_cache(
-            shape_cache,
+            pass.shape_cache,
             backend,
-            run_text,
+            pass.run_text,
             requests[start].font_attrs,
-            shape_scratch,
+            pass.shape_scratch,
         );
-        for glyph in &*shape_scratch {
-            let Some(entry) = ensure_glyph_slot(glyph_slots, atlas, backend, glyph.id) else {
+        for glyph in &*pass.shape_scratch {
+            let Some(entry) = ensure_glyph_slot(pass.glyph_slots, pass.atlas, backend, glyph.id)
+            else {
                 continue;
             };
-            let cell_idx = cluster_to_cell(run_cell_starts, glyph.cluster);
+            let cell_idx = cluster_to_cell(pass.run_cell_starts, glyph.cluster);
             let req = &requests[start + cell_idx];
-            out.push(CellText {
+            pass.out.push(CellText {
                 glyph_pos: entry.pos,
                 glyph_size: entry.size,
                 bearings: [entry.bearing_x as i16, entry.bearing_y as i16],
