@@ -36,10 +36,23 @@ pub struct FontAttrs {
     pub italic: bool,
 }
 
-/// A shaped glyph produced by [`TextBackend::shape_cell`].
+/// A shaped glyph produced by [`TextBackend::shape_run`].
 #[derive(Debug, Clone, Copy)]
 pub struct ShapedGlyph {
     pub id: GlyphId,
+}
+
+/// One glyph from a shaped run, paired with the byte offset of its
+/// source cluster within the run text.
+///
+/// `cluster` is **relative to the start of the run**, never an absolute
+/// byte position in the wider grid. That's the load-bearing detail that
+/// lets [`super::shape_cache::ShapeCache`] reuse one entry across every
+/// occurrence of an identical run.
+#[derive(Debug, Clone, Copy)]
+pub struct RunGlyph {
+    pub glyph: ShapedGlyph,
+    pub cluster: u16,
 }
 
 /// Whether a rasterized glyph is a grayscale alpha mask or a full
@@ -74,8 +87,18 @@ pub trait TextBackend {
 
     fn set_adjust_cell_height(&mut self, value: Option<&str>);
 
-    /// Shape a single cell's text into glyphs. Appends to `out`.
-    fn shape_cell(&mut self, text: &str, attrs: FontAttrs, out: &mut Vec<ShapedGlyph>);
+    /// Apply user-configured OpenType feature tags. Tags shorter or
+    /// longer than 4 bytes are skipped. The next `shape_run` call picks
+    /// up the new set; any cached shape output upstream must be cleared
+    /// by the caller (the backend has no view of its caches).
+    fn set_font_features(&mut self, features: &[String]);
+
+    /// Shape a contiguous run of cells' text into glyphs. Each emitted
+    /// [`RunGlyph`] carries the byte offset of its source cluster within
+    /// `text`, so the caller can map glyphs back to the cell that owns
+    /// them. A multi-cell ligature collapses to a single glyph whose
+    /// cluster points at the leading cell's bytes.
+    fn shape_run(&mut self, text: &str, attrs: FontAttrs, out: &mut Vec<RunGlyph>);
 
     /// Rasterize a previously shaped glyph. Returns `None` for zero-
     /// sized glyphs (whitespace etc.) — callers should skip those.

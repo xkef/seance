@@ -1,32 +1,45 @@
-//! Bucketed-LRU cache for [`TextBackend::shape_cell`] output.
+//! Bucketed-LRU cache for [`TextBackend::shape_run`] output.
 //!
-//! [`TextBackend::shape_cell`]: super::backend::TextBackend::shape_cell
+//! [`TextBackend::shape_run`]: super::backend::TextBackend::shape_run
 //!
-//! Memoizes shape output keyed by `(font flags, text bytes)`:
+//! Memoizes shape output keyed by `(font flags, run bytes)`. The run bytes
+//! are the concatenated text of one or more contiguous same-attr cells, so
+//! ligature clusters that span multiple cells (`->`, `=>`, `!=`, `===`)
+//! land in a single key.
+//!
+//! Cached values store each glyph alongside its **relative cluster** — the
+//! byte offset within the run where the glyph's source cluster starts.
+//! That offset is position-independent: identical run text at any column
+//! in any row hits the same entry and the caller redistributes glyphs to
+//! the right cells using the cluster offset.
 //!
 //! - 256 buckets × 8 slots per bucket. Bucket index = `hash & 0xff`.
 //! - Per-cache monotonic generation counter for LRU; on miss with a full
 //!   bucket the lowest-generation slot is evicted.
 //! - Total capacity is 2048 entries — comfortable for typical terminal
-//!   working sets (~300–400 unique cells × style flags).
-//! - Inline key storage of [`KEY_INLINE_BYTES`] bytes. Keys longer than
+//!   working sets even with run-level granularity.
+//! - Inline key storage of [`KEY_INLINE_BYTES`] bytes. Runs longer than
 //!   that bypass the cache and call the backend directly.
 //!
 //! The key omits fg/bg because color is applied post-shape in
-//! [`super::cell_builder`]: `CellText.color` is baked from `req.fg`
-//! after `shape_cell` returns. Shaping is color-agnostic; including
-//! colors would multiply key cardinality by ~256³ for truecolor content
-//! with no correctness benefit.
+//! [`super::cell_builder`]: `CellText.color` is baked from the cell's fg
+//! after `shape_run` returns. Shaping is color-agnostic; including colors
+//! would multiply key cardinality by ~256³ for truecolor content with no
+//! correctness benefit.
 
 use std::hash::Hasher;
 
 use rustc_hash::FxHasher;
 
-use super::backend::{FontAttrs, ShapedGlyph};
+use super::backend::{FontAttrs, RunGlyph};
 
 const NUM_BUCKETS: usize = 256;
 const WAYS: usize = 8;
-pub(crate) const KEY_INLINE_BYTES: usize = 24;
+/// Long enough to cache a typical run of contiguous same-attr cells —
+/// roughly a 64-column word/operator span, well beyond the ligature
+/// clusters this cache exists to memoize. Runs longer than this bypass
+/// the cache; bypass count is tracked in [`CacheStats::bypass`].
+pub(crate) const KEY_INLINE_BYTES: usize = 64;
 
 const FLAG_BOLD: u8 = 0b01;
 const FLAG_ITALIC: u8 = 0b10;
@@ -78,7 +91,7 @@ struct Slot {
     occupied: bool,
     hash: u64,
     key: SlotKey,
-    value: Vec<ShapedGlyph>,
+    value: Vec<RunGlyph>,
     generation: u32,
 }
 
@@ -175,15 +188,10 @@ impl ShapeCache {
         &self.stats
     }
 
-    /// Look up a shape result; on hit, copy the cached glyphs into
+    /// Look up a shape result; on hit, copy the cached run glyphs into
     /// `out` and return `true`. On miss (or oversized-key bypass), `out`
     /// is left untouched and the caller should run the backend.
-    pub fn lookup_into(
-        &mut self,
-        text: &str,
-        attrs: FontAttrs,
-        out: &mut Vec<ShapedGlyph>,
-    ) -> bool {
+    pub fn lookup_into(&mut self, text: &str, attrs: FontAttrs, out: &mut Vec<RunGlyph>) -> bool {
         let bytes = text.as_bytes();
         if bytes.len() > KEY_INLINE_BYTES {
             self.stats.bypass += 1;
@@ -210,7 +218,7 @@ impl ShapeCache {
     /// never reach this function in normal flow because `lookup_into`
     /// returns `false` for them and the call site falls through to the
     /// backend without calling `insert`.
-    pub fn insert(&mut self, text: &str, attrs: FontAttrs, value: &[ShapedGlyph]) {
+    pub fn insert(&mut self, text: &str, attrs: FontAttrs, value: &[RunGlyph]) {
         let bytes = text.as_bytes();
         if bytes.len() > KEY_INLINE_BYTES {
             return;
@@ -257,10 +265,20 @@ impl Default for ShapeCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::text::backend::GlyphId;
+    use crate::text::backend::{GlyphId, ShapedGlyph};
 
-    fn g(id: u64) -> ShapedGlyph {
-        ShapedGlyph { id: GlyphId(id) }
+    fn g(id: u64) -> RunGlyph {
+        RunGlyph {
+            glyph: ShapedGlyph { id: GlyphId(id) },
+            cluster: 0,
+        }
+    }
+
+    fn g_at(id: u64, cluster: u16) -> RunGlyph {
+        RunGlyph {
+            glyph: ShapedGlyph { id: GlyphId(id) },
+            cluster,
+        }
     }
 
     fn attrs(bold: bool, italic: bool) -> FontAttrs {
@@ -281,22 +299,22 @@ mod tests {
         assert!(cache.lookup_into("A", attrs(false, false), &mut out));
         assert_eq!(cache.stats().hits, 1);
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].id.0, 1);
+        assert_eq!(out[0].glyph.id.0, 1);
     }
 
     #[test]
     fn hit_appends_to_caller_scratch() {
         // The `lookup_into` contract is "extend `out`" — it does not
         // clear, since the caller is responsible for `scratch.clear()`
-        // before the call (matching `shape_cell`'s own contract).
+        // before the call (matching `shape_run`'s own contract).
         let mut cache = ShapeCache::new();
         cache.insert("X", attrs(false, false), &[g(7), g(8)]);
         let mut out = vec![g(99)];
         assert!(cache.lookup_into("X", attrs(false, false), &mut out));
         assert_eq!(out.len(), 3);
-        assert_eq!(out[0].id.0, 99);
-        assert_eq!(out[1].id.0, 7);
-        assert_eq!(out[2].id.0, 8);
+        assert_eq!(out[0].glyph.id.0, 99);
+        assert_eq!(out[1].glyph.id.0, 7);
+        assert_eq!(out[2].glyph.id.0, 8);
     }
 
     #[test]
@@ -315,7 +333,7 @@ mod tests {
         ] {
             let mut out = Vec::new();
             assert!(cache.lookup_into("a", flags, &mut out));
-            assert_eq!(out[0].id.0, expected);
+            assert_eq!(out[0].glyph.id.0, expected);
         }
     }
 
@@ -438,13 +456,32 @@ mod tests {
         assert!(!cache.lookup_into(&exact, attrs(false, false), &mut out));
         cache.insert(&exact, attrs(false, false), &[g(42)]);
         assert!(cache.lookup_into(&exact, attrs(false, false), &mut out));
-        assert_eq!(out[0].id.0, 42);
+        assert_eq!(out[0].glyph.id.0, 42);
         assert_eq!(cache.stats().bypass, 0);
     }
 
     #[test]
+    fn relative_clusters_round_trip_unchanged() {
+        // The cache must store glyphs with their *relative* cluster offset
+        // intact. Caller redistributes back to grid columns by adding the
+        // cluster offset to the run's starting column.
+        let mut cache = ShapeCache::new();
+        cache.insert(
+            "->",
+            attrs(false, false),
+            &[g_at(1, 0), g_at(2, 1), g_at(3, 1)],
+        );
+        let mut out = Vec::new();
+        assert!(cache.lookup_into("->", attrs(false, false), &mut out));
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].cluster, 0);
+        assert_eq!(out[1].cluster, 1);
+        assert_eq!(out[2].cluster, 1);
+    }
+
+    #[test]
     fn empty_shape_results_round_trip() {
-        // `shape_cell` returns zero glyphs for whitespace-only cells;
+        // `shape_run` returns zero glyphs for whitespace-only cells;
         // the cache must round-trip that as a hit with a zero-length
         // result (no allocation).
         let mut cache = ShapeCache::new();

@@ -29,6 +29,10 @@ pub struct ConfigDiff {
     /// `font.adjust_cell_height` changed — caller must recompute cell
     /// metrics and reflow the PTY so rows stay in sync with the renderer.
     pub font_adjust_cell_height_changed: bool,
+    /// `font.features` changed — caller pushes the new feature set into
+    /// the renderer, which drops the shape cache so already-shaped runs
+    /// re-shape with the updated tags.
+    pub font_features_changed: bool,
     /// `window.padding_x|y` changed — caller must push the new padding to
     /// the renderer and reflow the PTY (cols/rows shrink when padding grows).
     pub window_padding_changed: bool,
@@ -48,6 +52,7 @@ impl ConfigDiff {
         let font_family_changed = old.font.family != new.font.family;
         let font_adjust_cell_height_changed =
             old.font.adjust_cell_height != new.font.adjust_cell_height;
+        let font_features_changed = old.font.features != new.font.features;
 
         let window_padding_changed = old.window.padding_x != new.window.padding_x
             || old.window.padding_y != new.window.padding_y;
@@ -68,6 +73,7 @@ impl ConfigDiff {
             font_size_changed,
             font_family_changed,
             font_adjust_cell_height_changed,
+            font_features_changed,
             window_padding_changed,
             repaint_only,
             input_changed,
@@ -80,6 +86,7 @@ impl ConfigDiff {
             || self.font_size_changed
             || self.font_family_changed
             || self.font_adjust_cell_height_changed
+            || self.font_features_changed
             || self.window_padding_changed
             || self.repaint_only
             || self.input_changed)
@@ -138,6 +145,17 @@ mod tests {
         b.font.adjust_cell_height = Some("10%".to_string());
         let d = ConfigDiff::between(&a, &b);
         assert!(d.font_adjust_cell_height_changed);
+        assert!(!d.font_size_changed);
+        assert!(!d.repaint_only);
+    }
+
+    #[test]
+    fn font_features_change_is_detected() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.font.features = vec!["calt".to_string(), "liga".to_string()];
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.font_features_changed);
         assert!(!d.font_size_changed);
         assert!(!d.repaint_only);
     }

@@ -86,6 +86,10 @@ impl App {
                 ws.renderer
                     .set_background_opacity(self.config.window.background_opacity);
             }
+            if diff.font_features_changed {
+                ws.renderer.set_font_features(&self.config.font.features);
+                ws.mark_dirty();
+            }
         }
 
         if diff.font_size_changed {

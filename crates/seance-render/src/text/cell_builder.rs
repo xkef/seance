@@ -2,10 +2,13 @@
 //!
 //! Two passes:
 //! 1. [`walk_grid`] — VT-aware, text-free. Resolves each cell's theme
-//!    colors and emits a flat [`CellRequest`] list + the bg buffer.
-//! 2. [`shape_and_pack`] — text-aware, VT-free. Shapes each request
-//!    through the [`TextBackend`], ensures each glyph occupies an
-//!    atlas slot, and emits one [`CellText`] per glyph.
+//!    colors and groups contiguous same-attr cells into a flat
+//!    [`CellRun`] list + the bg buffer.
+//! 2. [`shape_and_pack`] — text-aware, VT-free. Shapes each run as a
+//!    unit through the [`TextBackend`] (so multi-cell ligatures fuse
+//!    correctly), ensures each glyph occupies an atlas slot, and emits
+//!    one [`CellText`] per glyph at the column of the cell that owns
+//!    the glyph's source cluster.
 
 use std::collections::HashMap;
 
@@ -14,7 +17,7 @@ use seance_config::Theme;
 use seance_vt::{CellColor, CellView, CellVisitor, DirtySnapshot, FrameSource};
 
 use super::atlas::{AtlasEntry, GlyphAtlas};
-use super::backend::{FontAttrs, GlyphFormat, GlyphId, ShapedGlyph, TextBackend};
+use super::backend::{FontAttrs, GlyphFormat, GlyphId, RunGlyph, TextBackend};
 use super::shape_cache::ShapeCache;
 
 /// Resolve a VT-reported color into concrete RGB.
@@ -67,14 +70,40 @@ pub struct BuildFrameConfig<'a> {
 
 type GlyphSlots = HashMap<GlyphId, AtlasEntry, FxBuildHasher>;
 
-/// One cell's shaping request produced by [`walk_grid`] and consumed
-/// by [`shape_and_pack`].
-struct CellRequest {
+/// A run of contiguous same-attr cells produced by [`walk_grid`] and
+/// consumed by [`shape_and_pack`].
+///
+/// Cells are column-contiguous in the run (each cell sits one column
+/// past the previous). Empty/invisible cells, attribute changes, row
+/// boundaries, and wide-char column gaps all break runs. Per-cell fg
+/// color is allowed to vary inside one run because color is applied
+/// post-shape — it never touches the shaper or the cache key.
+struct CellRun {
     row: u16,
-    col: u16,
+    col_start: u16,
     text: String,
-    fg: [u8; 4],
+    /// Byte offset of each cell's text within `text`. Length = cell
+    /// count in the run; the k-th cell is at column `col_start + k`.
+    cell_starts: Vec<u16>,
+    /// Per-cell fg color, parallel to `cell_starts`.
+    cell_fgs: Vec<[u8; 4]>,
     font_attrs: FontAttrs,
+}
+
+impl CellRun {
+    fn cell_count(&self) -> usize {
+        self.cell_starts.len()
+    }
+
+    /// Index of the cell whose byte range contains `cluster`, or 0 if
+    /// the cluster falls before the first cell (defensive — shouldn't
+    /// happen with cosmic-text's clusters).
+    fn cell_for_cluster(&self, cluster: u16) -> usize {
+        match self.cell_starts.binary_search(&cluster) {
+            Ok(idx) => idx,
+            Err(idx) => idx.saturating_sub(1),
+        }
+    }
 }
 
 struct FrameGeometry {
@@ -95,8 +124,8 @@ pub struct CellBuilder {
     shape_cache: ShapeCache,
     bg_cells: Vec<[u8; 4]>,
     text_cells: Vec<CellText>,
-    requests: Vec<CellRequest>,
-    shape_scratch: Vec<ShapedGlyph>,
+    runs: Vec<CellRun>,
+    shape_scratch: Vec<RunGlyph>,
     last_frame: Option<FrameInfo>,
     last_dirty: DirtySnapshot,
 }
@@ -109,7 +138,7 @@ impl CellBuilder {
             shape_cache: ShapeCache::new(),
             bg_cells: Vec::new(),
             text_cells: Vec::new(),
-            requests: Vec::new(),
+            runs: Vec::new(),
             shape_scratch: Vec::new(),
             last_frame: None,
             // First frame must be a full upload — there's nothing on the
@@ -150,12 +179,12 @@ impl CellBuilder {
             &geom,
             config.theme,
             &mut self.bg_cells,
-            &mut self.requests,
+            &mut self.runs,
         );
 
         self.text_cells.clear();
         shape_and_pack(
-            &self.requests,
+            &self.runs,
             backend,
             &mut self.atlas,
             &mut self.glyph_slots,
@@ -249,61 +278,67 @@ fn geometry(
     }
 }
 
-/// VT-aware, text-free pass: resolve each cell's bg and queue a
-/// shape request per non-empty cell.
+/// VT-aware, text-free pass: resolve each cell's bg and group
+/// contiguous same-attr cells into runs.
 fn walk_grid(
     source: &mut dyn FrameSource,
     geom: &FrameGeometry,
     theme: &Theme,
     bg_cells: &mut Vec<[u8; 4]>,
-    requests: &mut Vec<CellRequest>,
+    runs: &mut Vec<CellRun>,
 ) {
     bg_cells.clear();
     bg_cells.resize(
         geom.grid_cols as usize * geom.grid_rows as usize,
         [0, 0, 0, 0],
     );
-    requests.clear();
+    runs.clear();
 
     let mut visitor = WalkVisitor {
         bg_cells,
-        requests,
+        runs,
         theme,
         cols: geom.grid_cols,
         rows: geom.grid_rows,
+        current: None,
     };
     source.visit_cells(&mut visitor);
+    visitor.flush();
 }
 
-/// Text-aware, VT-free pass: shape (with cache), cache glyphs, emit
-/// instance records.
+/// Text-aware, VT-free pass: shape each run (with cache), cache glyphs,
+/// emit one instance record per glyph at the column of the cell whose
+/// cluster the glyph belongs to.
 fn shape_and_pack(
-    requests: &[CellRequest],
+    runs: &[CellRun],
     backend: &mut dyn TextBackend,
     atlas: &mut GlyphAtlas,
     glyph_slots: &mut GlyphSlots,
     shape_cache: &mut ShapeCache,
-    shape_scratch: &mut Vec<ShapedGlyph>,
+    shape_scratch: &mut Vec<RunGlyph>,
     out: &mut Vec<CellText>,
 ) {
-    for req in requests {
+    for run in runs {
         shape_with_cache(
             shape_cache,
             backend,
-            &req.text,
-            req.font_attrs,
+            &run.text,
+            run.font_attrs,
             shape_scratch,
         );
-        for glyph in &*shape_scratch {
-            let Some(entry) = ensure_glyph_slot(glyph_slots, atlas, backend, glyph.id) else {
+        for rg in &*shape_scratch {
+            let Some(entry) = ensure_glyph_slot(glyph_slots, atlas, backend, rg.glyph.id) else {
                 continue;
             };
+            let cell_idx = run.cell_for_cluster(rg.cluster);
+            let col = run.col_start + cell_idx as u16;
+            let fg = run.cell_fgs[cell_idx];
             out.push(CellText {
                 glyph_pos: entry.pos,
                 glyph_size: entry.size,
                 bearings: [entry.bearing_x as i16, entry.bearing_y as i16],
-                grid_pos: [req.col, req.row],
-                color: req.fg,
+                grid_pos: [col, run.row],
+                color: fg,
                 atlas_and_flags: u32::from(entry.is_color),
             });
         }
@@ -318,13 +353,13 @@ fn shape_with_cache(
     backend: &mut dyn TextBackend,
     text: &str,
     attrs: FontAttrs,
-    scratch: &mut Vec<ShapedGlyph>,
+    scratch: &mut Vec<RunGlyph>,
 ) {
     scratch.clear();
     if cache.lookup_into(text, attrs, scratch) {
         return;
     }
-    backend.shape_cell(text, attrs, scratch);
+    backend.shape_run(text, attrs, scratch);
     cache.insert(text, attrs, scratch);
 }
 
@@ -350,14 +385,25 @@ fn ensure_glyph_slot(
     Some(entry)
 }
 
-/// Visitor: resolves theme colors, queues shape requests. Holds no
-/// backend/atlas references — stays on the VT side of the wall.
+/// Visitor: resolves theme colors, groups visible cells into runs.
+/// Holds no backend/atlas references — stays on the VT side of the
+/// wall. Caller MUST invoke [`Self::flush`] after the visit completes
+/// to push any in-progress run.
 struct WalkVisitor<'a> {
     bg_cells: &'a mut Vec<[u8; 4]>,
-    requests: &'a mut Vec<CellRequest>,
+    runs: &'a mut Vec<CellRun>,
     theme: &'a Theme,
     cols: u16,
     rows: u16,
+    current: Option<CellRun>,
+}
+
+impl<'a> WalkVisitor<'a> {
+    fn flush(&mut self) {
+        if let Some(run) = self.current.take() {
+            self.runs.push(run);
+        }
+    }
 }
 
 impl CellVisitor for WalkVisitor<'_> {
@@ -381,16 +427,59 @@ impl CellVisitor for WalkVisitor<'_> {
         }
 
         let alpha = if view.attrs.faint { FAINT_ALPHA } else { 255 };
-        self.requests.push(CellRequest {
-            row,
-            col,
-            text: view.text.to_owned(),
-            fg: [fg_rgb[0], fg_rgb[1], fg_rgb[2], alpha],
-            font_attrs: FontAttrs {
-                bold: view.attrs.bold,
-                italic: view.attrs.italic,
-            },
+        let fg = [fg_rgb[0], fg_rgb[1], fg_rgb[2], alpha];
+        let font_attrs = FontAttrs {
+            bold: view.attrs.bold,
+            italic: view.attrs.italic,
+        };
+
+        // Try to extend the current run, otherwise flush + start a new one.
+        // Runs split on row change, font_attrs change, or any non-unit
+        // column gap (so wide CJK chars and empty cells both terminate
+        // adjacent ASCII runs).
+        let extend = self.current.as_ref().is_some_and(|run| {
+            run.row == row
+                && run.font_attrs == font_attrs
+                && col == run.col_start + run.cell_count() as u16
         });
+
+        if extend {
+            let run = self
+                .current
+                .as_mut()
+                .expect("current was Some in extend check");
+            // Cap run text at u16::MAX bytes so cell_starts can't overflow.
+            // 65 535 bytes is far past anything terminal content emits in
+            // a single attribute span; the rare overrun starts a new run.
+            let next_start = run.text.len();
+            if u16::try_from(next_start + view.text.len()).is_err() {
+                let stale = self.current.take();
+                if let Some(run) = stale {
+                    self.runs.push(run);
+                }
+                self.current = Some(start_run(row, col, view.text, fg, font_attrs));
+                return;
+            }
+            run.cell_starts.push(next_start as u16);
+            run.cell_fgs.push(fg);
+            run.text.push_str(view.text);
+        } else {
+            if let Some(prev) = self.current.take() {
+                self.runs.push(prev);
+            }
+            self.current = Some(start_run(row, col, view.text, fg, font_attrs));
+        }
+    }
+}
+
+fn start_run(row: u16, col: u16, text: &str, fg: [u8; 4], font_attrs: FontAttrs) -> CellRun {
+    CellRun {
+        row,
+        col_start: col,
+        text: text.to_owned(),
+        cell_starts: vec![0],
+        cell_fgs: vec![fg],
+        font_attrs,
     }
 }
 
@@ -398,7 +487,7 @@ impl CellVisitor for WalkVisitor<'_> {
 mod tests {
     use super::*;
     use crate::text::backend::{
-        CellMetrics, FontAttrs, GlyphId, RasterizedGlyph, ShapedGlyph, TextBackend,
+        CellMetrics, FontAttrs, GlyphId, RasterizedGlyph, RunGlyph, ShapedGlyph, TextBackend,
     };
     use seance_vt::{CellAttrs, CellColor, CellVisitor, CursorInfo, GridPos};
 
@@ -485,13 +574,19 @@ mod tests {
         fn set_font_size(&mut self, _points: f32) {}
         fn set_scale(&mut self, _scale: f64) {}
         fn set_adjust_cell_height(&mut self, _value: Option<&str>) {}
-        fn shape_cell(&mut self, text: &str, _attrs: FontAttrs, out: &mut Vec<ShapedGlyph>) {
+        fn set_font_features(&mut self, _features: &[String]) {}
+        fn shape_run(&mut self, text: &str, _attrs: FontAttrs, out: &mut Vec<RunGlyph>) {
             self.shape_calls += 1;
-            // Deterministic single-glyph result keyed off the first
-            // codepoint so cache round-trips are observable.
-            if let Some(c) = text.chars().next() {
-                out.push(ShapedGlyph {
-                    id: GlyphId(u64::from(u32::from(c))),
+            // One glyph per char, keyed by codepoint with the byte index
+            // as relative cluster — enough for the cell-redistribution
+            // tests below to observe whether glyphs land at the right
+            // column.
+            for (byte_idx, c) in text.char_indices() {
+                out.push(RunGlyph {
+                    glyph: ShapedGlyph {
+                        id: GlyphId(u64::from(u32::from(c))),
+                    },
+                    cluster: byte_idx as u16,
                 });
             }
         }
@@ -546,7 +641,9 @@ mod tests {
     }
 
     #[test]
-    fn walk_grid_emits_one_request_per_non_empty_cell() {
+    fn walk_grid_breaks_runs_on_empty_columns() {
+        // Empty cell at col 1 must split the row into two runs even
+        // though the cells either side share font_attrs.
         let theme = Theme::blank();
         let cells = [
             (
@@ -577,19 +674,84 @@ mod tests {
             grid_padding: [0.0; 4],
         };
         let mut bg_cells = Vec::new();
-        let mut requests = Vec::new();
+        let mut runs = Vec::new();
 
-        walk_grid(&mut source, &geom, &theme, &mut bg_cells, &mut requests);
+        walk_grid(&mut source, &geom, &theme, &mut bg_cells, &mut runs);
 
         assert_eq!(bg_cells.len(), 3);
         assert_eq!(bg_cells[0], [0, 0, 0, 0]);
-        assert_eq!(requests.len(), 2);
-        assert_eq!(requests[0].text, "A");
-        assert_eq!(requests[0].col, 0);
-        assert_eq!(requests[1].text, "B");
-        assert_eq!(requests[1].col, 2);
-        assert_eq!(requests[1].fg, [10, 20, 30, 255]);
-        assert_eq!(requests[1].font_attrs, FontAttrs::default());
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].text, "A");
+        assert_eq!(runs[0].col_start, 0);
+        assert_eq!(runs[1].text, "B");
+        assert_eq!(runs[1].col_start, 2);
+        assert_eq!(runs[1].cell_fgs[0], [10, 20, 30, 255]);
+        assert_eq!(runs[1].font_attrs, FontAttrs::default());
+    }
+
+    #[test]
+    fn walk_grid_groups_contiguous_same_attr_cells_into_one_run() {
+        // Three plain ASCII cells in a row collapse to one run "ABC".
+        // This is the path that lets cosmic-text form ligatures across
+        // adjacent cells.
+        let theme = Theme::blank();
+        let plain = CellAttrs::default();
+        let cells = [
+            ("A", CellColor::Default, CellColor::Default, plain),
+            ("B", CellColor::Default, CellColor::Default, plain),
+            ("C", CellColor::Default, CellColor::Default, plain),
+        ];
+        let mut source = FakeFrame::new(3, 1, &cells);
+        let geom = FrameGeometry {
+            cell_width: 10.0,
+            cell_height: 20.0,
+            grid_cols: 3,
+            grid_rows: 1,
+            grid_padding: [0.0; 4],
+        };
+        let mut bg_cells = Vec::new();
+        let mut runs = Vec::new();
+
+        walk_grid(&mut source, &geom, &theme, &mut bg_cells, &mut runs);
+
+        assert_eq!(runs.len(), 1);
+        let run = &runs[0];
+        assert_eq!(run.text, "ABC");
+        assert_eq!(run.col_start, 0);
+        assert_eq!(run.cell_starts, vec![0, 1, 2]);
+        assert_eq!(run.cell_fgs.len(), 3);
+    }
+
+    #[test]
+    fn walk_grid_splits_on_font_attr_change() {
+        let theme = Theme::blank();
+        let plain = CellAttrs::default();
+        let bold = CellAttrs {
+            bold: true,
+            ..CellAttrs::default()
+        };
+        let cells = [
+            ("a", CellColor::Default, CellColor::Default, plain),
+            ("a", CellColor::Default, CellColor::Default, bold),
+            ("a", CellColor::Default, CellColor::Default, plain),
+        ];
+        let mut source = FakeFrame::new(3, 1, &cells);
+        let geom = FrameGeometry {
+            cell_width: 10.0,
+            cell_height: 20.0,
+            grid_cols: 3,
+            grid_rows: 1,
+            grid_padding: [0.0; 4],
+        };
+        let mut bg_cells = Vec::new();
+        let mut runs = Vec::new();
+
+        walk_grid(&mut source, &geom, &theme, &mut bg_cells, &mut runs);
+
+        assert_eq!(runs.len(), 3);
+        assert!(!runs[0].font_attrs.bold);
+        assert!(runs[1].font_attrs.bold);
+        assert!(!runs[2].font_attrs.bold);
     }
 
     #[test]
@@ -613,12 +775,12 @@ mod tests {
             grid_padding: [0.0; 4],
         };
         let mut bg_cells = Vec::new();
-        let mut requests = Vec::new();
+        let mut runs = Vec::new();
 
-        walk_grid(&mut source, &geom, &theme, &mut bg_cells, &mut requests);
+        walk_grid(&mut source, &geom, &theme, &mut bg_cells, &mut runs);
 
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].fg, [0, 205, 205, FAINT_ALPHA]);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].cell_fgs[0], [0, 205, 205, FAINT_ALPHA]);
     }
 
     #[test]
@@ -642,13 +804,13 @@ mod tests {
             grid_padding: [0.0; 4],
         };
         let mut bg_cells = Vec::new();
-        let mut requests = Vec::new();
+        let mut runs = Vec::new();
 
-        walk_grid(&mut source, &geom, &theme, &mut bg_cells, &mut requests);
+        walk_grid(&mut source, &geom, &theme, &mut bg_cells, &mut runs);
 
         assert_eq!(bg_cells[0], [205, 0, 0, 255]);
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].fg, [0, 0, 0, 255]);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].cell_fgs[0], [0, 0, 0, 255]);
     }
 
     #[test]
@@ -674,12 +836,12 @@ mod tests {
             grid_padding: [0.0; 4],
         };
         let mut bg_cells = Vec::new();
-        let mut requests = Vec::new();
+        let mut runs = Vec::new();
 
-        walk_grid(&mut source, &geom, &theme, &mut bg_cells, &mut requests);
+        walk_grid(&mut source, &geom, &theme, &mut bg_cells, &mut runs);
 
         assert_eq!(bg_cells[0], [205, 0, 0, 255]);
-        assert!(requests.is_empty());
+        assert!(runs.is_empty());
     }
 
     #[test]
@@ -704,18 +866,37 @@ mod tests {
             grid_padding: [0.0; 4],
         };
         let mut bg_cells = Vec::new();
-        let mut requests = Vec::new();
+        let mut runs = Vec::new();
 
-        walk_grid(&mut source, &geom, &theme, &mut bg_cells, &mut requests);
+        walk_grid(&mut source, &geom, &theme, &mut bg_cells, &mut runs);
 
-        assert_eq!(requests.len(), 1);
+        assert_eq!(runs.len(), 1);
         assert_eq!(
-            requests[0].font_attrs,
+            runs[0].font_attrs,
             FontAttrs {
                 bold: true,
                 italic: true,
             }
         );
+    }
+
+    #[test]
+    fn cell_for_cluster_maps_glyph_bytes_back_to_cell_index() {
+        let run = CellRun {
+            row: 0,
+            col_start: 5,
+            text: "->=>".to_owned(),
+            cell_starts: vec![0, 1, 2, 3],
+            cell_fgs: vec![[0; 4]; 4],
+            font_attrs: FontAttrs::default(),
+        };
+        // A cluster at byte 0 maps to the first cell, byte 2 to the
+        // third, and a stray cluster past the end pins to the last.
+        assert_eq!(run.cell_for_cluster(0), 0);
+        assert_eq!(run.cell_for_cluster(1), 1);
+        assert_eq!(run.cell_for_cluster(2), 2);
+        assert_eq!(run.cell_for_cluster(3), 3);
+        assert_eq!(run.cell_for_cluster(99), 3);
     }
 
     #[test]
@@ -746,6 +927,9 @@ mod tests {
 
     #[test]
     fn shape_cache_skips_backend_on_warm_second_frame() {
+        // Three contiguous plain cells collapse to one run "ABC" — one
+        // backend call per frame. Frame 2 must hit the cache instead of
+        // re-shaping.
         let theme = Theme::blank();
         let cells = ascii_cells_3();
         let mut source = FakeFrame::new(3, 1, &cells);
@@ -754,16 +938,16 @@ mod tests {
 
         builder.build_frame(&mut source, &mut backend, build_config(&theme));
         let warmup_calls = backend.shape_calls;
-        assert_eq!(warmup_calls, 3, "frame 1 must shape every non-empty cell");
-        assert_eq!(builder.shape_cache_stats().misses, 3);
+        assert_eq!(warmup_calls, 1, "frame 1 must shape one run");
+        assert_eq!(builder.shape_cache_stats().misses, 1);
         assert_eq!(builder.shape_cache_stats().hits, 0);
 
         builder.build_frame(&mut source, &mut backend, build_config(&theme));
         assert_eq!(
             backend.shape_calls, warmup_calls,
-            "frame 2 must hit the cache for every cell — no new backend calls"
+            "frame 2 must hit the cache — no new backend calls"
         );
-        assert_eq!(builder.shape_cache_stats().hits, 3);
+        assert_eq!(builder.shape_cache_stats().hits, 1);
     }
 
     #[test]
@@ -775,7 +959,7 @@ mod tests {
         let mut builder = CellBuilder::new();
 
         builder.build_frame(&mut source, &mut backend, build_config(&theme));
-        assert_eq!(backend.shape_calls, 3);
+        assert_eq!(backend.shape_calls, 1);
 
         builder.reset_glyphs();
         assert_eq!(builder.shape_cache_stats().hits, 0);
@@ -783,16 +967,18 @@ mod tests {
 
         builder.build_frame(&mut source, &mut backend, build_config(&theme));
         assert_eq!(
-            backend.shape_calls, 6,
+            backend.shape_calls, 2,
             "after reset_glyphs the cache must be cold again"
         );
     }
 
     #[test]
     fn shape_cache_unaffected_by_color_changes() {
-        // Same text under different theme colors must still hit the
-        // cache — the key omits color. Guards against a refactor
-        // that bakes color into the key.
+        // Identical run text on different rows under different colors
+        // must still hit the cache — the key omits color. Guards
+        // against a refactor that bakes color into the key. Three rows
+        // (rather than three columns) keep them as separate runs of
+        // identical text.
         let theme = Theme::blank();
         let plain = CellAttrs::default();
         let warm = [
@@ -800,15 +986,44 @@ mod tests {
             ("X", CellColor::Rgb(0, 255, 0), CellColor::Default, plain),
             ("X", CellColor::Rgb(0, 0, 255), CellColor::Default, plain),
         ];
-        let mut source = FakeFrame::new(3, 1, &warm);
+        let mut source = FakeFrame::new(1, 3, &warm);
         let mut backend = StubBackend::new();
         let mut builder = CellBuilder::new();
 
         builder.build_frame(&mut source, &mut backend, build_config(&theme));
-        // First "X" is a miss, the next two should hit because the
-        // cache key omits color.
+        // First "X" is a miss, the next two rows should hit because
+        // the cache key omits color.
         assert_eq!(backend.shape_calls, 1);
         assert_eq!(builder.shape_cache_stats().hits, 2);
+        assert_eq!(builder.shape_cache_stats().misses, 1);
+    }
+
+    #[test]
+    fn shape_cache_reuses_run_across_grid_positions() {
+        // Issue #205's headline acceptance: the same run text appearing
+        // at different columns / rows must shape exactly once.
+        let theme = Theme::blank();
+        let plain = CellAttrs::default();
+        let cells = [
+            // Row 0: "foo" at col 0, gap, "foo" at col 4.
+            ("f", CellColor::Default, CellColor::Default, plain),
+            ("o", CellColor::Default, CellColor::Default, plain),
+            ("o", CellColor::Default, CellColor::Default, plain),
+            ("", CellColor::Default, CellColor::Default, plain),
+            ("f", CellColor::Default, CellColor::Default, plain),
+            ("o", CellColor::Default, CellColor::Default, plain),
+            ("o", CellColor::Default, CellColor::Default, plain),
+        ];
+        let mut source = FakeFrame::new(7, 1, &cells);
+        let mut backend = StubBackend::new();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        assert_eq!(
+            backend.shape_calls, 1,
+            "two runs of identical text must share one shape result"
+        );
+        assert_eq!(builder.shape_cache_stats().hits, 1);
         assert_eq!(builder.shape_cache_stats().misses, 1);
     }
 

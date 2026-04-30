@@ -6,14 +6,15 @@
 //! file-local change.
 
 use cosmic_text::{
-    Attrs, Buffer, CacheKey, Family, FontSystem, Metrics, Shaping, Style, SwashCache, SwashContent,
-    Weight, fontdb::Query,
+    Attrs, Buffer, CacheKey, Family, FeatureTag, FontFeatures, FontSystem, Metrics, Shaping, Style,
+    SwashCache, SwashContent, Weight, fontdb::Query,
 };
 use rustc_hash::FxBuildHasher;
 use std::collections::HashMap;
 
 use super::backend::{
-    CellMetrics, FontAttrs, GlyphFormat, GlyphId, RasterizedGlyph, ShapedGlyph, TextBackend,
+    CellMetrics, FontAttrs, GlyphFormat, GlyphId, RasterizedGlyph, RunGlyph, ShapedGlyph,
+    TextBackend,
 };
 
 const FALLBACK_LINE_HEIGHT_SCALE: f32 = 1.2;
@@ -39,6 +40,11 @@ pub struct CosmicTextBackend {
     scale: f64,
     family: String,
     adjust_cell_height: Option<MetricModifier>,
+    /// Pre-parsed OpenType feature tags applied to every shape_run call.
+    /// `Vec<FeatureTag>` rather than `FontFeatures` because we materialize
+    /// a fresh `FontFeatures` per shape (cheap — small Vec) so we can mix
+    /// per-style additions if those ever land.
+    font_features: Vec<FeatureTag>,
 
     /// Intern CacheKey → stable `GlyphId` so the atlas cache can key on
     /// a small integer without knowing the cosmic-text encoding.
@@ -47,7 +53,13 @@ pub struct CosmicTextBackend {
 }
 
 impl CosmicTextBackend {
-    pub fn new(family: &str, font_size: f32, scale: f64, adjust_cell_height: Option<&str>) -> Self {
+    pub fn new(
+        family: &str,
+        font_size: f32,
+        scale: f64,
+        adjust_cell_height: Option<&str>,
+        font_features: &[String],
+    ) -> Self {
         let mut fs = FontSystem::new();
         let adjust_cell_height = parse_metric_modifier(adjust_cell_height);
         let metrics = compute_metrics(&mut fs, family, font_size, scale, adjust_cell_height);
@@ -59,6 +71,7 @@ impl CosmicTextBackend {
             scale,
             family: family.to_string(),
             adjust_cell_height,
+            font_features: parse_feature_tags(font_features),
             key_to_id: HashMap::with_hasher(FxBuildHasher),
             id_to_key: Vec::new(),
         }
@@ -113,34 +126,29 @@ impl TextBackend for CosmicTextBackend {
         self.refresh_metrics();
     }
 
-    fn shape_cell(&mut self, text: &str, attrs: FontAttrs, out: &mut Vec<ShapedGlyph>) {
+    fn set_font_features(&mut self, features: &[String]) {
+        self.font_features = parse_feature_tags(features);
+    }
+
+    fn shape_run(&mut self, text: &str, attrs: FontAttrs, out: &mut Vec<RunGlyph>) {
         if text.is_empty() {
             return;
         }
         let scaled = self.scaled_font_size();
         let cosmic_metrics = Metrics::new(scaled, self.metrics.cell_height);
-        let attrs = Attrs::new()
-            .family(Family::Name(&self.family))
-            .weight(if attrs.bold {
-                Weight::BOLD
-            } else {
-                Weight::NORMAL
-            })
-            .style(if attrs.italic {
-                Style::Italic
-            } else {
-                Style::Normal
-            });
+        let attrs = make_attrs(&self.family, &self.font_features, attrs);
 
         let mut buffer = Buffer::new(&mut self.fs, cosmic_metrics);
         buffer.set_text(&mut self.fs, text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.fs, false);
 
-        let keys: Vec<CacheKey> = buffer
+        // Two-step: gather (cluster, CacheKey) before interning so the
+        // borrow on `buffer.layout_runs()` ends before we touch `self`.
+        let pairs: Vec<(u16, CacheKey)> = buffer
             .layout_runs()
             .flat_map(|run| {
                 run.glyphs.iter().map(move |g| {
-                    CacheKey::new(
+                    let key = CacheKey::new(
                         g.font_id,
                         g.glyph_id,
                         g.font_size,
@@ -148,12 +156,19 @@ impl TextBackend for CosmicTextBackend {
                         g.font_weight,
                         g.cache_key_flags,
                     )
-                    .0
+                    .0;
+                    let cluster = u16::try_from(g.start).unwrap_or(u16::MAX);
+                    (cluster, key)
                 })
             })
             .collect();
 
-        out.extend(keys.into_iter().map(|k| ShapedGlyph { id: self.intern(k) }));
+        out.extend(pairs.into_iter().map(|(cluster, key)| RunGlyph {
+            glyph: ShapedGlyph {
+                id: self.intern(key),
+            },
+            cluster,
+        }));
     }
 
     fn rasterize(&mut self, glyph: GlyphId) -> Option<RasterizedGlyph> {
@@ -174,6 +189,44 @@ impl TextBackend for CosmicTextBackend {
             },
         })
     }
+}
+
+/// Build a cosmic-text [`Attrs`] tied to `family`'s lifetime. Returning
+/// from a `&self` method instead would broaden the borrow to all of
+/// `self`, blocking the `&mut self.fs` borrow that `shape_run` needs.
+fn make_attrs<'a>(family: &'a str, features: &[FeatureTag], attrs: FontAttrs) -> Attrs<'a> {
+    let mut font_features = FontFeatures::new();
+    for tag in features {
+        font_features.enable(*tag);
+    }
+    Attrs::new()
+        .family(Family::Name(family))
+        .weight(if attrs.bold {
+            Weight::BOLD
+        } else {
+            Weight::NORMAL
+        })
+        .style(if attrs.italic {
+            Style::Italic
+        } else {
+            Style::Normal
+        })
+        .font_features(font_features)
+}
+
+fn parse_feature_tags(features: &[String]) -> Vec<FeatureTag> {
+    let mut out = Vec::with_capacity(features.len());
+    for raw in features {
+        let bytes = raw.as_bytes();
+        if let Ok(tag) = <&[u8; 4]>::try_from(bytes) {
+            out.push(FeatureTag::new(tag));
+        } else {
+            log::warn!(
+                "ignoring font.features entry {raw:?} — OpenType tags must be exactly 4 ASCII bytes"
+            );
+        }
+    }
+    out
 }
 
 fn parse_metric_modifier(value: Option<&str>) -> Option<MetricModifier> {
@@ -356,6 +409,23 @@ mod tests {
         assert_eq!(apply_metric_modifier(18, MetricModifier::Percent(0.8)), 14);
         assert_eq!(apply_metric_modifier(18, MetricModifier::Absolute(3)), 21);
         assert_eq!(apply_metric_modifier(18, MetricModifier::Absolute(-30)), 0);
+    }
+
+    #[test]
+    fn parse_feature_tags_keeps_4byte_ascii_and_drops_others() {
+        let parsed = parse_feature_tags(&[
+            "calt".to_string(),
+            "liga".to_string(),
+            "ss01".to_string(),
+            // wrong length
+            "lig".to_string(),
+            "stylistic".to_string(),
+            String::new(),
+        ]);
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0].as_bytes(), b"calt");
+        assert_eq!(parsed[1].as_bytes(), b"liga");
+        assert_eq!(parsed[2].as_bytes(), b"ss01");
     }
 
     #[test]

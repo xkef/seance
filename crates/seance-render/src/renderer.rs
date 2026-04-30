@@ -18,6 +18,9 @@ pub struct RendererConfig {
     pub font_size: f32,
     pub adjust_cell_height: Option<String>,
     pub min_contrast: f32,
+    /// OpenType feature tags (`calt`, `liga`, …) enabled when shaping.
+    /// Tags shorter or longer than 4 bytes are dropped with a warn log.
+    pub font_features: Vec<String>,
     /// Inner gutter between window edges and the cell grid, in physical
     /// pixels. `[x, y]`. The area outside the grid is filled by the
     /// fullscreen bg pass with the effective theme background.
@@ -64,6 +67,7 @@ impl TerminalRenderer {
             config.font_size,
             config.scale,
             config.adjust_cell_height.as_deref(),
+            &config.font_features,
         ));
         let m = backend.metrics();
         let cell_size = [m.cell_width, m.cell_height];
@@ -171,6 +175,14 @@ impl TerminalRenderer {
         self.backend.set_adjust_cell_height(value);
         let m = self.backend.metrics();
         self.cell_size = [m.cell_width, m.cell_height];
+    }
+
+    /// Replace the active OpenType feature set. Drops every cached
+    /// shape result because the feature flags participate in the
+    /// glyph selection that the cache memoizes.
+    pub fn set_font_features(&mut self, features: &[String]) {
+        self.backend.set_font_features(features);
+        self.cell_builder.reset_glyphs();
     }
 
     /// Swap the theme. The theme is consumed CPU-side during the next

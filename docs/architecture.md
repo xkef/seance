@@ -108,25 +108,32 @@ Epic index:
 ### Font pipeline
 
 - **cosmic-text** [IMPLEMENTED] — wraps fontdb + rustybuzz + bidi. Shapes
-  grapheme runs per-cell.
+  contiguous same-attr cell runs as one unit, so multi-cell ligatures (`->`,
+  `=>`, `!=`) fuse correctly. User OpenType feature tags (`font.features`) flow
+  through `Attrs.font_features`.
 - **SwashCache** [IMPLEMENTED] — rasterizes outlines (COLR v0/v1, SVG, CBDT).
 - **GlyphAtlas** [IMPLEMENTED] — two planes: grayscale R8 (2048×2048) and color
   RGBA8 (1024×1024). `etagere` rectangle packing, per-plane `dirty` flag.
 - **GlyphCache** [IMPLEMENTED] — `FxHashMap<cosmic_text::CacheKey, AtlasEntry>`.
-- **Shape cache** keyed by `(font, style, codepoint_run_hash)` [PLANNED:
-  [M2][m2]] — bucketed LRU, avoids re-shaping unchanged rows across frames.
+- **Shape cache** [IMPLEMENTED] — bucketed LRU keyed on
+  `(font flags, run text bytes)`. Cached values store each glyph alongside its
+  **relative cluster** (byte offset within the run), so identical run text at
+  any column / row hits the same entry; the caller redistributes glyphs to cells
+  using the cluster.
 - **Procedural sprite registry** (codepoints > U+10FFFF, U+2500–U+259F,
   U+E0B0–U+E0B3, legacy computing, braille) [PLANNED: [M3][m3]] — rasterized via
   `tiny-skia`, intercepted before cosmic-text shaping.
 
 ### CellBuilder
 
-- **Current** [IMPLEMENTED] — iterates entire VT grid each frame, shapes every
-  visible cell, writes `text_cells` SSBO data; `bg_cells` upload is
-  dirty-row-batched (#196).
+- **Current** [IMPLEMENTED] — iterates entire VT grid each frame, groups
+  contiguous same-attr cells into runs, shapes each run through the shape cache,
+  writes `text_cells` SSBO data; `bg_cells` upload is dirty-row-batched (#196).
+  Run boundaries split on row change, font-attrs change, or any non-unit column
+  gap (so wide CJK chars and empty cells terminate adjacent ASCII runs without
+  regressing layout).
 - **Target** — takes `&[PositionedPane]` [PLANNED: [M6][m6]], only iterates
-  dirty rows for text rebuild [PLANNED: [M2][m2]], skips shape when cached
-  [PLANNED: [M2][m2]].
+  dirty rows for text rebuild [PLANNED: [M2][m2]].
 
 ### CellText instance layout (matches WGSL, 32 bytes)
 

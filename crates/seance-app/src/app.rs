@@ -178,6 +178,7 @@ impl ApplicationHandler<UserEvent> for App {
             font_size: self.font_size,
             adjust_cell_height: self.config.font.adjust_cell_height.clone(),
             min_contrast: self.config.font.min_contrast,
+            font_features: self.config.font.features.clone(),
             window_padding: physical_window_padding(&self.config, window.scale_factor()),
             background_opacity: self.config.window.background_opacity,
             theme: theme.clone(),
