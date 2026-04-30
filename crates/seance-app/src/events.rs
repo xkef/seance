@@ -23,7 +23,7 @@ impl App {
         let modes = self
             .window_state
             .as_ref()
-            .map(|ws| ws.terminal_modes())
+            .map(WindowState::terminal_modes)
             .unwrap_or_default();
         let modifiers = self
             .window_state

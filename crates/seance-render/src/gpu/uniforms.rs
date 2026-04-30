@@ -15,9 +15,9 @@ pub enum CursorShape {
 impl From<CursorStyle> for CursorShape {
     fn from(s: CursorStyle) -> Self {
         match s {
-            CursorStyle::Block => CursorShape::Block,
-            CursorStyle::Bar => CursorShape::Bar,
-            CursorStyle::Underline => CursorShape::Underline,
+            CursorStyle::Block => Self::Block,
+            CursorStyle::Bar => Self::Bar,
+            CursorStyle::Underline => Self::Underline,
         }
     }
 }
@@ -25,9 +25,9 @@ impl From<CursorStyle> for CursorShape {
 impl From<seance_vt::CursorShape> for CursorShape {
     fn from(s: seance_vt::CursorShape) -> Self {
         match s {
-            seance_vt::CursorShape::Block => CursorShape::Block,
-            seance_vt::CursorShape::Bar => CursorShape::Bar,
-            seance_vt::CursorShape::Underline => CursorShape::Underline,
+            seance_vt::CursorShape::Block => Self::Block,
+            seance_vt::CursorShape::Bar => Self::Bar,
+            seance_vt::CursorShape::Underline => Self::Underline,
         }
     }
 }
