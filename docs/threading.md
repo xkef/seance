@@ -369,25 +369,24 @@ Child-exit ordering: the IO thread observes `read() == 0` (EOF) and sends
 event-loop iteration; if the user has already closed the window, the event is
 dropped silently.
 
-### Send/Sync audit (current blocker, [#166])
+### Send/Sync audit ([#166])
 
-`seance-vt::Terminal` is `!Send` today
-(`crates/seance-vt/src/terminal.rs:78,82`):
+[#166] makes `seance-vt::Terminal` movable to the future IO thread:
 
-- `response_buf: Rc<RefCell<Vec<u8>>>` — `Rc` is `!Send`. Captured by the
-  `vt.on_pty_write` callback.
-- `writer: RefCell<Box<dyn Write + Send>>` — `RefCell` is `!Sync`; fine for
-  single-owner move, but only if we drop the `&self`-takes-lock pattern.
+- `response_buf` is `Arc<Mutex<Vec<u8>>>`, so the `vt.on_pty_write` callback
+  can satisfy libghostty-vt's `Send` callback bound.
+- `writer` is a plain `Box<dyn Write + Send>`, and `Terminal::write` takes
+  `&mut self`.
+- selection state is UI-owned; `Terminal::selection_text(&Selection)` reads the
+  live VT grid for copy operations.
+- `libghostty-vt` is pinned to the `xkef/libghostty-rs` fork revision that adds
+  static-lifetime `Send` for `Terminal` and `RenderState` without adding
+  `Sync`.
 
-The PNG decoder install (`terminal.rs:62-67`) is thread-local inside
-libghostty-vt, so whichever thread owns the VT must be the one to call
-`set_png_decoder`. Today that's the UI thread; under v1 it must move to the IO
-thread spawn callsite.
-
-[#166] is the prerequisite: rewrite `Terminal` so an `assert_send::<Terminal>()`
-test compile-passes, and move the PNG decoder install to a per-thread callable.
-The upstream `libghostty-vt::Terminal` `Send` story also gets audited there — if
-`Uzaaft/libghostty-rs` lacks `unsafe impl Send`, we propose a PR.
+The PNG decoder install is exposed as
+`install_png_decoder_for_this_thread()`. `Terminal::spawn` still calls it for
+the current UI-owned terminal; the IO-thread spawn in [#167] must call the same
+function on the owning IO thread.
 
 ---
 
@@ -430,7 +429,7 @@ layout off-thread, ship the result back via a channel, render on the foreground.
 | --- | ----------------------------------------------- | ------------------------------------------------------------------------------ |
 | 1   | `Mutex` vs `RwLock` vs `parking_lot::FairMutex` | `parking_lot::FairMutex` — Alacritty pattern, avoids reader starvation         |
 | 2   | Bounded vs unbounded `mpsc`                     | `Write` unbounded (or 4096-cap); coalesceable types use slots                  |
-| 3   | Is `libghostty-vt::Terminal` `Send`?            | audit deferred to [#166]; PR upstream if necessary                             |
+| 3   | Is `libghostty-vt::Terminal` `Send`?            | yes via `xkef/libghostty-rs` fork rev used by [#166]; still `!Sync`            |
 | 4   | PNG decoder install location                    | move to IO-thread spawn (`install_png_decoder_for_this_thread()`)              |
 | 5   | Selection state ownership                       | hoist to UI side; `selection_text(&Selection)` reads under lock                |
 | 6   | `crossbeam::channel` or `std::sync::mpsc`?      | `std::sync::mpsc`; we don't use `select!` and dependency surface stays smaller |

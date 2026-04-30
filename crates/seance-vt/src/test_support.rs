@@ -4,8 +4,7 @@
 //! `seance-render-test`. Do not widen without coordinating with the
 //! harness crate.
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use libghostty_vt::terminal::Mode;
 use libghostty_vt::{Terminal as VtTerminal, TerminalOptions};
@@ -29,7 +28,7 @@ const MAX_SCROLLBACK: usize = 10_000;
 /// the production `LibGhosttyFrameSource`.
 pub struct HeadlessTerminal {
     vt: Box<VtTerminal<'static, 'static>>,
-    responses: Rc<RefCell<Vec<u8>>>,
+    responses: Arc<Mutex<Vec<u8>>>,
 }
 
 impl HeadlessTerminal {
@@ -48,10 +47,14 @@ impl HeadlessTerminal {
         // virtual-placement rendering is out of scope for the harness.
         vt.resize(cols, rows, 0, 0).ok()?;
 
-        let responses = Rc::new(RefCell::new(Vec::new()));
-        let sink = Rc::clone(&responses);
-        vt.on_pty_write(move |_, data| sink.borrow_mut().extend_from_slice(data))
-            .ok()?;
+        let responses = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&responses);
+        vt.on_pty_write(move |_, data| {
+            sink.lock()
+                .expect("headless terminal response buffer mutex poisoned")
+                .extend_from_slice(data);
+        })
+        .ok()?;
 
         Some(Self { vt, responses })
     }
@@ -64,7 +67,11 @@ impl HeadlessTerminal {
     /// Drain any VT-originated response bytes accumulated since the
     /// last call.
     pub fn take_responses(&self) -> Vec<u8> {
-        self.responses.take()
+        let mut responses = self
+            .responses
+            .lock()
+            .expect("headless terminal response buffer mutex poisoned");
+        std::mem::take(&mut *responses)
     }
 
     pub fn cols(&self) -> u16 {

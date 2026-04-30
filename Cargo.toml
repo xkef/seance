@@ -22,7 +22,7 @@ collapsible_if = "warn"
 log = "0.4"
 env_logger = "0.11"
 libc = "0.2"
-libghostty-vt = { git = "https://github.com/Uzaaft/libghostty-rs", rev = "dfac6f3e", default-features = false, features = ["kitty-graphics", "png"] }
+libghostty-vt = { git = "https://github.com/xkef/libghostty-rs", rev = "02c0b67331589479cbcdee9dd7ed38c0c2ff6a7d", default-features = false, features = ["kitty-graphics", "png"] }
 insta = { version = "1", features = ["glob", "yaml"] }
 pretty_assertions = "1"
 rand_pcg = "0.3"

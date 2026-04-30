@@ -21,5 +21,5 @@ pub use frame::{
 };
 pub use frame_source::LibGhosttyFrameSource;
 pub use modes::TerminalModes;
-pub use selection::GridPos;
-pub use terminal::Terminal;
+pub use selection::{GridPos, Selection, SelectionGranularity};
+pub use terminal::{Terminal, install_png_decoder_for_this_thread};
