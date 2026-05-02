@@ -12,7 +12,7 @@ use winit::event::Modifiers;
 use winit::window::Window;
 
 use seance_render::{RenderInputs, TerminalRenderer};
-use seance_vt::{CursorShape as VtCursorShape, Terminal, TerminalModes};
+use seance_vt::{CursorShape as VtCursorShape, GridPos, Selection, Terminal, TerminalModes};
 
 use crate::mouse::MouseState;
 
@@ -26,6 +26,7 @@ pub(crate) struct WindowState {
     pub(crate) content_dirty: bool,
     pub(crate) occluded: bool,
     pub(crate) mouse: MouseState,
+    selection: Option<Selection>,
     pub(crate) blink_on: bool,
     pub(crate) last_blink_edge: Instant,
     // `None` until the VT has reported a shape via DECSCUSR; then the
@@ -52,6 +53,7 @@ impl WindowState {
             content_dirty: true,
             occluded: false,
             mouse: MouseState::default(),
+            selection: None,
             blink_on: true,
             last_blink_edge: Instant::now(),
             last_vt_cursor_shape: None,
@@ -95,20 +97,55 @@ impl WindowState {
     }
 
     pub(crate) fn has_selection(&self) -> bool {
-        self.terminal.has_selection()
+        self.selection.is_some()
     }
 
     pub(crate) fn clear_selection(&mut self) {
-        self.terminal.clear_selection();
+        self.selection = None;
         self.render_inputs.selection = None;
     }
 
+    pub(crate) fn selection_range(&self) -> Option<(GridPos, GridPos)> {
+        self.selection.as_ref().map(Selection::ordered_range)
+    }
+
     pub(crate) fn sync_selection_to_overlay(&mut self) {
-        self.render_inputs.selection = self.terminal.selection_range();
+        self.render_inputs.selection = self.selection_range();
+    }
+
+    pub(crate) fn start_selection(&mut self, col: u16, row: u16) {
+        self.selection = Some(Selection::new(GridPos { col, row }));
+    }
+
+    pub(crate) fn start_word_selection(&mut self, col: u16, row: u16) {
+        self.selection = Some(Selection::new_word(GridPos { col, row }));
+    }
+
+    pub(crate) fn start_line_selection(&mut self, row: u16) {
+        self.selection = Some(Selection::new_line(GridPos { col: 0, row }));
+    }
+
+    pub(crate) fn update_selection(&mut self, col: u16, row: u16) {
+        if let Some(selection) = &mut self.selection {
+            selection.update(GridPos { col, row });
+        }
+    }
+
+    pub(crate) fn select_all(&mut self) {
+        let (cols, rows) = self.renderer.grid_size();
+        let mut selection = Selection::new_line(GridPos { col: 0, row: 0 });
+        selection.update(GridPos {
+            col: cols.saturating_sub(1),
+            row: rows.saturating_sub(1),
+        });
+        self.selection = Some(selection);
     }
 
     pub(crate) fn copy_selection_to_clipboard(&mut self) {
-        let Some(text) = self.terminal.selection_text() else {
+        let Some(selection) = self.selection.as_ref() else {
+            return;
+        };
+        let Some(text) = self.terminal.selection_text(selection) else {
             return;
         };
         if text.is_empty() {
@@ -119,7 +156,7 @@ impl WindowState {
         }
     }
 
-    pub(crate) fn paste_from_clipboard(&self) {
+    pub(crate) fn paste_from_clipboard(&mut self) {
         let Ok(mut cb) = arboard::Clipboard::new() else {
             return;
         };

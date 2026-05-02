@@ -76,7 +76,7 @@ impl App {
             }
             AppCommand::SelectAll => {
                 if let Some(ws) = self.ws_mut() {
-                    ws.terminal.select_all();
+                    ws.select_all();
                     ws.sync_selection_to_overlay();
                 }
             }
@@ -124,7 +124,7 @@ impl App {
             return;
         }
         let (col, row) = ws.renderer.pixel_to_grid(position.x, position.y);
-        ws.terminal.update_selection(col, row);
+        ws.update_selection(col, row);
         ws.sync_selection_to_overlay();
         ws.mark_dirty();
     }
@@ -156,9 +156,9 @@ fn handle_mouse_press(ws: &mut WindowState) {
         .pixel_to_grid(ws.mouse.cursor_pos.x, ws.mouse.cursor_pos.y);
     let clicks = ws.mouse.register_click(col, row);
     match clicks {
-        1 => ws.terminal.start_selection(col, row),
-        2 => ws.terminal.start_word_selection(col, row),
-        3 => ws.terminal.start_line_selection(row),
+        1 => ws.start_selection(col, row),
+        2 => ws.start_word_selection(col, row),
+        3 => ws.start_line_selection(row),
         _ => {}
     }
     ws.sync_selection_to_overlay();

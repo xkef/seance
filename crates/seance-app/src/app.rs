@@ -84,7 +84,8 @@ impl App {
         }
         if ws.content_dirty {
             ws.content_dirty = false;
-            let mut source = LibGhosttyFrameSource::new(&mut ws.terminal);
+            let selection = ws.selection_range();
+            let mut source = LibGhosttyFrameSource::new(&mut ws.terminal, selection);
             // Cache the VT's DECSCUSR-tracked shape (if any) before the
             // renderer consumes the source — mode changes in neovim arrive
             // as PTY bytes that set `content_dirty`, so this branch runs

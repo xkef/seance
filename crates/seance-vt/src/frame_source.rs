@@ -19,11 +19,12 @@ use crate::terminal::Terminal;
 
 pub struct LibGhosttyFrameSource<'a> {
     term: &'a mut Terminal,
+    selection: Option<(GridPos, GridPos)>,
 }
 
 impl<'a> LibGhosttyFrameSource<'a> {
-    pub fn new(term: &'a mut Terminal) -> Self {
-        Self { term }
+    pub fn new(term: &'a mut Terminal, selection: Option<(GridPos, GridPos)>) -> Self {
+        Self { term, selection }
     }
 }
 
@@ -62,7 +63,7 @@ impl FrameSource for LibGhosttyFrameSource<'_> {
     }
 
     fn selection(&mut self) -> Option<(GridPos, GridPos)> {
-        self.term.selection_range()
+        self.selection
     }
 
     fn visit_cells(&mut self, visitor: &mut dyn CellVisitor) {

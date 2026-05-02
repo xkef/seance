@@ -1,9 +1,7 @@
-//! High-level terminal: VT emulator + PTY + selection.
+//! High-level terminal: VT emulator + PTY.
 
-use std::cell::RefCell;
 use std::io::{Read, Write};
-use std::rc::Rc;
-use std::sync::Once;
+use std::sync::{Arc, Mutex};
 
 use libghostty_vt::alloc::{Allocator, Bytes};
 use libghostty_vt::kitty::graphics::{self, DecodePng, DecodedImage};
@@ -57,17 +55,15 @@ impl DecodePng for PngDecoder {
     }
 }
 
-/// Install the PNG decoder. Safe to call repeatedly; only takes effect once.
+/// Install the PNG decoder for the current thread.
+///
 /// The decoder is thread-local inside libghostty-vt, so this must run on the
 /// thread that owns the terminal.
-fn install_png_decoder_once() {
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        let _ = graphics::set_png_decoder(Some(PngDecoder));
-    });
+pub fn install_png_decoder_for_this_thread() {
+    let _ = graphics::set_png_decoder(Some(Box::new(PngDecoder)));
 }
 
-/// A terminal session: VT emulator, PTY, and text selection state.
+/// A terminal session: VT emulator and PTY.
 pub struct Terminal {
     vt: Box<VtTerminal<'static, 'static>>,
     /// Persistent render state. libghostty-vt's dirty tracking only
@@ -75,14 +71,13 @@ pub struct Terminal {
     /// `update(vt)` drains the VT's dirty set into the render state, and
     /// per-row flags remain until the caller clears them.
     render_state: RenderState<'static>,
-    response_buf: Rc<RefCell<Vec<u8>>>,
+    response_buf: Arc<Mutex<Vec<u8>>>,
     /// `None` after [`Self::take_reader`]: the reader has been moved off
     /// to a dedicated thread that does blocking PTY reads.
     reader: Option<Box<dyn Read + Send>>,
-    writer: RefCell<Box<dyn Write + Send>>,
+    writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
-    selection: Option<Selection>,
     /// Per-cell pixel dimensions as last passed to `vt.resize()`. Needed
     /// to convert virtual-placement cell coordinates into pixel rects.
     cell_width_px: u32,
@@ -92,7 +87,7 @@ pub struct Terminal {
 impl Terminal {
     /// Spawn a new shell in a PTY.
     pub fn spawn(cols: u16, rows: u16, pixel_width: u16, pixel_height: u16) -> Option<Self> {
-        install_png_decoder_once();
+        install_png_decoder_for_this_thread();
 
         let mut vt = Box::new(
             VtTerminal::new(TerminalOptions {
@@ -118,10 +113,14 @@ impl Terminal {
         let (cell_w, cell_h) = cell_px(cols, rows, pixel_width, pixel_height);
         vt.resize(cols, rows, cell_w, cell_h).ok()?;
 
-        let response_buf = Rc::new(RefCell::new(Vec::new()));
-        let buf = Rc::clone(&response_buf);
-        vt.on_pty_write(move |_, data| buf.borrow_mut().extend_from_slice(data))
-            .ok()?;
+        let response_buf = Arc::new(Mutex::new(Vec::new()));
+        let buf = Arc::clone(&response_buf);
+        vt.on_pty_write(move |_, data| {
+            buf.lock()
+                .expect("terminal response buffer mutex poisoned")
+                .extend_from_slice(data);
+        })
+        .ok()?;
 
         let pair = native_pty_system()
             .openpty(PtySize {
@@ -146,10 +145,9 @@ impl Terminal {
             render_state,
             response_buf,
             reader: Some(reader),
-            writer: RefCell::new(writer),
+            writer,
             master: pair.master,
             child,
-            selection: None,
             cell_width_px: cell_w,
             cell_height_px: cell_h,
         })
@@ -173,9 +171,15 @@ impl Terminal {
         if !data.is_empty() {
             self.vt.vt_write(data);
         }
-        let responses = self.response_buf.take();
+        let responses = {
+            let mut buf = self
+                .response_buf
+                .lock()
+                .expect("terminal response buffer mutex poisoned");
+            std::mem::take(&mut *buf)
+        };
         if !responses.is_empty() {
-            let _ = self.writer.borrow_mut().write_all(&responses);
+            let _ = self.writer.write_all(&responses);
         }
     }
 
@@ -194,8 +198,8 @@ impl Terminal {
     }
 
     /// Write raw bytes to the PTY (keyboard input, paste, etc.).
-    pub fn write(&self, data: &[u8]) {
-        let _ = self.writer.borrow_mut().write_all(data);
+    pub fn write(&mut self, data: &[u8]) {
+        let _ = self.writer.write_all(data);
     }
 
     pub fn is_alive(&mut self) -> bool {
@@ -244,53 +248,8 @@ impl Terminal {
         }
     }
 
-    // -- Selection ----------------------------------------------------
-
-    pub fn start_selection(&mut self, col: u16, row: u16) {
-        self.selection = Some(Selection::new(GridPos { col, row }));
-    }
-
-    pub fn start_word_selection(&mut self, col: u16, row: u16) {
-        self.selection = Some(Selection::new_word(GridPos { col, row }));
-    }
-
-    pub fn start_line_selection(&mut self, row: u16) {
-        self.selection = Some(Selection::new_line(GridPos { col: 0, row }));
-    }
-
-    pub fn update_selection(&mut self, col: u16, row: u16) {
-        if let Some(sel) = &mut self.selection {
-            sel.update(GridPos { col, row });
-        }
-    }
-
-    pub fn has_selection(&self) -> bool {
-        self.selection.is_some()
-    }
-
-    pub fn selection_range(&self) -> Option<(GridPos, GridPos)> {
-        self.selection.as_ref().map(Selection::ordered_range)
-    }
-
-    pub fn clear_selection(&mut self) {
-        self.selection = None;
-    }
-
-    /// Select the entire visible grid as a line selection.
-    pub fn select_all(&mut self) {
-        let cols = self.vt.cols().unwrap_or(80);
-        let rows = self.vt.rows().unwrap_or(24);
-        let mut sel = Selection::new_line(GridPos { col: 0, row: 0 });
-        sel.update(GridPos {
-            col: cols.saturating_sub(1),
-            row: rows.saturating_sub(1),
-        });
-        self.selection = Some(sel);
-    }
-
     /// Extract the selected text from the live VT grid.
-    pub fn selection_text(&mut self) -> Option<String> {
-        let sel = self.selection.as_ref()?;
+    pub fn selection_text(&mut self, sel: &Selection) -> Option<String> {
         let (start, end) = sel.ordered_range();
         let granularity = sel.granularity();
         let cols = self.vt.cols().unwrap_or(80);
@@ -437,5 +396,34 @@ fn column_range(
             let ce = if row_idx == end.row { end.col } else { last };
             (cs, ce)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use libghostty_vt::RenderState;
+    use libghostty_vt::Terminal as VtTerminal;
+
+    use super::*;
+
+    #[test]
+    fn terminal_is_send() {
+        fn assert_send<T: Send>() {}
+
+        assert_send::<Terminal>();
+        assert_send::<VtTerminal<'static, 'static>>();
+        assert_send::<RenderState<'static>>();
+    }
+
+    #[test]
+    fn terminal_can_be_constructed_on_worker_thread() {
+        std::thread::spawn(|| {
+            install_png_decoder_for_this_thread();
+            let mut terminal =
+                Terminal::spawn(24, 5, 240, 80).expect("worker thread should construct terminal");
+            terminal.feed(b"\x1b[c");
+        })
+        .join()
+        .expect("worker thread should not panic");
     }
 }
