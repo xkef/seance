@@ -1,6 +1,6 @@
-//! Bucketed-LRU cache for [`TextBackend::shape_cell`] output.
+//! Bucketed-LRU cache for [`TextBackend::shape_run`] output.
 //!
-//! [`TextBackend::shape_cell`]: super::backend::TextBackend::shape_cell
+//! [`TextBackend::shape_run`]: super::backend::TextBackend::shape_run
 //!
 //! Memoizes shape output keyed by `(font flags, text bytes)`:
 //!
@@ -8,13 +8,13 @@
 //! - Per-cache monotonic generation counter for LRU; on miss with a full
 //!   bucket the lowest-generation slot is evicted.
 //! - Total capacity is 2048 entries — comfortable for typical terminal
-//!   working sets (~300–400 unique cells × style flags).
+//!   working sets (~300–400 unique runs × style flags).
 //! - Inline key storage of [`KEY_INLINE_BYTES`] bytes. Keys longer than
 //!   that bypass the cache and call the backend directly.
 //!
 //! The key omits fg/bg because color is applied post-shape in
 //! [`super::cell_builder`]: `CellText.color` is baked from `req.fg`
-//! after `shape_cell` returns. Shaping is color-agnostic; including
+//! after `shape_run` returns. Shaping is color-agnostic; including
 //! colors would multiply key cardinality by ~256³ for truecolor content
 //! with no correctness benefit.
 
@@ -260,7 +260,10 @@ mod tests {
     use crate::text::backend::GlyphId;
 
     fn g(id: u64) -> ShapedGlyph {
-        ShapedGlyph { id: GlyphId(id) }
+        ShapedGlyph {
+            id: GlyphId(id),
+            cluster: 0,
+        }
     }
 
     fn attrs(bold: bool, italic: bool) -> FontAttrs {
@@ -288,7 +291,7 @@ mod tests {
     fn hit_appends_to_caller_scratch() {
         // The `lookup_into` contract is "extend `out`" — it does not
         // clear, since the caller is responsible for `scratch.clear()`
-        // before the call (matching `shape_cell`'s own contract).
+        // before the call (matching `shape_run`'s own contract).
         let mut cache = ShapeCache::new();
         cache.insert("X", attrs(false, false), &[g(7), g(8)]);
         let mut out = vec![g(99)];
@@ -444,7 +447,7 @@ mod tests {
 
     #[test]
     fn empty_shape_results_round_trip() {
-        // `shape_cell` returns zero glyphs for whitespace-only cells;
+        // `shape_run` returns zero glyphs for whitespace-only runs;
         // the cache must round-trip that as a hit with a zero-length
         // result (no allocation).
         let mut cache = ShapeCache::new();

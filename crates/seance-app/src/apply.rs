@@ -17,12 +17,17 @@ impl App {
         &mut self,
         font_size_changed: bool,
         adjust_cell_height_changed: bool,
+        adjust_cell_width_changed: bool,
     ) {
         let font_size = self.font_size;
-        let adjust = self.config.font.adjust_cell_height.clone();
+        let adjust_height = self.config.font.adjust_cell_height.clone();
+        let adjust_width = self.config.font.adjust_cell_width.clone();
         if let Some(ws) = self.ws_mut() {
             if adjust_cell_height_changed {
-                ws.renderer.set_adjust_cell_height(adjust.as_deref());
+                ws.renderer.set_adjust_cell_height(adjust_height.as_deref());
+            }
+            if adjust_cell_width_changed {
+                ws.renderer.set_adjust_cell_width(adjust_width.as_deref());
             }
             if font_size_changed {
                 ws.renderer.set_font_size(font_size);

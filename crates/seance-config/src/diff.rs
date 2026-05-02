@@ -29,6 +29,15 @@ pub struct ConfigDiff {
     /// `font.adjust_cell_height` changed — caller must recompute cell
     /// metrics and reflow the PTY so rows stay in sync with the renderer.
     pub font_adjust_cell_height_changed: bool,
+    /// `font.adjust_cell_width` changed — caller must recompute cell
+    /// metrics and reflow the PTY so cols stay in sync with the renderer.
+    pub font_adjust_cell_width_changed: bool,
+    /// `font.features` changed — caller must invalidate shape caches and
+    /// rebuild the next frame.
+    pub font_features_changed: bool,
+    /// `font.fallback` changed — caller must invalidate shape caches so the
+    /// next miss reconsiders the new fallback list.
+    pub font_fallback_changed: bool,
     /// `window.padding_x|y` changed — caller must push the new padding to
     /// the renderer and reflow the PTY (cols/rows shrink when padding grows).
     pub window_padding_changed: bool,
@@ -48,6 +57,10 @@ impl ConfigDiff {
         let font_family_changed = old.font.family != new.font.family;
         let font_adjust_cell_height_changed =
             old.font.adjust_cell_height != new.font.adjust_cell_height;
+        let font_adjust_cell_width_changed =
+            old.font.adjust_cell_width != new.font.adjust_cell_width;
+        let font_features_changed = old.font.features != new.font.features;
+        let font_fallback_changed = old.font.fallback != new.font.fallback;
 
         let window_padding_changed = old.window.padding_x != new.window.padding_x
             || old.window.padding_y != new.window.padding_y;
@@ -68,6 +81,9 @@ impl ConfigDiff {
             font_size_changed,
             font_family_changed,
             font_adjust_cell_height_changed,
+            font_adjust_cell_width_changed,
+            font_features_changed,
+            font_fallback_changed,
             window_padding_changed,
             repaint_only,
             input_changed,
@@ -80,6 +96,9 @@ impl ConfigDiff {
             || self.font_size_changed
             || self.font_family_changed
             || self.font_adjust_cell_height_changed
+            || self.font_adjust_cell_width_changed
+            || self.font_features_changed
+            || self.font_fallback_changed
             || self.window_padding_changed
             || self.repaint_only
             || self.input_changed)
@@ -140,6 +159,37 @@ mod tests {
         assert!(d.font_adjust_cell_height_changed);
         assert!(!d.font_size_changed);
         assert!(!d.repaint_only);
+    }
+
+    #[test]
+    fn font_adjust_cell_width_change_is_detected() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.font.adjust_cell_width = Some("10%".to_string());
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.font_adjust_cell_width_changed);
+        assert!(!d.font_size_changed);
+        assert!(!d.font_adjust_cell_height_changed);
+    }
+
+    #[test]
+    fn font_features_change_is_detected() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.font.features = vec!["calt".to_string(), "ss01".to_string()];
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.font_features_changed);
+        assert!(!d.font_size_changed);
+    }
+
+    #[test]
+    fn font_fallback_change_is_detected() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.font.fallback = vec!["Apple Color Emoji".to_string()];
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.font_fallback_changed);
+        assert!(!d.font_size_changed);
     }
 
     #[test]
