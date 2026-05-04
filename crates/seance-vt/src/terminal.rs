@@ -7,13 +7,14 @@ use libghostty_vt::alloc::{Allocator, Bytes};
 use libghostty_vt::kitty::graphics::{self, DecodePng, DecodedImage};
 use libghostty_vt::render::{CellIterator, Dirty, RowIterator};
 use libghostty_vt::style::RgbColor;
-use libghostty_vt::terminal::{Mode, ScrollViewport};
+use libghostty_vt::terminal::ScrollViewport;
 use libghostty_vt::{RenderState, Terminal as VtTerminal, TerminalOptions};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use crate::frame::DirtySnapshot;
 use crate::modes::TerminalModes;
 use crate::selection::{GridPos, Selection, SelectionGranularity};
+use crate::snapshot::VtSnapshot;
 
 const READ_CHUNK: usize = 4096;
 const MAX_SCROLLBACK: usize = 10_000;
@@ -239,13 +240,17 @@ impl Terminal {
     }
 
     pub fn modes(&self) -> TerminalModes {
-        let mode = |m| self.vt.mode(m).unwrap_or(false);
-        TerminalModes {
-            cursor_keys: mode(Mode::DECCKM),
-            mouse_tracking: self.vt.is_mouse_tracking().unwrap_or(false),
-            mouse_format_sgr: mode(Mode::SGR_MOUSE),
-            bracketed_paste: mode(Mode::BRACKETED_PASTE),
-        }
+        crate::frame_source::terminal_modes(&self.vt)
+    }
+
+    /// Copy the current live VT render state into an owned full-grid snapshot.
+    pub fn snapshot(&mut self) -> Option<VtSnapshot> {
+        crate::frame_source::build_snapshot_from_parts(
+            &mut self.vt,
+            &mut self.render_state,
+            self.cell_width_px,
+            self.cell_height_px,
+        )
     }
 
     /// Extract the selected text from the live VT grid.
@@ -401,19 +406,7 @@ fn column_range(
 
 #[cfg(test)]
 mod tests {
-    use libghostty_vt::RenderState;
-    use libghostty_vt::Terminal as VtTerminal;
-
     use super::*;
-
-    #[test]
-    fn terminal_is_send() {
-        fn assert_send<T: Send>() {}
-
-        assert_send::<Terminal>();
-        assert_send::<VtTerminal<'static, 'static>>();
-        assert_send::<RenderState<'static>>();
-    }
 
     #[test]
     fn terminal_can_be_constructed_on_worker_thread() {

@@ -1,8 +1,8 @@
 //! `App` — the top-level winit `ApplicationHandler`.
 //!
 //! Owns process-lifetime state (config, input handler, config watcher) and
-//! a single `window_state: Option<WindowState>` for everything that exists
-//! only while a window is up.
+//! a single `surface: Option<SurfaceState>` for everything that exists only
+//! while an OS window is up.
 //!
 //! Peer modules:
 //! - `events.rs` — winit event handlers (keyboard, mouse).
@@ -22,14 +22,16 @@ use winit::window::{Window, WindowId};
 use seance_config::Config;
 use seance_input::InputHandler;
 use seance_render::{RenderInputs, RendererConfig, TerminalRenderer};
-use seance_vt::{CursorShape as VtCursorShape, FrameSource, LibGhosttyFrameSource, Terminal};
+use seance_vt::{
+    CursorShape as VtCursorShape, FrameSource, SnapshotFrameSource, VtEvent, VtSessionOptions,
+    spawn_vt_session,
+};
 
 use crate::UserEvent;
-use crate::io::spawn_pty_reader;
 use crate::keybinds::Keybinds;
 use crate::platform;
+use crate::surface_state::SurfaceState;
 use crate::watcher::ConfigWatcher;
-use crate::window_state::WindowState;
 
 /// Half-period of the cursor blink cycle; on + off = 1 s. Drives the
 /// deadline scheduler — when blink is enabled, the next animation wake
@@ -37,7 +39,7 @@ use crate::window_state::WindowState;
 const BLINK_HALF_PERIOD: Duration = Duration::from_millis(500);
 
 pub(crate) struct App {
-    pub(crate) window_state: Option<WindowState>,
+    pub(crate) surface: Option<SurfaceState>,
     pub(crate) input: InputHandler,
     pub(crate) keybinds: Keybinds,
     pub(crate) config: Config,
@@ -54,7 +56,7 @@ impl App {
             config.input.macos_option_as_alt,
         ));
         Self {
-            window_state: None,
+            surface: None,
             input,
             keybinds: Keybinds::new(),
             config,
@@ -64,79 +66,80 @@ impl App {
         }
     }
 
-    /// Shortcut — most methods run only while a window is up.
-    pub(crate) fn ws_mut(&mut self) -> Option<&mut WindowState> {
-        self.window_state.as_mut()
+    /// Shortcut — most methods run only while a surface is up.
+    pub(crate) fn surface_mut(&mut self) -> Option<&mut SurfaceState> {
+        self.surface.as_mut()
     }
 
     pub(crate) fn mark_dirty(&mut self) {
-        if let Some(ws) = self.ws_mut() {
-            ws.mark_dirty();
+        if let Some(surface) = self.surface_mut() {
+            surface.mark_dirty();
         }
     }
 
     fn draw(&mut self) {
-        let Some(ws) = self.window_state.as_mut() else {
+        let Some(surface) = self.surface.as_mut() else {
             return;
         };
-        if ws.occluded {
+        if surface.occluded {
             return;
         }
-        if ws.content_dirty {
-            ws.content_dirty = false;
-            let selection = ws.selection_range();
-            let mut source = LibGhosttyFrameSource::new(&mut ws.terminal, selection);
-            // Cache the VT's DECSCUSR-tracked shape (if any) before the
-            // renderer consumes the source — mode changes in neovim arrive
-            // as PTY bytes that set `content_dirty`, so this branch runs
-            // on every mode transition.
-            ws.last_vt_cursor_shape = source.cursor().shape;
-            ws.renderer.update_frame(&mut source);
+        if surface.content_dirty {
+            surface.content_dirty = false;
+            if let Some(snapshot) = surface.pane.latest_snapshot.as_ref() {
+                let mut source = SnapshotFrameSource::new(snapshot);
+                // Cache the VT's DECSCUSR-tracked shape (if any) before the
+                // renderer consumes the source — mode changes in neovim arrive
+                // as actor-published snapshots that set `content_dirty`, so
+                // this branch runs on every mode transition.
+                surface.last_vt_cursor_shape = source.cursor().shape;
+                surface.renderer.update_frame(&mut source);
+            }
         }
         // Prefer the VT-reported shape; fall back to the user's configured
         // default when the VT has no opinion. Refreshed every frame so that
         // hot-reload of `cursor.style` is picked up without extra wiring.
-        ws.render_inputs.cursor_shape = ws
+        surface.render_inputs.cursor_shape = surface
             .last_vt_cursor_shape
             .map(Into::into)
             .unwrap_or_else(|| self.config.cursor.style.into());
-        ws.render_inputs.vt_cursor_visible = !self.config.cursor.blink || ws.blink_on;
-        ws.renderer.render(&ws.render_inputs);
+        surface.render_inputs.vt_cursor_visible = !self.config.cursor.blink || surface.blink_on;
+        surface.renderer.render(&surface.render_inputs);
     }
 
     /// Advance the cursor blink state if we have crossed an edge. Called
     /// from `about_to_wait` after the deadline-scheduled wake fires.
     fn step_blink(&mut self) {
-        let Some(ws) = self.window_state.as_mut() else {
+        let Some(surface) = self.surface.as_mut() else {
             return;
         };
         if !self.config.cursor.blink {
-            if !ws.blink_on {
-                ws.blink_on = true;
-                ws.mark_dirty();
+            if !surface.blink_on {
+                surface.blink_on = true;
+                surface.mark_dirty();
             }
             return;
         }
-        if ws.last_blink_edge.elapsed() >= BLINK_HALF_PERIOD {
-            ws.blink_on = !ws.blink_on;
-            ws.last_blink_edge = Instant::now();
-            ws.mark_dirty();
+        if surface.last_blink_edge.elapsed() >= BLINK_HALF_PERIOD {
+            surface.blink_on = !surface.blink_on;
+            surface.last_blink_edge = Instant::now();
+            surface.mark_dirty();
         }
     }
 
     /// Earliest instant at which any animation source needs the next
     /// wake. `None` means the terminal is idle — `about_to_wait` will
     /// drop into `ControlFlow::Wait` and the OS suspends us until either
-    /// a window event arrives or the IO thread signals via the proxy.
+    /// a window event arrives or the IO actor signals via the proxy.
     fn next_animation_deadline(&self) -> Option<Instant> {
-        let ws = self.window_state.as_ref()?;
+        let surface = self.surface.as_ref()?;
         // Occluded windows skip rendering anyway, so don't bother
         // running the blink cycle while the window is hidden.
-        if ws.occluded {
+        if surface.occluded {
             return None;
         }
         if self.config.cursor.blink {
-            Some(ws.last_blink_edge + BLINK_HALF_PERIOD)
+            Some(surface.last_blink_edge + BLINK_HALF_PERIOD)
         } else {
             None
         }
@@ -145,7 +148,7 @@ impl App {
 
 impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window_state.is_some() {
+        if self.surface.is_some() {
             return;
         }
 
@@ -189,29 +192,28 @@ impl ApplicationHandler<UserEvent> for App {
         platform::configure_metal_layer(&window);
 
         let (cols, rows) = renderer.grid_size();
-        let mut term = Terminal::spawn(cols, rows, size.width as u16, size.height as u16)
-            .expect("failed to spawn terminal");
-        // Seed the VT's DECSCUSR state with the user's configured shape so
-        // the bash prompt doesn't inherit ghostty's hardcoded `.block`
-        // default. App-level DECSCUSR emissions (e.g. neovim mode changes)
-        // still override on subsequent frames.
-        term.set_cursor_shape(vt_shape_from_config(self.config.cursor.style));
-
-        // Move the PTY reader onto a dedicated thread; from here the UI
-        // wakes only when the IO thread forwards `PtyData` / `PtyExited`
-        // through the proxy or when an animation deadline fires.
-        let reader = term
-            .take_reader()
-            .expect("Terminal::spawn must hand out the PTY reader");
-        spawn_pty_reader(reader, self.proxy.clone());
+        let proxy = self.proxy.clone();
+        let vt = spawn_vt_session(
+            VtSessionOptions {
+                cols,
+                rows,
+                pixel_width: size.width as u16,
+                pixel_height: size.height as u16,
+                initial_cursor_shape: vt_shape_from_config(self.config.cursor.style),
+            },
+            move |event| {
+                let _ = proxy.send_event(UserEvent::Vt(event));
+            },
+        )
+        .expect("failed to spawn terminal actor");
 
         let render_inputs = RenderInputs {
             cursor_shape: self.config.cursor.style.into(),
             ..RenderInputs::default()
         };
-        let mut ws = WindowState::new(window, renderer, term, render_inputs);
-        self.apply_terminal_theme_to(&mut ws, &theme);
-        self.window_state = Some(ws);
+        let mut surface = SurfaceState::new(window, renderer, vt, render_inputs);
+        self.apply_terminal_theme_to(&mut surface, &theme);
+        self.surface = Some(surface);
 
         // Start watching the config dir for edits. A non-XDG environment or
         // an unreadable dir just skips the watcher — seance keeps running.
@@ -226,13 +228,14 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             UserEvent::ConfigFileChanged => self.reload_config(),
             UserEvent::ThemeFileChanged(path) => self.on_theme_file_changed(&path),
-            UserEvent::PtyData(bytes) => {
-                if let Some(ws) = self.ws_mut() {
-                    ws.feed_pty(&bytes);
+            UserEvent::Vt(VtEvent::ContentDirty) => {
+                if let Some(surface) = self.surface_mut() {
+                    surface.pane.refresh_latest_snapshot();
+                    surface.mark_dirty();
                 }
             }
-            UserEvent::PtyExited => {
-                self.window_state = None;
+            UserEvent::Vt(VtEvent::Exited) => {
+                self.surface = None;
                 event_loop.exit();
             }
         }
@@ -245,20 +248,21 @@ impl ApplicationHandler<UserEvent> for App {
         event: WindowEvent,
     ) {
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                self.surface = None;
+                event_loop.exit();
+            }
             WindowEvent::Resized(size) => {
-                if let Some(ws) = self.ws_mut() {
-                    ws.reflow(size);
+                if let Some(surface) = self.surface_mut() {
+                    surface.reflow(size);
                 }
-                self.draw();
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.apply_scale_factor(scale_factor);
-                self.draw();
             }
             WindowEvent::ModifiersChanged(mods) => {
-                if let Some(ws) = self.ws_mut() {
-                    ws.modifiers = mods;
+                if let Some(surface) = self.surface_mut() {
+                    surface.modifiers = mods;
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => self.on_keyboard_input(event_loop, &event),
@@ -266,10 +270,10 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::CursorMoved { position, .. } => self.on_cursor_moved(position),
             WindowEvent::MouseInput { state, button, .. } => self.on_mouse_input(state, button),
             WindowEvent::Occluded(is_occluded) => {
-                if let Some(ws) = self.ws_mut() {
-                    ws.occluded = is_occluded;
+                if let Some(surface) = self.surface_mut() {
+                    surface.occluded = is_occluded;
                     if !is_occluded {
-                        ws.mark_dirty();
+                        surface.mark_dirty();
                     }
                 }
             }
@@ -279,21 +283,21 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window_state.is_none() {
+        if self.surface.is_none() {
             event_loop.exit();
             return;
         }
         self.step_blink();
-        if let Some(ws) = self.window_state.as_ref()
-            && ws.content_dirty
-            && !ws.occluded
+        if let Some(surface) = self.surface.as_ref()
+            && surface.content_dirty
+            && !surface.occluded
         {
-            ws.request_redraw();
+            surface.request_redraw();
         }
         // Deadline-scheduled redraw: sleep until the next animation
         // edge, or fully `Wait` when nothing is animating. PTY output
-        // wakes us out-of-band via `UserEvent::PtyData` from the reader
-        // thread, so an idle terminal really does park the event loop.
+        // wakes us out-of-band via `UserEvent::Vt(ContentDirty)` from the
+        // actor, so an idle terminal really does park the event loop.
         match self.next_animation_deadline() {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
             None => event_loop.set_control_flow(ControlFlow::Wait),

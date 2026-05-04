@@ -19,10 +19,12 @@ license = "MIT OR Apache-2.0"
 collapsible_if = "warn"
 
 [workspace.dependencies]
+bytes = "1"
 log = "0.4"
 env_logger = "0.11"
 libc = "0.2"
-libghostty-vt = { git = "https://github.com/xkef/libghostty-rs", rev = "02c0b67331589479cbcdee9dd7ed38c0c2ff6a7d", default-features = false, features = ["kitty-graphics", "png"] }
+libghostty-vt = { git = "https://github.com/Uzaaft/libghostty-rs", rev = "5ac47e9eb166add2c00c432bc65c279133629712", default-features = false, features = ["kitty-graphics", "png"] }
+polling = "3"
 insta = { version = "1", features = ["glob", "yaml"] }
 pretty_assertions = "1"
 rand_pcg = "0.3"

@@ -39,19 +39,18 @@ Epic index:
 ```
 ┌─ input ──────────────────────────────────────────────────────────────┐
 │ winit event loop → seance-input                                      │
-│   key: KeyboardEvent → libghostty-vt key encoder → utf-8 bytes       │
-│   mouse: wheel/click → SGR 1006 encoding → bytes                     │
-│                           │                                          │
-│                           ▼                                          │
-│                       master PTY fd ──── write ────▶ shell           │
+│   key: KeyboardEvent → libghostty-vt key encoder → bytes             │
+│   mouse: wheel/click → SGR 1006 encoding or ScrollLines              │
+│ UI sends VtCommand::Write/Resize/ScrollLines                         │
+│ IO actor owns the PTY writer ──────────────── write ─────▶ shell     │
 └──────────────────────────────────────────────────────────────────────┘
 
-┌─ PTY read pump ──────────────────────────────────────────────────────┐
-│ seance-pty-reader thread: MasterPty.read() → UserEvent::PtyData      │
-│ UI thread: libghostty-vt.write() → VT state machine mutates grid     │
-│ row-dirty bitmap [IMPLEMENTED]                                       │
-│ DEC 2026 synchronized output [PLANNED: M2]                           │
-│ IO-thread parse + Critical-snapshot [PLANNED: M2 — see threading.md] │
+┌─ VT/PTY actor ───────────────────────────────────────────────────────┐
+│ Unix IO actor owns PTY + libghostty Terminal/RenderState             │
+│   nonblocking poll → read PTY → vt_write() on the IO actor           │
+│   DEC 2026 gate controls snapshot publication                        │
+│   publish owned Arc<VtSnapshot> → deduped ContentDirty wake          │
+│ UI renders SnapshotFrameSource; it never reads live libghostty state │
 └──────────────────────────────────────────────────────────────────────┘
 
 ┌─ render pass (wakes on dirty + animation deadline) ──────────────────┐
@@ -62,7 +61,7 @@ Epic index:
 │     for each glyph:                                                  │
 │       procedural sprite registry [PLANNED: M3]                       │
 │       glyph_cache.get_or_insert(CacheKey)                            │
-│         miss → SwashCache → bitmap → etagere atlas                    │
+│         miss → SwashCache → bitmap → etagere atlas                   │
 │                                                                      │
 │ emit quads into per-layer vertex buffers [PLANNED: M4]               │
 │ single render pass → N pipeline switches                             │
@@ -75,13 +74,13 @@ Epic index:
 
 ## Crate structure
 
-| Crate           | Owns                                               | Status              |
-| --------------- | -------------------------------------------------- | ------------------- |
-| `seance-app`    | winit event loop, `App`, render-thread driver      | [IMPLEMENTED]       |
-| `seance-input`  | winit → VT key/mouse encoding (via libghostty-vt)  | [IMPLEMENTED]       |
-| `seance-render` | font pipeline, GPU pipelines, GlyphAtlas           | [IMPLEMENTED]       |
-| `seance-vt`     | libghostty-vt wrapper, portable-pty PTY, selection | [IMPLEMENTED]       |
-| `seance-mux`    | Domain → Window → Tab → SplitTree → Pane           | [PLANNED: [M6][m6]] |
+| Crate           | Owns                                              | Status              |
+| --------------- | ------------------------------------------------- | ------------------- |
+| `seance-app`    | winit event loop, `App`, renderer/redraw driver   | [IMPLEMENTED]       |
+| `seance-input`  | winit → VT key/mouse encoding (via libghostty-vt) | [IMPLEMENTED]       |
+| `seance-render` | font pipeline, GPU pipelines, GlyphAtlas          | [IMPLEMENTED]       |
+| `seance-vt`     | libghostty-vt wrapper, PTY, actor/snapshot API    | [IMPLEMENTED/M2]    |
+| `seance-mux`    | Domain → Window → Tab → SplitTree → Pane          | [PLANNED: [M6][m6]] |
 
 ---
 
@@ -89,13 +88,18 @@ Epic index:
 
 - **libghostty-vt** [IMPLEMENTED] — VT state machine via FFI. Handles
   CSI/OSC/DCS, alt screen, scrollback, mouse modes, Kitty keyboard.
-- **portable-pty** [IMPLEMENTED] — cross-platform PTY (ConPTY on Windows).
+- **portable-pty** [IMPLEMENTED] — current cross-platform PTY backend; M2 actor
+  v1 uses Unix raw-fd readiness polling.
 - **FrameSource** trait [IMPLEMENTED] — exposes `visit_cells()` to the renderer.
+- **Owned snapshots** [IMPLEMENTED] — `VtSnapshot` is built on the IO actor
+  and read by the UI through `SnapshotFrameSource`; live libghostty state is
+  never shared with the UI.
 - **Row-dirty flags** [IMPLEMENTED] — `dirty_rows()` iterator over the VT grid
   (#191). The renderer uses it for partial `bg_cells` upload (#196); text-cell
-  rebuild still walks the full grid pending shape cache (#21).
-- **DEC 2026 synchronized output** [PLANNED: [M2][m2]] — `is_sync_active()` +
-  timeout, suppress rebuild while mode is set.
+  rebuild still walks the full grid pending shape cache (#21). M2 snapshots
+  start as full-grid snapshots and preserve the dirty-row model for later.
+- **DEC 2026 synchronized output** [IMPLEMENTED] — IO actor publication gate
+  with a 150 ms watchdog.
 - **OSC 52 clipboard** [PLANNED: [M3][m3]] — read/write with paste-protection
   prompt.
 - **Kitty graphics protocol** [PLANNED: [M5][m5]] — transmission, placements,
@@ -195,16 +199,22 @@ Deadline-scheduled (`cf4a1b1`, #24): `ControlFlow::WaitUntil(next_due)` across
 all animation sources — cursor blink, SGR blink, bell, Kitty GIF frames,
 custom-shader animation. Idle terminal = 0 fps. Modelled on WezTerm's
 `has_animation` pattern. PTY wakes are out-of-band via `EventLoopProxy`, fed by
-the `seance-pty-reader` thread (`crates/seance-app/src/io.rs`).
+`VtEvent::ContentDirty` from the IO actor after snapshot publication.
 
 ### Threading model
 
-VT parsing still runs on the winit thread inside `App::user_event(PtyData)`.
-[M2][m2] moves it to a dedicated IO thread that owns VT + PTY behind
-`Arc<parking_lot::FairMutex<VtState>>`; the UI takes a brief locked snapshot
-each frame and rebuilds cells outside the lock (Ghostty's `Critical` pattern).
-Full design, mailbox protocol, lock budget, DEC 2026 watchdog, shutdown
-ordering, and the renderer-thread revisit metric: see
+VT parsing, PTY reads/writes, and all libghostty state live on a Unix IO actor.
+The actor publishes owned `Arc<VtSnapshot>` values through a `SnapshotSlot` and
+sends deduped `VtEvent::ContentDirty` wakes. The UI keeps the latest snapshot in
+`PaneSession`, renders via `SnapshotFrameSource`, and sends mutations through
+`VtSessionHandle` commands.
+
+Resize follows the same rule: the UI computes the new grid size, sends a resize
+command, and redraws after the actor publishes the resized snapshot rather than
+forcing an immediate stale-frame draw.
+
+Full design, actor API, snapshot model, DEC 2026 watchdog, shutdown ordering,
+and the renderer-thread revisit metric: see
 [`docs/threading.md`](./threading.md).
 
 ---

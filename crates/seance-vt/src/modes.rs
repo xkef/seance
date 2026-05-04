@@ -3,7 +3,7 @@
 //! Source of truth is the live VT state machine; consumed by the input
 //! encoder (cursor-key mode, mouse tracking, bracketed paste).
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TerminalModes {
     pub cursor_keys: bool,
     pub mouse_tracking: bool,

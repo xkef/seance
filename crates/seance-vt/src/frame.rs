@@ -23,6 +23,16 @@ pub enum PlacementLayer {
     AboveText,
 }
 
+impl PlacementLayer {
+    pub fn contains_z(self, z: i32) -> bool {
+        match self {
+            PlacementLayer::BelowBg => z < i32::MIN / 2,
+            PlacementLayer::BelowText => (i32::MIN / 2..0).contains(&z),
+            PlacementLayer::AboveText => z >= 0,
+        }
+    }
+}
+
 /// One kitty graphics placement visible in the current viewport.
 ///
 /// All fields use `libghostty-vt`'s resolved values: `viewport_col/row`
@@ -31,7 +41,7 @@ pub enum PlacementLayer {
 /// dimensions; `source_*` is clamped to image bounds. `image_width/
 /// height` are reported here so the renderer can compute source UVs
 /// without a separate cache lookup.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlacementSnapshot {
     pub image_id: u32,
     pub placement_id: u32,
@@ -62,7 +72,7 @@ pub struct ImageInfo<'a> {
 
 /// A color slot in a terminal cell. Resolved by the renderer using
 /// its theme — the VT layer reports what the VT sees, not pixels.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CellColor {
     /// Use the theme's default foreground / background.
     Default,
@@ -72,7 +82,7 @@ pub enum CellColor {
     Rgb(u8, u8, u8),
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CellAttrs {
     pub bold: bool,
     pub italic: bool,
@@ -104,7 +114,7 @@ pub enum CursorShape {
 ///
 /// `shape` is `None` when the VT snapshot couldn't be read (FFI error) —
 /// the caller should fall back to the user's configured default.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CursorInfo {
     pub pos: GridPos,
     pub visible: bool,
