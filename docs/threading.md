@@ -2,34 +2,30 @@
 
 This document is the architectural decision record for séance's M2 threading
 model. It supersedes the earlier plan that attempted to make
-`libghostty_vt::Terminal` movable across threads. Upstream `libghostty-rs`
-keeps `Terminal` `!Send`; séance's design follows that constraint instead of
-working around it.
+`libghostty_vt::Terminal` movable across threads. Upstream `libghostty-rs` keeps
+`Terminal` `!Send`; séance's design follows that constraint instead of working
+around it.
 
 [#165]: https://github.com/xkef/seance/issues/165
 [#166]: https://github.com/xkef/seance/issues/166
 [#167]: https://github.com/xkef/seance/issues/167
 [#168]: https://github.com/xkef/seance/issues/168
-[#169]: https://github.com/xkef/seance/issues/169
-[#170]: https://github.com/xkef/seance/issues/170
-[#171]: https://github.com/xkef/seance/issues/171
 [#172]: https://github.com/xkef/seance/issues/172
 [#23]: https://github.com/xkef/seance/issues/23
 [#24]: https://github.com/xkef/seance/issues/24
 [#26]: https://github.com/xkef/seance/issues/26
-[m2]: https://github.com/xkef/seance/issues/5
 
 ---
 
 ## Status
 
-| Concern                | v1 implementation                                      |
-| ---------------------- | ------------------------------------------------------ |
+| Concern                | v1 implementation                                       |
+| ---------------------- | ------------------------------------------------------- |
 | PTY blocking `read`    | one Unix IO actor owns PTY read/write/readiness polling |
 | VT parser (`vt_write`) | IO actor thread only                                    |
 | libghostty ownership   | all libghostty objects are owned by the IO actor        |
 | UI read path           | UI reads immutable `Arc<VtSnapshot>` only               |
-| UI write path          | `VtSessionHandle` commands                             |
+| UI write path          | `VtSessionHandle` commands                              |
 | Wake from IO           | deduped `VtEvent::ContentDirty` after snapshot publish  |
 | DEC 2026 sync output   | IO actor suppresses publishes while sync mode is active |
 | Renderer thread        | none; revisit only after profiling                      |
@@ -114,8 +110,8 @@ pub struct SnapshotImage {
 v1 uses **full-grid snapshots**:
 
 - `dirty` is `DirtySnapshot::Full` initially.
-- The data model keeps `DirtySnapshot` so dirty-row/delta snapshots can be
-  added later.
+- The data model keeps `DirtySnapshot` so dirty-row/delta snapshots can be added
+  later.
 - Cell text uses one arena string plus offsets; avoid `String` allocation per
   cell.
 - `CellColor` stays symbolic (`Default`, `Palette`, `Rgb`), not resolved RGBA,
@@ -559,20 +555,20 @@ background shaping task over moving the surface itself.
 All surveyed terminals keep VT parsing off the windowing thread, but their exact
 state-sharing choices differ.
 
-| Aspect                | Ghostty                                  | Alacritty                    | WezTerm                              | séance v1 target                         |
-| --------------------- | ---------------------------------------- | ---------------------------- | ------------------------------------ | ---------------------------------------- |
-| Threads per terminal  | 4 (UI / renderer / IO-write / read)      | 2 (UI / reader+parser)       | 3+ (UI / reader / parser)            | 2 (UI / IO actor)                        |
-| Dedicated renderer    | yes                                      | no                           | no                                   | no                                       |
-| VT parse location     | reader thread                            | reader thread                | parser thread                        | IO actor                                 |
-| Live VT shared w/UI   | renderer-state mutex + copied snapshot   | `FairMutex` around terminal  | `Mutex` around terminal              | no; owned `VtSnapshot` only              |
-| Wake mechanism        | `xev.Async`                              | `EventLoopProxy` equivalent  | mux notification fan-out             | `VtEvent::ContentDirty` via app adapter  |
-| Write path            | mailbox to writer thread                 | mpsc to IO thread            | locked master writer                 | `VtCommand::Write(Bytes)` to IO actor    |
+| Aspect               | Ghostty                                | Alacritty                   | WezTerm                   | séance v1 target                        |
+| -------------------- | -------------------------------------- | --------------------------- | ------------------------- | --------------------------------------- |
+| Threads per terminal | 4 (UI / renderer / IO-write / read)    | 2 (UI / reader+parser)      | 3+ (UI / reader / parser) | 2 (UI / IO actor)                       |
+| Dedicated renderer   | yes                                    | no                          | no                        | no                                      |
+| VT parse location    | reader thread                          | reader thread               | parser thread             | IO actor                                |
+| Live VT shared w/UI  | renderer-state mutex + copied snapshot | `FairMutex` around terminal | `Mutex` around terminal   | no; owned `VtSnapshot` only             |
+| Wake mechanism       | `xev.Async`                            | `EventLoopProxy` equivalent | mux notification fan-out  | `VtEvent::ContentDirty` via app adapter |
+| Write path           | mailbox to writer thread               | mpsc to IO thread           | locked master writer      | `VtCommand::Write(Bytes)` to IO actor   |
 
 Reference source locations from the previous survey remain useful for context:
 
-- Ghostty — `src/Surface.zig`, `src/termio/Thread.zig`,
-  `src/termio/Exec.zig`, `src/renderer/Thread.zig`,
-  `src/renderer/State.zig`, `src/renderer/generic.zig`.
+- Ghostty — `src/Surface.zig`, `src/termio/Thread.zig`, `src/termio/Exec.zig`,
+  `src/renderer/Thread.zig`, `src/renderer/State.zig`,
+  `src/renderer/generic.zig`.
 - Alacritty — `alacritty_terminal/src/event_loop.rs`,
   `alacritty/src/display/mod.rs`, `alacritty/src/scheduler.rs`.
 - WezTerm — `mux/src/lib.rs`, `mux/src/localpane.rs`.
@@ -588,12 +584,12 @@ plan.
 
 Landing order:
 
-| Stage | Scope                         | Status |
-| ----- | ----------------------------- | ------ |
-| 1     | docs/issues correction        | done   |
-| 2     | snapshot model                | done   |
-| 3     | IO actor                      | done   |
-| 4     | app integration + rename      | done   |
+| Stage | Scope                    | Status |
+| ----- | ------------------------ | ------ |
+| 1     | docs/issues correction   | done   |
+| 2     | snapshot model           | done   |
+| 3     | IO actor                 | done   |
+| 4     | app integration + rename | done   |
 
 Issue mapping:
 
@@ -602,7 +598,8 @@ Issue mapping:
 - [#23] DEC 2026 is implemented as part of the IO actor's publication gate.
 - [#24] deadline-scheduled redraw is already shipped and remains UI-side.
 - [#168]-[#172] should be kept only where their scope still applies after the
-  actor rewrite; otherwise supersede them with smaller actor/snapshot follow-ups.
+  actor rewrite; otherwise supersede them with smaller actor/snapshot
+  follow-ups.
 
 ---
 

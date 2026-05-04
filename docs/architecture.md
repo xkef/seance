@@ -91,9 +91,9 @@ Epic index:
 - **portable-pty** [IMPLEMENTED] — current cross-platform PTY backend; M2 actor
   v1 uses Unix raw-fd readiness polling.
 - **FrameSource** trait [IMPLEMENTED] — exposes `visit_cells()` to the renderer.
-- **Owned snapshots** [IMPLEMENTED] — `VtSnapshot` is built on the IO actor
-  and read by the UI through `SnapshotFrameSource`; live libghostty state is
-  never shared with the UI.
+- **Owned snapshots** [IMPLEMENTED] — `VtSnapshot` is built on the IO actor and
+  read by the UI through `SnapshotFrameSource`; live libghostty state is never
+  shared with the UI.
 - **Row-dirty flags** [IMPLEMENTED] — `dirty_rows()` iterator over the VT grid
   (#191). The renderer uses it for partial `bg_cells` upload (#196); text-cell
   rebuild still walks the full grid pending shape cache (#21). M2 snapshots
