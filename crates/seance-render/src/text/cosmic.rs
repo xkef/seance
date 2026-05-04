@@ -6,8 +6,8 @@
 //! file-local change.
 
 use cosmic_text::{
-    Attrs, Buffer, CacheKey, Family, FontSystem, Metrics, Shaping, Style, SwashCache, SwashContent,
-    Weight, fontdb::Query,
+    Attrs, Buffer, CacheKey, Family, FeatureTag, FontFeatures, FontSystem, Metrics, Shaping, Style,
+    SwashCache, SwashContent, Weight, fontdb::Query,
 };
 use rustc_hash::FxBuildHasher;
 use std::collections::HashMap;
@@ -31,6 +31,26 @@ struct FaceGridMetrics {
     face_baseline_from_bottom: f32,
 }
 
+/// Settings carried into [`CosmicTextBackend::new`]; bundled so `RendererConfig`
+/// can grow without churning the constructor signature each time a new
+/// `font.*` key lands.
+pub struct BackendConfig<'a> {
+    pub family: &'a str,
+    pub font_size: f32,
+    pub scale: f64,
+    pub adjust_cell_height: Option<&'a str>,
+    pub adjust_cell_width: Option<&'a str>,
+    /// OpenType feature tags ("calt", "liga", "ss01", …). Tags that are
+    /// not exactly four bytes are dropped with a warning so a typo can't
+    /// silently disable shaping.
+    pub features: &'a [String],
+    /// Fallback families consulted when the primary `family` lacks a
+    /// glyph. Stored verbatim; cosmic-text's font fallback iterator
+    /// considers all loaded families regardless, so the list is a hint
+    /// for future wiring (#142) rather than a hard constraint today.
+    pub fallback: &'a [String],
+}
+
 pub struct CosmicTextBackend {
     fs: FontSystem,
     swash: SwashCache,
@@ -39,6 +59,16 @@ pub struct CosmicTextBackend {
     scale: f64,
     family: String,
     adjust_cell_height: Option<MetricModifier>,
+    adjust_cell_width: Option<MetricModifier>,
+    /// Pre-built feature list passed to every shape call. Rebuilt only on
+    /// `set_features` to avoid the per-shape parse cost.
+    font_features: FontFeatures,
+    /// Read by `set_fallback`/`new` but not yet consumed during shaping;
+    /// cosmic-text's font fallback iterator already considers all loaded
+    /// families on a glyph miss, so stored verbatim until #142 wires
+    /// priority-aware fallback through `Attrs`.
+    #[allow(dead_code)]
+    fallback: Vec<String>,
 
     /// Intern CacheKey → stable `GlyphId` so the atlas cache can key on
     /// a small integer without knowing the cosmic-text encoding.
@@ -47,18 +77,29 @@ pub struct CosmicTextBackend {
 }
 
 impl CosmicTextBackend {
-    pub fn new(family: &str, font_size: f32, scale: f64, adjust_cell_height: Option<&str>) -> Self {
+    pub fn new(config: BackendConfig<'_>) -> Self {
         let mut fs = FontSystem::new();
-        let adjust_cell_height = parse_metric_modifier(adjust_cell_height);
-        let metrics = compute_metrics(&mut fs, family, font_size, scale, adjust_cell_height);
+        let adjust_cell_height = parse_metric_modifier(config.adjust_cell_height);
+        let adjust_cell_width = parse_metric_modifier(config.adjust_cell_width);
+        let metrics = compute_metrics(
+            &mut fs,
+            config.family,
+            config.font_size,
+            config.scale,
+            adjust_cell_height,
+            adjust_cell_width,
+        );
         Self {
             fs,
             swash: SwashCache::new(),
             metrics,
-            font_size,
-            scale,
-            family: family.to_string(),
+            font_size: config.font_size,
+            scale: config.scale,
+            family: config.family.to_string(),
             adjust_cell_height,
+            adjust_cell_width,
+            font_features: build_font_features(config.features),
+            fallback: config.fallback.to_vec(),
             key_to_id: HashMap::with_hasher(FxBuildHasher),
             id_to_key: Vec::new(),
         }
@@ -85,6 +126,7 @@ impl CosmicTextBackend {
             self.font_size,
             self.scale,
             self.adjust_cell_height,
+            self.adjust_cell_width,
         );
     }
 }
@@ -113,7 +155,20 @@ impl TextBackend for CosmicTextBackend {
         self.refresh_metrics();
     }
 
-    fn shape_cell(&mut self, text: &str, attrs: FontAttrs, out: &mut Vec<ShapedGlyph>) {
+    fn set_adjust_cell_width(&mut self, value: Option<&str>) {
+        self.adjust_cell_width = parse_metric_modifier(value);
+        self.refresh_metrics();
+    }
+
+    fn set_features(&mut self, features: &[String]) {
+        self.font_features = build_font_features(features);
+    }
+
+    fn set_fallback(&mut self, fallback: &[String]) {
+        self.fallback = fallback.to_vec();
+    }
+
+    fn shape_run(&mut self, text: &str, attrs: FontAttrs, out: &mut Vec<ShapedGlyph>) {
         if text.is_empty() {
             return;
         }
@@ -130,30 +185,37 @@ impl TextBackend for CosmicTextBackend {
                 Style::Italic
             } else {
                 Style::Normal
-            });
+            })
+            .font_features(self.font_features.clone());
 
         let mut buffer = Buffer::new(&mut self.fs, cosmic_metrics);
         buffer.set_text(&mut self.fs, text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.fs, false);
 
-        let keys: Vec<CacheKey> = buffer
+        let entries: Vec<(CacheKey, u32)> = buffer
             .layout_runs()
             .flat_map(|run| {
                 run.glyphs.iter().map(move |g| {
-                    CacheKey::new(
-                        g.font_id,
-                        g.glyph_id,
-                        g.font_size,
-                        (0.0, 0.0),
-                        g.font_weight,
-                        g.cache_key_flags,
+                    (
+                        CacheKey::new(
+                            g.font_id,
+                            g.glyph_id,
+                            g.font_size,
+                            (0.0, 0.0),
+                            g.font_weight,
+                            g.cache_key_flags,
+                        )
+                        .0,
+                        g.start as u32,
                     )
-                    .0
                 })
             })
             .collect();
 
-        out.extend(keys.into_iter().map(|k| ShapedGlyph { id: self.intern(k) }));
+        out.extend(entries.into_iter().map(|(k, cluster)| ShapedGlyph {
+            id: self.intern(k),
+            cluster,
+        }));
     }
 
     fn rasterize(&mut self, glyph: GlyphId) -> Option<RasterizedGlyph> {
@@ -184,7 +246,7 @@ fn parse_metric_modifier(value: Option<&str>) -> Option<MetricModifier> {
 
     if let Some(percent) = input.strip_suffix('%') {
         let Ok(percent) = percent.parse::<f32>() else {
-            log::warn!("invalid adjust_cell_height value: {input}");
+            log::warn!("invalid adjust_cell_* value: {input}");
             return None;
         };
         return Some(MetricModifier::Percent((1.0 + percent / 100.0).max(0.0)));
@@ -193,7 +255,7 @@ fn parse_metric_modifier(value: Option<&str>) -> Option<MetricModifier> {
     match input.parse::<i32>() {
         Ok(value) => Some(MetricModifier::Absolute(value)),
         Err(_) => {
-            log::warn!("invalid adjust_cell_height value: {input}");
+            log::warn!("invalid adjust_cell_* value: {input}");
             None
         }
     }
@@ -291,8 +353,13 @@ fn measure_cell_width_and_baseline(
 fn cell_metrics_from_face(
     face: FaceGridMetrics,
     adjust_cell_height: Option<MetricModifier>,
+    adjust_cell_width: Option<MetricModifier>,
 ) -> CellMetrics {
-    let cell_width = face.face_width.round().max(1.0);
+    let base_cell_width = face.face_width.round().max(1.0) as u32;
+    let cell_width = adjust_cell_width
+        .map(|modifier| apply_metric_modifier(base_cell_width, modifier))
+        .unwrap_or(base_cell_width)
+        .max(1) as f32;
     let base_cell_height = face.face_height.round().max(1.0) as u32;
     let cell_height = adjust_cell_height
         .map(|modifier| apply_metric_modifier(base_cell_height, modifier))
@@ -318,11 +385,31 @@ fn compute_metrics(
     font_size: f32,
     scale: f64,
     adjust_cell_height: Option<MetricModifier>,
+    adjust_cell_width: Option<MetricModifier>,
 ) -> CellMetrics {
     let scaled_font_size = font_size * scale as f32;
     let face = face_grid_metrics(fs, family, scaled_font_size)
         .unwrap_or_else(|| fallback_face_grid_metrics(fs, family, scaled_font_size));
-    cell_metrics_from_face(face, adjust_cell_height)
+    cell_metrics_from_face(face, adjust_cell_height, adjust_cell_width)
+}
+
+/// Translate user-supplied feature tags into a cosmic-text [`FontFeatures`]
+/// list. Tags are expected to be exactly four bytes (the OpenType tag
+/// layout); anything else is dropped with a warning so a typo can't
+/// silently disable shaping for the entire cell.
+fn build_font_features(features: &[String]) -> FontFeatures {
+    let mut out = FontFeatures::new();
+    for tag in features {
+        let bytes = tag.as_bytes();
+        if bytes.len() != 4 {
+            log::warn!("font.feature {tag:?} ignored: OpenType tags must be 4 bytes");
+            continue;
+        }
+        let mut buf = [0u8; 4];
+        buf.copy_from_slice(bytes);
+        out.enable(FeatureTag::new(&buf));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -367,10 +454,40 @@ mod tests {
                 face_baseline_from_bottom: 14.0,
             },
             Some(MetricModifier::Percent(1.2)),
+            None,
         );
 
         assert_eq!(metrics.cell_width, 9.0);
         assert_eq!(metrics.cell_height, 22.0);
         assert_eq!(metrics.baseline, 10.0);
+    }
+
+    #[test]
+    fn cell_metrics_apply_width_adjustment_independently() {
+        let metrics = cell_metrics_from_face(
+            FaceGridMetrics {
+                face_width: 8.6,
+                face_height: 18.2,
+                face_baseline_from_bottom: 14.0,
+            },
+            None,
+            Some(MetricModifier::Absolute(2)),
+        );
+
+        assert_eq!(metrics.cell_width, 11.0);
+        assert_eq!(metrics.cell_height, 18.0);
+    }
+
+    #[test]
+    fn build_font_features_drops_invalid_tags() {
+        let features = build_font_features(&[
+            "calt".to_string(),
+            "liga".to_string(),
+            "tooLong".to_string(),
+            "no".to_string(),
+            "ss01".to_string(),
+        ]);
+        // Only the three 4-byte tags survive.
+        assert_eq!(features.features.len(), 3);
     }
 }

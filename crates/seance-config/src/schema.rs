@@ -53,7 +53,7 @@ impl Default for FontConfig {
         Self {
             family: "JetBrainsMono Nerd Font".to_string(),
             size: 14.0,
-            features: vec!["calt".to_string()],
+            features: vec!["calt".to_string(), "liga".to_string()],
             adjust_cell_height: None,
             adjust_cell_width: None,
             min_contrast: 1.1,
