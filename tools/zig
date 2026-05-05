@@ -1,5 +1,7 @@
 #!/bin/sh
 # Ensure Zig resolves the repo-local xcrun shim when it looks up the macOS SDK.
+# See tools/xcrun for the full rationale and upstream tracking
+# (ziglang/zig#31658 / #31673; fix in Zig 0.16, not backported to 0.15).
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

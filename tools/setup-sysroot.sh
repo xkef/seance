@@ -1,6 +1,19 @@
 #!/bin/sh
 # Creates tools/sysroot: a macOS SDK overlay with arm64-compatible libSystem.tbd.
 # Run once after cloning, or after Xcode/SDK updates.
+#
+# Why this exists: macOS 26.4 SDK's libSystem.tbd dropped arm64-macos
+# from its target slices, leaving only arm64e-macos. Zig 0.15's MachO
+# linker insists on a strict arm64-macos match, so it fails to resolve
+# basic libc symbols (_abort, _bzero, ...). We swap in Zig's vendored
+# libSystem.tbd, which still carries arm64-macos.
+#
+# Upstream:
+#   - ziglang/zig#31658 (Codeberg) — issue, closed 2026-03-27
+#   - ziglang/zig#31673 (Codeberg) — fix in Zig 0.16
+#   - ghostty-org/ghostty#11991 — fix NOT backported to 0.15
+#
+# Retire by bumping zig in .mise.toml to 0.16.x.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

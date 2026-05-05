@@ -58,7 +58,7 @@ Epic index:
 ┌─ render pass (wakes on dirty + animation deadline) ──────────────────┐
 │ rebuild_cells(only_dirty_rows [PARTIAL: bg_cells]):                  │
 │   for each row: run-iterator → TextRuns                              │
-│     shape_cache.get_or_shape(run_hash)  [PLANNED: M2]                │
+│     shape_cache.get_or_shape(run_hash)  [IMPLEMENTED]                │
 │       cosmic-text Buffer::shape_until_scroll                         │
 │     for each glyph:                                                  │
 │       procedural sprite registry [PLANNED: M3]                       │
@@ -76,13 +76,16 @@ Epic index:
 
 ## Crate structure
 
-| Crate           | Owns                                              | Status              |
-| --------------- | ------------------------------------------------- | ------------------- |
-| `seance-app`    | winit event loop, `App`, renderer/redraw driver   | [IMPLEMENTED]       |
-| `seance-input`  | winit → VT key/mouse encoding (via libghostty-vt) | [IMPLEMENTED]       |
-| `seance-render` | font pipeline, GPU pipelines, GlyphAtlas          | [IMPLEMENTED]       |
-| `seance-vt`     | VT Core, PTY actor, snapshot/command API          | [IMPLEMENTED/M2]    |
-| `seance-mux`    | Domain → Window → Tab → SplitTree → Pane          | [PLANNED: [M6][m6]] |
+| Crate                | Owns                                                  | Status              |
+| -------------------- | ----------------------------------------------------- | ------------------- |
+| `seance-app`         | winit event loop, `App`, renderer/redraw driver       | [IMPLEMENTED]       |
+| `seance-input`       | winit → VT key/mouse encoding (via libghostty-vt)     | [IMPLEMENTED]       |
+| `seance-render`      | font pipeline, GPU pipelines, GlyphAtlas, image cache | [IMPLEMENTED]       |
+| `seance-vt`          | VT Core, PTY actor, snapshot/command API              | [IMPLEMENTED/M2]    |
+| `seance-config`      | TOML config + theme files, hot-reload, diffing        | [IMPLEMENTED]       |
+| `seance-bench`       | criterion benches for hot paths                       | [IMPLEMENTED]       |
+| `seance-render-test` | render-harness fixtures (L1 logic, L4 frame snapshot) | [IMPLEMENTED]       |
+| `seance-mux`         | Domain → Window → Tab → SplitTree → Pane              | [PLANNED: [M6][m6]] |
 
 ---
 
@@ -107,8 +110,10 @@ Epic index:
   with a 150 ms watchdog.
 - **OSC 52 clipboard** [PLANNED: [M3][m3]] — read/write with paste-protection
   prompt.
-- **Kitty graphics protocol** [PLANNED: [M5][m5]] — transmission, placements,
-  virtual placeholders (U+10EEEE).
+- **Kitty graphics protocol** [IMPLEMENTED] — transmission, decode (PNG and raw
+  24/32-bit), per-image cache with 320 MB storage cap, placement resolution.
+  Virtual placeholders (U+10EEEE), animation, and iTerm2 inline images remain
+  [PLANNED: [M5][m5]].
 
 ---
 
@@ -338,8 +343,10 @@ caches; keybind → rebuild action table).
 
 - macOS IOSurface / `CAMetalLayer.presentsWithTransaction = true` to prevent
   live-resize stretching [IMPLEMENTED].
-- macOS 26 SDK + Zig 0.15 linker workaround (`tools/xcrun` redirects SDK sysroot
-  to Zig's bundled `libSystem.tbd`) [IMPLEMENTED].
+- macOS 26.4 SDK + Zig 0.15 linker workaround (`tools/xcrun` redirects SDK
+  sysroot to Zig's bundled `libSystem.tbd`) [IMPLEMENTED]. Retire by bumping
+  `.mise.toml`'s zig pin to `0.16.x`, which contains the upstream fix
+  (`ziglang/zig#31673` on Codeberg).
 - Wayland damage tracking via `swap_buffers_with_damage` is not required for
   wgpu — dirty-row uploads + deadline-driven redraw replace it.
 
@@ -347,21 +354,21 @@ caches; keybind → rebuild action table).
 
 ## Appendix — component choices
 
-| Problem                   | Component                                               | Why                                                                                                                                         |
-| ------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| GPU API                   | `wgpu`                                                  | One abstraction for Metal/Vulkan/DX12/GL4/WebGPU. Dual-source blending (for LCD subpixel AA) gated behind `Features::DUAL_SOURCE_BLENDING`. |
-| Window + input            | `winit`                                                 | Only serious cross-platform option.                                                                                                         |
-| VT state machine          | `libghostty-vt` via FFI                                 | Battle-tested, handles DEC 2026, mouse, Kitty keyboard, iTerm OSC, selection. Don't reinvent.                                               |
-| PTY                       | `portable-pty`                                          | Cross-plat, correct ConPTY on Windows.                                                                                                      |
-| Font discovery            | `fontdb` (via cosmic-text)                              | fontconfig / CoreText / DirectWrite backed.                                                                                                 |
-| Shaping                   | `cosmic-text` (rustybuzz + unicode-bidi)                | BiDi, graphemes, per-font features.                                                                                                         |
-| Rasterization             | `swash` (via `SwashCache`)                              | COLR v0/v1, SVG, CBDT.                                                                                                                      |
-| Atlas packing             | `etagere`                                               | Shelf-bin with deallocation (alacritty's row-packer cannot evict).                                                                          |
-| Procedural glyphs         | `tiny-skia`                                             | Software vector rasterizer for box-drawing / Powerline sprites [PLANNED: [M3][m3]].                                                         |
-| Layout (modals/box model) | `taffy`                                                 | Flexbox + Grid for floating UI [PLANNED: [M6][m6]].                                                                                         |
-| Animation                 | In-house `ColorEase` + deadline scheduler [IMPLEMENTED] | Cubic-bezier ease, `ControlFlow::WaitUntil(min(next_due))` — power-efficient.                                                               |
-| Config                    | `toml` + `serde` + `notify`                             | Hot-reload with targeted invalidation.                                                                                                      |
-| Logging                   | `tracing` + `tracing-subscriber`                        | Per-subsystem spans.                                                                                                                        |
+| Problem                   | Component                                | Why                                                                                                                                         |
+| ------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| GPU API                   | `wgpu`                                   | One abstraction for Metal/Vulkan/DX12/GL4/WebGPU. Dual-source blending (for LCD subpixel AA) gated behind `Features::DUAL_SOURCE_BLENDING`. |
+| Window + input            | `winit`                                  | Only serious cross-platform option.                                                                                                         |
+| VT state machine          | `libghostty-vt` via FFI                  | Battle-tested, handles DEC 2026, mouse, Kitty keyboard, iTerm OSC, selection. Don't reinvent.                                               |
+| PTY                       | `portable-pty`                           | Cross-plat, correct ConPTY on Windows.                                                                                                      |
+| Font discovery            | `fontdb` (via cosmic-text)               | fontconfig / CoreText / DirectWrite backed.                                                                                                 |
+| Shaping                   | `cosmic-text` (rustybuzz + unicode-bidi) | BiDi, graphemes, per-font features.                                                                                                         |
+| Rasterization             | `swash` (via `SwashCache`)               | COLR v0/v1, SVG, CBDT.                                                                                                                      |
+| Atlas packing             | `etagere`                                | Shelf-bin with deallocation (alacritty's row-packer cannot evict).                                                                          |
+| Procedural glyphs         | `tiny-skia`                              | Software vector rasterizer for box-drawing / Powerline sprites [PLANNED: [M3][m3]].                                                         |
+| Layout (modals/box model) | `taffy`                                  | Flexbox + Grid for floating UI [PLANNED: [M6][m6]].                                                                                         |
+| Animation                 | Deadline scheduler [IMPLEMENTED]         | `ControlFlow::WaitUntil(min(next_due))` across cursor blink / SGR blink / bell / Kitty animation — idle terminal draws nothing.             |
+| Config                    | `toml` + `serde` + `notify`              | Hot-reload with targeted invalidation.                                                                                                      |
+| Logging                   | `log` + `env_logger`                     | Standard facade; level via `RUST_LOG`.                                                                                                      |
 
 **Deliberately avoided:** `fontdue` (no COLRv1/SVG), `glyphon` (locks layout),
 `vello`/`wgpu_glyph` (wrong abstraction level for terminals), hand-rolled VT
