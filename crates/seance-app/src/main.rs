@@ -1,25 +1,25 @@
 use std::path::PathBuf;
 
+use seance_vt::VtEvent;
 use winit::event_loop::EventLoop;
 
 mod app;
 mod apply;
 mod command;
 mod events;
-mod io;
 mod keybinds;
 mod mouse;
 mod platform;
 mod reload;
+mod surface_state;
 mod watcher;
-mod window_state;
 
 use app::App;
 
 /// Events forwarded from background threads into the winit event loop.
 /// Using `EventLoopProxy` keeps every off-thread signal — config reloads,
-/// PTY output, child exit — funnelled onto the single UI thread that owns
-/// the renderer and VT, so there are no torn reads of `Config` or races
+/// VT snapshot publication, child exit — funnelled onto the single UI thread
+/// that owns the renderer, so there are no torn reads of `Config` or races
 /// against frame state.
 #[derive(Debug, Clone)]
 pub enum UserEvent {
@@ -27,12 +27,8 @@ pub enum UserEvent {
     ConfigFileChanged,
     /// A file under `$XDG_CONFIG_HOME/seance/themes/` changed.
     ThemeFileChanged(PathBuf),
-    /// A chunk of PTY output read by the reader thread. Drives the VT and
-    /// the redraw request — every wake from idle goes through here.
-    PtyData(Vec<u8>),
-    /// The PTY reader thread saw EOF or an unrecoverable error. The child
-    /// has gone; the UI tears down its window state and exits.
-    PtyExited,
+    /// The VT actor published a snapshot or reported child exit.
+    Vt(VtEvent),
 }
 
 fn main() {

@@ -1,139 +1,196 @@
-//! libghostty-vt implementation of [`FrameSource`].
-//!
-//! The only place that touches libghostty-vt's
-//! `RenderState` / `RowIterator` / `CellIterator` dance.
+//! libghostty-vt snapshot extraction used by VT Core.
 
 use libghostty_vt::RenderState;
 use libghostty_vt::Terminal as VtTerminal;
 use libghostty_vt::kitty::graphics as kg;
-use libghostty_vt::render::{CellIteration, CellIterator, CursorVisualStyle, RowIterator};
+use libghostty_vt::render::{CellIteration, CellIterator, CursorVisualStyle, Dirty, RowIterator};
 use libghostty_vt::style::{self, PaletteIndex, RgbColor};
+use libghostty_vt::terminal::Mode;
 
+use crate::core::VtCoreError;
 use crate::frame::{
-    CellAttrs, CellColor, CellView, CellVisitor, CursorInfo, CursorShape, DirtySnapshot,
-    FrameSource, ImageInfo, ImageVisitor, PlacementLayer, PlacementSnapshot, PlacementVisitor,
+    CellAttrs, CellColor, CursorInfo, CursorShape, DirtySnapshot, ImageInfo, ImageVisitor,
+    PlacementLayer, PlacementSnapshot, PlacementVisitor,
 };
 use crate::kitty_placeholder::{PLACEHOLDER_CP, diacritic_index};
+use crate::modes::TerminalModes;
 use crate::selection::GridPos;
-use crate::terminal::Terminal;
+use crate::snapshot::{SnapshotImage, VtSnapshot};
 
-pub struct LibGhosttyFrameSource<'a> {
-    term: &'a mut Terminal,
-}
-
-impl<'a> LibGhosttyFrameSource<'a> {
-    pub fn new(term: &'a mut Terminal) -> Self {
-        Self { term }
+/// Copy live libghostty mode flags into séance-owned input state.
+pub(crate) fn terminal_modes(vt: &VtTerminal<'static, 'static>) -> TerminalModes {
+    let mode = |m| vt.mode(m).unwrap_or(false);
+    TerminalModes {
+        cursor_keys: mode(Mode::DECCKM),
+        mouse_tracking: vt.is_mouse_tracking().unwrap_or(false),
+        mouse_format_sgr: mode(Mode::SGR_MOUSE),
+        bracketed_paste: mode(Mode::BRACKETED_PASTE),
     }
 }
 
-impl FrameSource for LibGhosttyFrameSource<'_> {
-    fn grid_size(&mut self) -> (u16, u16) {
-        let vt = self.term.vt_mut();
-        (vt.cols().unwrap_or(80), vt.rows().unwrap_or(24))
-    }
+pub(crate) struct SnapshotExtraction {
+    pub(crate) snapshot: VtSnapshot,
+    pub(crate) dirty_delta: DirtySnapshot,
+}
 
-    fn cursor(&mut self) -> CursorInfo {
-        let Ok(mut render_state) = RenderState::new() else {
-            return CursorInfo::default();
-        };
-        let Ok(snapshot) = render_state.update(self.term.vt_mut()) else {
-            return CursorInfo::default();
-        };
-        let visible = snapshot.cursor_visible().unwrap_or(true);
-        let pos = snapshot
-            .cursor_viewport()
-            .ok()
-            .flatten()
-            .map_or(GridPos::default(), |vp| GridPos {
-                col: vp.x,
-                row: vp.y,
-            });
-        let shape = snapshot
+pub(crate) fn extract_snapshot(
+    vt: &mut VtTerminal<'static, 'static>,
+    render_state: &mut RenderState<'static>,
+    cell_width_px: u32,
+    cell_height_px: u32,
+) -> Result<SnapshotExtraction, VtCoreError> {
+    let cols = vt.cols().unwrap_or(80);
+    let rows = vt.rows().unwrap_or(24);
+    let modes = terminal_modes(vt);
+
+    let mut out = VtSnapshot::empty(cols, rows);
+    out.modes = modes;
+
+    let dirty_delta;
+    {
+        let render_snapshot = render_state
+            .update(vt)
+            .map_err(|_| VtCoreError::libghostty("render state update"))?;
+        let global_dirty = render_snapshot.dirty().ok();
+        let mut dirty_rows = Vec::new();
+
+        let visible = render_snapshot.cursor_visible().unwrap_or(true);
+        let pos =
+            render_snapshot
+                .cursor_viewport()
+                .ok()
+                .flatten()
+                .map_or(GridPos::default(), |vp| GridPos {
+                    col: vp.x,
+                    row: vp.y,
+                });
+        let shape = render_snapshot
             .cursor_visual_style()
             .ok()
             .and_then(map_cursor_shape);
-        CursorInfo {
+        out.cursor = CursorInfo {
             pos,
             visible,
             wide: false,
             shape,
-        }
-    }
+        };
 
-    fn selection(&mut self) -> Option<(GridPos, GridPos)> {
-        self.term.selection_range()
-    }
+        let mut rows_iter =
+            RowIterator::new().map_err(|_| VtCoreError::libghostty("row iterator new"))?;
+        let mut cells_iter =
+            CellIterator::new().map_err(|_| VtCoreError::libghostty("cell iterator new"))?;
+        let mut row_iter = rows_iter
+            .update(&render_snapshot)
+            .map_err(|_| VtCoreError::libghostty("row iterator update"))?;
+        let mut scratch = String::with_capacity(4);
 
-    fn visit_cells(&mut self, visitor: &mut dyn CellVisitor) {
-        let _ = walk(self.term, visitor);
-    }
-
-    fn dirty_rows(&mut self) -> DirtySnapshot {
-        self.term.dirty_snapshot().unwrap_or(DirtySnapshot::Full)
-    }
-
-    fn clear_dirty(&mut self) {
-        self.term.clear_dirty();
-    }
-
-    fn visit_placements(&mut self, layer: PlacementLayer, visitor: &mut dyn PlacementVisitor) {
-        let _ = walk_placements(self.term, layer, visitor);
-        let _ = walk_virtual_placements(self.term, layer, visitor);
-    }
-
-    fn visit_images(&mut self, visitor: &mut dyn ImageVisitor) {
-        let _ = walk_images(self.term, visitor);
-    }
-}
-
-/// Walks the VT snapshot at `vt`, invoking `visitor` on each cell.
-/// Returns `None` if any libghostty-vt call fails (whole frame is dropped).
-pub(crate) fn walk_vt_cells(
-    vt: &mut VtTerminal<'static, 'static>,
-    visitor: &mut dyn CellVisitor,
-) -> Option<()> {
-    let mut render_state = RenderState::new().ok()?;
-    let snapshot = render_state.update(vt).ok()?;
-    let mut rows = RowIterator::new().ok()?;
-    let mut cells = CellIterator::new().ok()?;
-    let mut row_iter = rows.update(&snapshot).ok()?;
-
-    let mut scratch = String::with_capacity(4);
-    let mut row_idx: u16 = 0;
-    while let Some(row) = row_iter.next() {
-        let mut cell_iter = cells.update(row).ok()?;
-        let mut col_idx: u16 = 0;
-        while let Some(cell) = cell_iter.next() {
-            scratch.clear();
-            if let Ok(graphs) = cell.graphemes() {
-                scratch.extend(graphs);
+        for row_idx in 0..rows {
+            let Some(row) = row_iter.next() else {
+                for _ in 0..cols {
+                    out.push_empty_cell();
+                }
+                continue;
+            };
+            match global_dirty {
+                Some(Dirty::Partial) if row.dirty().unwrap_or(true) => dirty_rows.push(row_idx),
+                None if row.dirty().unwrap_or(false) => dirty_rows.push(row_idx),
+                _ => {}
             }
-            // Kitty virtual placeholders render as the image pass; emitting
-            // the placeholder char + diacritics would draw tofu over the image.
-            if scratch.starts_with('\u{10EEEE}') {
+            let mut cell_iter = cells_iter
+                .update(row)
+                .map_err(|_| VtCoreError::libghostty("cell iterator update"))?;
+            for _col in 0..cols {
+                let Some(cell) = cell_iter.next() else {
+                    out.push_empty_cell();
+                    continue;
+                };
                 scratch.clear();
+                if let Ok(graphs) = cell.graphemes() {
+                    scratch.extend(graphs);
+                }
+                if scratch.starts_with('\u{10EEEE}') {
+                    scratch.clear();
+                }
+                let style = cell.style().ok();
+                out.push_cell(
+                    &scratch,
+                    resolve_fg(cell, style.as_ref()),
+                    resolve_bg(cell, style.as_ref()),
+                    cell_attrs(style.as_ref()),
+                );
             }
-            let style = cell.style().ok();
-            visitor.cell(
-                row_idx,
-                col_idx,
-                CellView {
-                    text: &scratch,
-                    fg: resolve_fg(cell, style.as_ref()),
-                    bg: resolve_bg(cell, style.as_ref()),
-                    attrs: cell_attrs(style.as_ref()),
-                },
-            );
-            col_idx += 1;
+            row.set_dirty(false)
+                .map_err(|_| VtCoreError::libghostty("clear row dirty"))?;
         }
-        row_idx += 1;
+
+        dirty_delta = match global_dirty {
+            Some(Dirty::Clean) => DirtySnapshot::Clean,
+            Some(Dirty::Full) => DirtySnapshot::Full,
+            Some(Dirty::Partial) | None => {
+                if dirty_rows.is_empty() {
+                    DirtySnapshot::Clean
+                } else {
+                    DirtySnapshot::Partial(dirty_rows)
+                }
+            }
+        };
+        render_snapshot
+            .set_dirty(Dirty::Clean)
+            .map_err(|_| VtCoreError::libghostty("clear render dirty"))?;
     }
-    Some(())
+
+    let mut placement_collector = SnapshotPlacementCollector::default();
+    for layer in [
+        PlacementLayer::BelowBg,
+        PlacementLayer::BelowText,
+        PlacementLayer::AboveText,
+    ] {
+        let _ = walk_placements(vt, layer, &mut placement_collector);
+        let _ = walk_virtual_placements(
+            vt,
+            cell_width_px,
+            cell_height_px,
+            layer,
+            &mut placement_collector,
+        );
+    }
+    out.placements = placement_collector.placements;
+
+    let mut image_collector = SnapshotImageCollector::default();
+    let _ = walk_images(vt, &mut image_collector);
+    out.images = image_collector.images;
+
+    Ok(SnapshotExtraction {
+        snapshot: out,
+        dirty_delta,
+    })
 }
 
-fn walk(term: &mut Terminal, visitor: &mut dyn CellVisitor) -> Option<()> {
-    walk_vt_cells(term.vt_mut(), visitor)
+#[derive(Default)]
+struct SnapshotPlacementCollector {
+    placements: Vec<PlacementSnapshot>,
+}
+
+impl PlacementVisitor for SnapshotPlacementCollector {
+    fn placement(&mut self, p: &PlacementSnapshot) {
+        self.placements.push(*p);
+    }
+}
+
+#[derive(Default)]
+struct SnapshotImageCollector {
+    images: Vec<SnapshotImage>,
+}
+
+impl ImageVisitor for SnapshotImageCollector {
+    fn image(&mut self, info: &ImageInfo<'_>) {
+        self.images.push(SnapshotImage {
+            image_id: info.image_id,
+            width: info.width,
+            height: info.height,
+            rgba: info.rgba.to_vec(),
+        });
+    }
 }
 
 fn resolve_bg(cell: &CellIteration<'_, '_>, style: Option<&style::Style>) -> CellColor {
@@ -203,11 +260,10 @@ fn layer_to_kg(layer: PlacementLayer) -> kg::Layer {
 /// Returns `None` if any libghostty call fails; the layer is silently
 /// dropped from the frame in that case.
 fn walk_placements(
-    term: &Terminal,
+    vt: &VtTerminal<'static, 'static>,
     layer: PlacementLayer,
     visitor: &mut dyn PlacementVisitor,
 ) -> Option<()> {
-    let vt = term.vt();
     let graphics = vt.kitty_graphics().ok()?;
     let mut iter = kg::PlacementIterator::new().ok()?;
     let mut placements = iter.update(&graphics).ok()?;
@@ -267,8 +323,7 @@ fn walk_placements(
 /// Walks all placements (all layers) to collect unique `image_id`s and
 /// emits their pixel payloads as RGBA8. The renderer caches by `image_id`;
 /// emitting every frame is fine because the cache dedupes uploads.
-fn walk_images(term: &Terminal, visitor: &mut dyn ImageVisitor) -> Option<()> {
-    let vt = term.vt();
+fn walk_images(vt: &VtTerminal<'static, 'static>, visitor: &mut dyn ImageVisitor) -> Option<()> {
     let graphics = vt.kitty_graphics().ok()?;
     let mut iter = kg::PlacementIterator::new().ok()?;
     let mut placements = iter.update(&graphics).ok()?;
@@ -386,22 +441,22 @@ struct VirtualPlacementInfo {
 /// consecutive same-image cells on the same row into runs, and emit one
 /// `PlacementSnapshot` per run that belongs to `layer`.
 ///
-/// Pre-condition: [`Terminal::cell_pixels`] must return non-zero; virtual
-/// placements can't be sized before the first resize.
+/// Pre-condition: `cell_w` and `cell_h` must be non-zero; virtual placements
+/// can't be sized before the first resize.
 fn walk_virtual_placements(
-    term: &mut Terminal,
+    vt: &mut VtTerminal<'static, 'static>,
+    cell_w: u32,
+    cell_h: u32,
     layer: PlacementLayer,
     visitor: &mut dyn PlacementVisitor,
 ) -> Option<()> {
-    let (cell_w, cell_h) = term.cell_pixels();
     if cell_w == 0 || cell_h == 0 {
-        return None;
+        return Some(());
     }
 
     // Phase 1: collect per-image metadata from transmitted virtual placements.
     // Kept in a tiny Vec; one entry per unique image referenced this frame.
     let infos: Vec<(u32, VirtualPlacementInfo)> = {
-        let vt = term.vt();
         let graphics = vt.kitty_graphics().ok()?;
         let mut iter = kg::PlacementIterator::new().ok()?;
         let mut placements = iter.update(&graphics).ok()?;
@@ -451,7 +506,7 @@ fn walk_virtual_placements(
 
     // Phase 2: walk the grid looking for placeholder cells.
     let mut render_state = RenderState::new().ok()?;
-    let snapshot = render_state.update(term.vt_mut()).ok()?;
+    let snapshot = render_state.update(vt).ok()?;
     let mut rows = RowIterator::new().ok()?;
     let mut cells = CellIterator::new().ok()?;
     let mut row_iter = rows.update(&snapshot).ok()?;
@@ -605,11 +660,7 @@ fn emit_virtual_run(
 }
 
 fn layer_matches(layer: PlacementLayer, z: i32) -> bool {
-    match layer {
-        PlacementLayer::BelowBg => z < i32::MIN / 2,
-        PlacementLayer::BelowText => (i32::MIN / 2..0).contains(&z),
-        PlacementLayer::AboveText => z >= 0,
-    }
+    layer.contains_z(z)
 }
 
 /// Decode a single cell as a placeholder. Returns `None` if the cell's

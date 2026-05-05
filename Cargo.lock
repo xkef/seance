@@ -1212,7 +1212,7 @@ checksum = "48f5d2a454e16a5ea0f4ced81bd44e4cfc7bd3a507b61887c99fd3538b28e4af"
 [[package]]
 name = "libghostty-vt"
 version = "0.1.1"
-source = "git+https://github.com/Uzaaft/libghostty-rs?rev=dfac6f3e#dfac6f3e8e7ff1567a7dead6639ef36c42e4f15a"
+source = "git+https://github.com/Uzaaft/libghostty-rs?rev=5ac47e9eb166add2c00c432bc65c279133629712#5ac47e9eb166add2c00c432bc65c279133629712"
 dependencies = [
  "bitflags 2.11.0",
  "int-enum",
@@ -1223,7 +1223,7 @@ dependencies = [
 [[package]]
 name = "libghostty-vt-sys"
 version = "0.1.1"
-source = "git+https://github.com/Uzaaft/libghostty-rs?rev=dfac6f3e#dfac6f3e8e7ff1567a7dead6639ef36c42e4f15a"
+source = "git+https://github.com/Uzaaft/libghostty-rs?rev=5ac47e9eb166add2c00c432bc65c279133629712#5ac47e9eb166add2c00c432bc65c279133629712"
 
 [[package]]
 name = "libloading"
@@ -2324,6 +2324,7 @@ name = "seance-app"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "bytes",
  "env_logger",
  "log",
  "notify",
@@ -2400,9 +2401,12 @@ dependencies = [
 name = "seance-vt"
 version = "0.1.0"
 dependencies = [
+ "bytes",
+ "libc",
  "libghostty-vt",
  "log",
  "png",
+ "polling",
  "portable-pty",
 ]
 

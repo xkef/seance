@@ -1,6 +1,7 @@
 node_modules/
 target/
 vendor/
+talks/
 .claude/
 .claude-notes/
 .git/

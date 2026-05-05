@@ -6,7 +6,12 @@
   "config": {
     "default": true,
     // line length: exempt tables, code blocks, and headings
-    "MD013": { "tables": false, "code_blocks": false, "headings": false, "line_length": 100 },
+    "MD013": {
+      "tables": false,
+      "code_blocks": false,
+      "headings": false,
+      "line_length": 100,
+    },
     // allow multiple top-level headings
     "MD025": false,
     // allow emphasis-as-heading
@@ -18,15 +23,16 @@
     // inline HTML is occasionally useful
     "MD033": false,
     // code blocks without an explicit language are fine (ASCII diagrams)
-    "MD040": false
+    "MD040": false,
   },
   "globs": ["**/*.md"],
   "ignores": [
     "node_modules/**",
     "target/**",
     "vendor/**",
+    "talks/**",
     ".claude/**",
     ".claude-notes/**",
-    ".git/**"
-  ]
+    ".git/**",
+  ],
 }

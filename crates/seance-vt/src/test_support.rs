@@ -1,122 +1,77 @@
-//! Test-only, PTY-less VT emulator.
+//! Test-only, PTY-less Headless VT.
 //!
 //! `#[doc(hidden)]`. Not a stable API; the only consumer is
 //! `seance-render-test`. Do not widen without coordinating with the
 //! harness crate.
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use libghostty_vt::terminal::Mode;
-use libghostty_vt::{Terminal as VtTerminal, TerminalOptions};
 
-use crate::frame::{
-    CellVisitor, CursorInfo, FrameSource, ImageVisitor, PlacementLayer, PlacementVisitor,
-};
-use crate::frame_source::walk_vt_cells;
-use crate::selection::GridPos;
+use crate::VtCoreError;
+use crate::core::{DEFAULT_MAX_SCROLLBACK, VtCore, VtCoreOptions};
+use crate::frame::CursorShape;
+use crate::snapshot::VtSnapshot;
 
-const MAX_SCROLLBACK: usize = 10_000;
-
-/// A libghostty-vt terminal with no PTY and no child process.
-///
-/// Bytes are fed directly into the VT state machine via [`Self::feed`];
-/// VT-originated responses (e.g. to CSI DA queries) accumulate in an
-/// internal buffer retrievable with [`Self::take_responses`].
-///
-/// Implements [`FrameSource`] so the rendering-adjacent iteration
-/// logic in `seance-render-test` can walk a cell grid identically to
-/// the production `LibGhosttyFrameSource`.
+/// A PTY-less VT adapter for tests.
 pub struct HeadlessTerminal {
-    vt: Box<VtTerminal<'static, 'static>>,
-    responses: Rc<RefCell<Vec<u8>>>,
+    core: VtCore,
 }
 
 impl HeadlessTerminal {
-    /// Build a new `cols × rows` headless terminal. Returns `None` if
+    /// Build a new `cols × rows` Headless VT. Returns `None` if
     /// libghostty-vt rejects the configuration.
     pub fn new(cols: u16, rows: u16) -> Option<Self> {
-        let mut vt = Box::new(
-            VtTerminal::new(TerminalOptions {
-                cols,
-                rows,
-                max_scrollback: MAX_SCROLLBACK,
-            })
-            .ok()?,
-        );
-        // Cell pixel dims are irrelevant for tests that only feed VT bytes;
-        // virtual-placement rendering is out of scope for the harness.
-        vt.resize(cols, rows, 0, 0).ok()?;
-
-        let responses = Rc::new(RefCell::new(Vec::new()));
-        let sink = Rc::clone(&responses);
-        vt.on_pty_write(move |_, data| sink.borrow_mut().extend_from_slice(data))
-            .ok()?;
-
-        Some(Self { vt, responses })
+        let core = VtCore::new(VtCoreOptions {
+            cols,
+            rows,
+            max_scrollback: DEFAULT_MAX_SCROLLBACK,
+            pixel_width: 0,
+            pixel_height: 0,
+            initial_cursor_shape: CursorShape::Block,
+        })
+        .ok()?;
+        Some(Self { core })
     }
 
     /// Feed raw VT bytes (escape sequences, UTF-8, etc.).
     pub fn feed(&mut self, bytes: &[u8]) {
-        self.vt.vt_write(bytes);
+        self.core.feed(bytes);
     }
 
     /// Drain any VT-originated response bytes accumulated since the
     /// last call.
-    pub fn take_responses(&self) -> Vec<u8> {
-        self.responses.take()
+    pub fn take_responses(&mut self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for bytes in self.core.drain_responses() {
+            out.extend_from_slice(&bytes);
+        }
+        out
+    }
+
+    pub fn snapshot(&mut self) -> Result<VtSnapshot, VtCoreError> {
+        self.core.snapshot()
+    }
+
+    pub fn ack_rendered(&mut self, generation: u64) {
+        self.core.ack_rendered(generation);
     }
 
     pub fn cols(&self) -> u16 {
-        self.vt.cols().unwrap_or(0)
+        self.core.cols()
     }
 
     pub fn rows(&self) -> u16 {
-        self.vt.rows().unwrap_or(0)
+        self.core.rows()
     }
 
     pub fn cursor_pos(&self) -> (u16, u16) {
-        (
-            self.vt.cursor_x().unwrap_or(0),
-            self.vt.cursor_y().unwrap_or(0),
-        )
+        self.core.cursor_pos()
     }
 
     pub fn is_cursor_visible(&self) -> bool {
-        self.vt.is_cursor_visible().unwrap_or(true)
+        self.core.is_cursor_visible()
     }
 
     pub fn mode(&self, m: Mode) -> bool {
-        self.vt.mode(m).unwrap_or(false)
+        self.core.mode(m)
     }
-}
-
-impl FrameSource for HeadlessTerminal {
-    fn grid_size(&mut self) -> (u16, u16) {
-        (self.vt.cols().unwrap_or(80), self.vt.rows().unwrap_or(24))
-    }
-
-    fn cursor(&mut self) -> CursorInfo {
-        CursorInfo {
-            pos: GridPos {
-                col: self.vt.cursor_x().unwrap_or(0),
-                row: self.vt.cursor_y().unwrap_or(0),
-            },
-            visible: self.vt.is_cursor_visible().unwrap_or(true),
-            wide: false,
-            shape: None,
-        }
-    }
-
-    fn selection(&mut self) -> Option<(GridPos, GridPos)> {
-        None
-    }
-
-    fn visit_cells(&mut self, visitor: &mut dyn CellVisitor) {
-        let _ = walk_vt_cells(&mut self.vt, visitor);
-    }
-
-    fn visit_placements(&mut self, _layer: PlacementLayer, _visitor: &mut dyn PlacementVisitor) {}
-
-    fn visit_images(&mut self, _visitor: &mut dyn ImageVisitor) {}
 }

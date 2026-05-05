@@ -23,6 +23,16 @@ pub enum PlacementLayer {
     AboveText,
 }
 
+impl PlacementLayer {
+    pub fn contains_z(self, z: i32) -> bool {
+        match self {
+            PlacementLayer::BelowBg => z < i32::MIN / 2,
+            PlacementLayer::BelowText => (i32::MIN / 2..0).contains(&z),
+            PlacementLayer::AboveText => z >= 0,
+        }
+    }
+}
+
 /// One kitty graphics placement visible in the current viewport.
 ///
 /// All fields use `libghostty-vt`'s resolved values: `viewport_col/row`
@@ -31,7 +41,7 @@ pub enum PlacementLayer {
 /// dimensions; `source_*` is clamped to image bounds. `image_width/
 /// height` are reported here so the renderer can compute source UVs
 /// without a separate cache lookup.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlacementSnapshot {
     pub image_id: u32,
     pub placement_id: u32,
@@ -62,7 +72,7 @@ pub struct ImageInfo<'a> {
 
 /// A color slot in a terminal cell. Resolved by the renderer using
 /// its theme — the VT layer reports what the VT sees, not pixels.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CellColor {
     /// Use the theme's default foreground / background.
     Default,
@@ -72,7 +82,7 @@ pub enum CellColor {
     Rgb(u8, u8, u8),
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct CellAttrs {
     pub bold: bool,
     pub italic: bool,
@@ -104,7 +114,7 @@ pub enum CursorShape {
 ///
 /// `shape` is `None` when the VT snapshot couldn't be read (FFI error) —
 /// the caller should fall back to the user's configured default.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CursorInfo {
     pub pos: GridPos,
     pub visible: bool,
@@ -112,8 +122,7 @@ pub struct CursorInfo {
     pub shape: Option<CursorShape>,
 }
 
-/// Summary of what rows have changed since the last
-/// [`FrameSource::clear_dirty`].
+/// Summary of what rows changed before a frame-source snapshot was produced.
 ///
 /// Consumers use this to skip rebuild work (shape cache, bg cells, atlas
 /// uploads) for rows whose prior state is still valid.
@@ -146,18 +155,18 @@ pub trait FrameSource {
     /// issuing calls in row-major order and clamping to `grid_size`.
     fn visit_cells(&mut self, visitor: &mut dyn CellVisitor);
 
-    /// Report which rows have changed since the last [`Self::clear_dirty`].
+    /// Report which rows are dirty for this frame-source snapshot.
     ///
-    /// The dirty set is preserved across repeated calls until explicitly
-    /// acknowledged — callers may sample it as many times as they like.
-    /// Default impl is [`DirtySnapshot::Full`], which is safe for adapters
-    /// that don't track row-level state.
+    /// Immutable VT snapshots preserve the dirty set across repeated calls;
+    /// the owning Pane Session acknowledges rendered generations through the
+    /// VT actor. Default impl is [`DirtySnapshot::Full`], which is safe for
+    /// adapters that don't track row-level state.
     fn dirty_rows(&mut self) -> DirtySnapshot {
         DirtySnapshot::Full
     }
 
-    /// Acknowledge the dirty set. After this call [`Self::dirty_rows`]
-    /// should report [`DirtySnapshot::Clean`] until the VT state changes.
+    /// Acknowledge adapter-local dirty state, if the adapter has any.
+    /// Snapshot adapters ignore this because dirty reset is generation-based.
     fn clear_dirty(&mut self) {}
 
     /// Emit kitty graphics placements in the requested z-layer.

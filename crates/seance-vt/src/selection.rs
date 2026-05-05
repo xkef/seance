@@ -1,8 +1,8 @@
 //! Text selection over the terminal grid.
 //!
-//! Character, word, or line granularity. The text is extracted by
-//! [`crate::terminal::Terminal::selection_text`] from the live VT grid;
-//! this module only tracks the anchor/head pair.
+//! Character, word, or line granularity. The selection state is UI-owned;
+//! text extraction lives on [`crate::VtSnapshot`] for the actor handoff path
+//! and on the current terminal wrapper until app integration is migrated.
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GridPos {

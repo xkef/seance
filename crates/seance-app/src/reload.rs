@@ -5,29 +5,24 @@ use seance_config::ConfigDiff;
 
 use crate::app::{App, vt_shape_from_config};
 use crate::platform;
-use crate::window_state::WindowState;
+use crate::surface_state::SurfaceState;
 
 impl App {
-    /// Push theme colors into the live VT. Takes `&mut WindowState` so the
-    /// caller (including `resumed`, where `self.window_state` isn't wired
-    /// yet) can apply the theme before publishing the WindowState.
+    /// Push theme colors into the actor-owned VT. Takes `&mut SurfaceState` so
+    /// the caller (including `resumed`, where `self.surface` isn't wired yet)
+    /// can apply the theme before publishing the SurfaceState.
     pub(crate) fn apply_terminal_theme_to(
         &self,
-        ws: &mut WindowState,
+        surface: &mut SurfaceState,
         theme: &seance_config::Theme,
     ) {
-        ws.terminal.set_theme_colors(
-            theme.fg,
-            [theme.bg[0], theme.bg[1], theme.bg[2]],
-            [theme.cursor[0], theme.cursor[1], theme.cursor[2]],
-            theme.palette,
-        );
+        surface.set_theme_colors(theme);
     }
 
     /// Re-resolve the currently-configured theme and push it to the renderer.
     /// Bad theme files keep the previous theme live (#13).
     pub(crate) fn reload_theme(&mut self) {
-        if self.window_state.is_none() {
+        if self.surface.is_none() {
             return;
         }
         let spec = seance_config::theme::ThemeSpec::parse(
@@ -43,15 +38,10 @@ impl App {
                 return;
             }
         };
-        if let Some(ws) = self.window_state.as_mut() {
-            ws.renderer.set_theme(theme.clone());
-            ws.terminal.set_theme_colors(
-                theme.fg,
-                [theme.bg[0], theme.bg[1], theme.bg[2]],
-                [theme.cursor[0], theme.cursor[1], theme.cursor[2]],
-                theme.palette,
-            );
-            ws.mark_dirty();
+        if let Some(surface) = self.surface.as_mut() {
+            surface.renderer.set_theme(theme.clone());
+            surface.set_theme_colors(&theme);
+            surface.mark_dirty();
         }
     }
 
@@ -78,12 +68,15 @@ impl App {
         log::info!("config reloaded: {diff:?}");
         self.config = new_config;
 
-        if let Some(ws) = self.window_state.as_mut() {
+        if let Some(surface) = self.surface.as_mut() {
             if old_config.font.min_contrast != self.config.font.min_contrast {
-                ws.renderer.set_min_contrast(self.config.font.min_contrast);
+                surface
+                    .renderer
+                    .set_min_contrast(self.config.font.min_contrast);
             }
             if old_config.window.background_opacity != self.config.window.background_opacity {
-                ws.renderer
+                surface
+                    .renderer
                     .set_background_opacity(self.config.window.background_opacity);
             }
         }
@@ -102,16 +95,20 @@ impl App {
             );
         }
         if diff.font_features_changed
-            && let Some(ws) = self.window_state.as_mut()
+            && let Some(surface) = self.surface.as_mut()
         {
-            ws.renderer.set_font_features(&self.config.font.features);
-            ws.mark_dirty();
+            surface
+                .renderer
+                .set_font_features(&self.config.font.features);
+            surface.mark_dirty();
         }
         if diff.font_fallback_changed
-            && let Some(ws) = self.window_state.as_mut()
+            && let Some(surface) = self.surface.as_mut()
         {
-            ws.renderer.set_font_fallback(&self.config.font.fallback);
-            ws.mark_dirty();
+            surface
+                .renderer
+                .set_font_fallback(&self.config.font.fallback);
+            surface.mark_dirty();
         }
         if diff.font_family_changed {
             log::info!("font.family change takes effect on restart (live swap not yet supported)");
@@ -125,15 +122,14 @@ impl App {
         if diff.input_changed {
             let mode = platform::option_as_alt_from_config(self.config.input.macos_option_as_alt);
             self.input.set_option_as_alt(mode);
-            if let Some(ws) = self.window_state.as_ref() {
-                platform::set_option_as_alt(&ws.window, mode);
+            if let Some(surface) = self.surface.as_ref() {
+                platform::set_option_as_alt(&surface.window, mode);
             }
         }
         if old_config.cursor.style != self.config.cursor.style
-            && let Some(ws) = self.window_state.as_mut()
+            && let Some(surface) = self.surface.as_ref()
         {
-            ws.terminal
-                .set_cursor_shape(vt_shape_from_config(self.config.cursor.style));
+            surface.set_cursor_shape(vt_shape_from_config(self.config.cursor.style));
         }
         if diff.repaint_only {
             self.mark_dirty();
