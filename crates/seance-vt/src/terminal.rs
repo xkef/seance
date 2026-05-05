@@ -21,8 +21,11 @@ const READ_CHUNK: usize = 4096;
 const MAX_SCROLLBACK: usize = 10_000;
 
 /// Kitty image storage cap per terminal. Non-zero enables the protocol;
-/// ghostty evicts oldest images when we would exceed this limit.
-const KITTY_IMAGE_STORAGE_LIMIT_BYTES: u64 = 64 * 1024 * 1024;
+/// ghostty evicts oldest images (LRU) when we would exceed this limit.
+/// Matches ghostty's upstream default (`image-storage-limit`); a 4K RGBA
+/// frame is ~33 MB, so a smaller cap thrashes on presenterm decks that
+/// re-transmit the same image with a fresh id on every slide visit.
+const KITTY_IMAGE_STORAGE_LIMIT_BYTES: u64 = 320 * 1000 * 1000;
 
 /// PNG decoder for the Kitty graphics protocol.
 ///
