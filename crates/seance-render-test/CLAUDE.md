@@ -13,11 +13,11 @@ Two kinds of tests live here:
   through `HeadlessTerminal` (cursor moves, modes, CSI handling). No fonts, no
   fixtures, no snapshots. A failure names the specific invariant that regressed.
 - **`tests/layer4_frame.rs`** — `insta::assert_snapshot!`. Feeds a VT fixture,
-  dumps the rendered grid as text + per-cell annotations. When behavior changes
-  deliberately, bless with `just snap-review` (or
-  `cargo insta review -p seance-render-test`). When behavior changes
-  unintentionally, **read the diff in the grid box** to see what moved — that's
-  the failure diagnosis.
+  dumps the rendered grid through `VtSnapshot` + `SnapshotFrameSource` as text +
+  per-cell annotations. When behavior changes deliberately, bless with
+  `just snap-review` (or `cargo insta review -p seance-render-test`). When
+  behavior changes unintentionally, **read the diff in the grid box** to see
+  what moved — that's the failure diagnosis.
 
 ## Layer → file → failure-action map
 
@@ -47,8 +47,9 @@ Never accept a snapshot without reading it first.
 
 The harness reaches into two crates through `#[doc(hidden)]` modules:
 
-- **`seance_vt::test_support::HeadlessTerminal`** — PTY-less VT constructor. Not
-  a stable API; do not widen without the user's say-so.
+- **`seance_vt::test_support::HeadlessTerminal`** — PTY-less Headless VT that
+  wraps production VT Core and produces `VtSnapshot` values. Not a stable API;
+  do not widen without the user's say-so.
 - _(Phase B)_ `seance_render::test_support` — not yet landed.
 
 These are `#[doc(hidden)]` on purpose: consumers outside this harness must not

@@ -44,8 +44,7 @@ No hand-rolled VT parser. No bespoke graphics abstraction.
   reporting.
 - Kitty graphics protocol transmission (recently added).
 - Deadline-scheduled redraw — idle terminal draws nothing; PTY wakes are
-  out-of-band via a dedicated reader thread + `EventLoopProxy`. AutoVsync
-  presentation.
+  out-of-band via the VT Actor + `EventLoopProxy`. AutoVsync presentation.
 - macOS IOSurface + `presentsWithTransaction` for clean live-resize.
 
 ### What's planned
@@ -55,7 +54,7 @@ Tracked as GitHub epics M1–M11:
 | Epic    | Theme                          | Highlights                                                                                  |
 | ------- | ------------------------------ | ------------------------------------------------------------------------------------------- |
 | **M1**  | Config & themes                | TOML config, hot-reload, theme files, user keybind table                                    |
-| **M2**  | Rendering performance          | Shape cache, row-dirty flags, DEC 2026 sync output, deadline redraw, IO thread              |
+| **M2**  | Rendering performance          | Shape cache, row-dirty flags, DEC 2026 sync output, deadline redraw, VT Actor               |
 | **M3**  | Visual fidelity                | Procedural box-drawing/Powerline glyphs, WCAG min-contrast, OSC 52 clipboard                |
 | **M4**  | Z-layer architecture           | `RenderLayer` enum, per-layer vertex buffers, offscreen front/back textures for post-passes |
 | **M5**  | Image protocols                | Kitty placements, virtual placeholders (U+10EEEE), animated frames, iTerm2                  |

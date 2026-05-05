@@ -19,30 +19,31 @@ around it.
 
 ## Status
 
-| Concern                | v1 implementation                                       |
-| ---------------------- | ------------------------------------------------------- |
-| PTY blocking `read`    | one Unix IO actor owns PTY read/write/readiness polling |
-| VT parser (`vt_write`) | IO actor thread only                                    |
-| libghostty ownership   | all libghostty objects are owned by the IO actor        |
-| UI read path           | UI reads immutable `Arc<VtSnapshot>` only               |
-| UI write path          | `VtSessionHandle` commands                              |
-| Wake from IO           | deduped `VtEvent::ContentDirty` after snapshot publish  |
-| DEC 2026 sync output   | IO actor suppresses publishes while sync mode is active |
-| Renderer thread        | none; revisit only after profiling                      |
-| Platform scope         | actor v1 is Unix-only while raw-fd polling is used      |
+| Concern                | v1 implementation                                         |
+| ---------------------- | --------------------------------------------------------- |
+| PTY blocking `read`    | one Unix VT Actor owns PTY read/write/readiness polling   |
+| VT parser (`vt_write`) | VT Core on the actor thread only                          |
+| libghostty ownership   | VT Core owns `Terminal`, `RenderState`, and Kitty setup   |
+| UI read path           | UI reads immutable `Arc<VtSnapshot>` only                 |
+| UI write path          | `VtSessionHandle` commands                                |
+| Dirty reset            | render-generation acknowledgement after successful render |
+| Wake from IO           | deduped `VtEvent::ContentDirty` after snapshot publish    |
+| DEC 2026 sync output   | VT Actor suppresses publishes while sync mode is active   |
+| Renderer thread        | none; revisit only after profiling                        |
+| Platform scope         | actor v1 is Unix-only while raw-fd polling is used        |
 
 If a feature branch contains the obsolete `Terminal: Send` experiment or a
 forked `libghostty-rs` dependency for thread-safety, treat that code as
 superseded. Useful pieces may be retained only when they still fit this actor
-model, such as UI-owned selection state and
-`install_png_decoder_for_this_thread()` running on the owning IO thread.
+model, such as UI-owned selection state and PNG decoder installation inside VT
+Core on the owning VT Actor thread.
 
 ---
 
 ## Decision
 
-**All `libghostty-vt` objects are created, used, and dropped on one IO actor
-thread.**
+**All `libghostty-vt` objects are created, used, and dropped inside VT Core on
+one VT Actor thread.**
 
 The UI thread never owns, locks, borrows, moves, or references:
 
@@ -54,17 +55,17 @@ The UI thread never owns, locks, borrows, moves, or references:
 The only shared VT data is séance-owned, immutable snapshot data.
 
 ```
-┌─ UI thread (winit + wgpu) ───────────────┐   ┌─ IO actor thread ──────────────┐
-│ owns App, SurfaceState, renderer         │   │ owns libghostty Terminal       │
-│ owns PaneSession + selection             │   │ owns persistent RenderState     │
-│ reads Arc<VtSnapshot>                    │   │ owns PTY master/reader/writer   │
-│ renders SnapshotFrameSource              │   │ nonblocking poll loop           │
-│ encodes input using snapshot modes       │   │ parses PTY output               │
-│                                          │   │ handles VtCommand               │
-│ VtSessionHandle ───── VtCommand ────────▶│   │ builds owned VtSnapshot         │
-│                                          │   │ publishes to SnapshotSlot        │
-│ EventLoopProxy ◀──── VtEvent ────────────│   │ dedupes ContentDirty wakes      │
-└──────────────────────────────────────────┘   └───────────────────────────────┘
+┌─ UI thread (winit + wgpu) ───────────────┐   ┌─ VT Actor thread ───────────────┐
+│ owns App, SurfaceState, renderer         │   │ owns VT Core                    │
+│ owns PaneSession + selection             │   │   owns libghostty Terminal      │
+│ reads Arc<VtSnapshot>                    │   │   owns persistent RenderState    │
+│ renders SnapshotFrameSource              │   │   extracts owned VtSnapshots     │
+│ acks rendered snapshot generation        │   │ owns PTY master/reader/writer    │
+│ encodes input using snapshot modes       │   │ nonblocking poll loop            │
+│                                          │   │ handles VtCommand                │
+│ VtSessionHandle ───── VtCommand ────────▶│   │ publishes to SnapshotSlot        │
+│ EventLoopProxy ◀──── VtEvent ────────────│   │ dedupes ContentDirty wakes       │
+└──────────────────────────────────────────┘   └────────────────────────────────┘
 ```
 
 Do **not** implement `Arc<Mutex<libghostty_vt::Terminal>>` or any equivalent
@@ -75,11 +76,12 @@ longer the contract.
 
 ## Snapshot model
 
-The IO actor publishes owned snapshots. The UI clones only the `Arc`; it does
+The VT Actor publishes owned snapshots. The UI clones only the `Arc`; it does
 not clone per-cell text or image payloads during normal rendering.
 
 ```rust
 pub struct VtSnapshot {
+    pub generation: u64,
     pub cols: u16,
     pub rows: u16,
     pub cells: Vec<SnapshotCell>, // row-major, len = cols * rows
@@ -107,18 +109,40 @@ pub struct SnapshotImage {
 }
 ```
 
-v1 uses **full-grid snapshots**:
+VT Snapshots carry row-dirty information by render generation:
 
+- `generation` increases for every successful VT Snapshot extraction.
 - `dirty` is `DirtySnapshot::Full` initially.
-- The data model keeps `DirtySnapshot` so dirty-row/delta snapshots can be added
-  later.
+- VT Core records dirty deltas per generation and publishes the union of
+  unacknowledged deltas in each VT Snapshot.
+- A Pane Session acknowledges the generation after the renderer successfully
+  presents the VT Snapshot it used.
+- Stale acknowledgements never clear newer dirty rows. Over-upload is
+  acceptable; under-upload is not.
 - Cell text uses one arena string plus offsets; avoid `String` allocation per
   cell.
 - `CellColor` stays symbolic (`Default`, `Palette`, `Rgb`), not resolved RGBA,
   so theme reload can repaint from the same snapshot.
 
-Snapshot extraction happens on the IO actor from a coherent
+Snapshot extraction happens inside VT Core from a coherent
 `libghostty_vt::RenderState` snapshot and its row/cell iterators.
+
+### VT Core
+
+VT Core is the only Module that owns live libghostty state. It hides:
+
+- `libghostty_vt::Terminal`
+- `libghostty_vt::RenderState`
+- libghostty render snapshots and iterators
+- Kitty graphics setup and PNG decoder installation
+- cell-pixel tracking for image placement
+- cursor and theme seeding
+- VT Snapshot extraction errors
+- dirty-row generation tracking
+
+VT Actor wraps VT Core for PTY I/O and command polling. Headless VT wraps VT
+Core without a PTY so Layer 4 tests exercise the same VT Snapshot extraction
+path as production.
 
 ### Cursor and modes
 
@@ -158,8 +182,8 @@ Kitty graphics are part of the v1 snapshot for correctness.
 - `VtSnapshot::visit_images()` yields borrowed image info from `SnapshotImage`.
 - `VtSnapshot::visit_placements(layer)` filters placement snapshots by layer.
 - v1 may copy image payloads more often than ideal.
-- Later optimizations can add generation IDs, hashes, or incremental image
-  payload delivery.
+- Later optimizations can add image payload hashes or incremental image payload
+  delivery.
 
 ---
 
@@ -178,12 +202,13 @@ pub struct SnapshotFrameSource<'a> {
 - `grid_size`
 - `cursor`
 - `visit_cells`
-- `dirty_rows` by cloning `snapshot.dirty` (`Full` in v1)
-- `clear_dirty` as a no-op
+- `dirty_rows` by cloning `snapshot.dirty`
+- `clear_dirty` as a no-op; dirty reset is `ack_rendered(generation)`
 - `visit_images`
 - `visit_placements`
 
-Do not implement `FrameSource` directly on `Arc<VtSnapshot>`.
+Do not implement `FrameSource` directly on `Arc<VtSnapshot>`. Do not expose a
+live libghostty `FrameSource` adapter as a public compatibility path.
 
 ---
 
@@ -204,13 +229,14 @@ pub struct SnapshotSlot {
 ```rust
 pub fn latest_snapshot(&self) -> Option<Arc<VtSnapshot>>;
 pub fn clear_content_dirty_pending(&self);
+pub fn ack_rendered(&self, generation: u64) -> Result<(), VtSessionError>;
 ```
 
 Wake ordering:
 
-1. IO actor builds an owned `VtSnapshot`.
-2. IO actor publishes it to `SnapshotSlot`.
-3. IO actor sends/dedupes `VtEvent::ContentDirty`.
+1. VT Actor builds an owned `VtSnapshot`.
+2. VT Actor publishes it to `SnapshotSlot`.
+3. VT Actor sends/dedupes `VtEvent::ContentDirty`.
 4. UI handles `ContentDirty`, clears the pending flag before cloning the latest
    snapshot, stores it in `PaneSession`, and marks the surface dirty.
 
@@ -218,9 +244,20 @@ Clearing before the clone prevents a publish that races with UI handling from
 being lost behind an already-set pending flag. Extra wakes are acceptable;
 missed wakes are not.
 
+Acknowledgement ordering:
+
+1. The renderer builds and presents a frame from a VT Snapshot.
+2. If present succeeds, the Pane Session sends `AckRendered(generation)` for
+   that VT Snapshot.
+3. VT Core drops dirty deltas for generations `<= generation`.
+4. VT Actor does not publish solely because of an acknowledgement.
+
+Dirty rows are never cleared when `ContentDirty` is handled and are never
+cleared on snapshot publication.
+
 ---
 
-## IO actor API
+## VT Actor API
 
 `seance-vt` remains winit-free. The actor receives an event sink closure, which
 `seance-app` can adapt to `EventLoopProxy<UserEvent>`.
@@ -234,17 +271,17 @@ where
     F: Fn(VtEvent) + Send + 'static;
 ```
 
-`spawn_vt_session` blocks until the IO thread has successfully:
+`spawn_vt_session` blocks until the VT Actor thread has successfully:
 
 1. installed the PNG decoder for that thread
-2. created the libghostty terminal
-3. created the persistent render state
-4. opened the PTY and spawned the child process
-5. published the initial snapshot
+2. created VT Core, including the libghostty terminal, persistent render state,
+   Kitty graphics setup, and cursor seeding
+3. opened the PTY and spawned the child process
+4. published the initial snapshot
 
-Terminal creation must happen inside the IO thread closure, not before spawning.
-The initialization result is returned to the caller through an internal one-shot
-or synchronous channel.
+VT Core creation must happen inside the VT Actor thread closure, not before
+spawning. The initialization result is returned to the caller through an
+internal one-shot or synchronous channel.
 
 ### Events
 
@@ -261,11 +298,11 @@ Do not add `PaneId` routing, bell events, title events, or clipboard events in
 this migration.
 
 `ContentDirty` is deduped with an atomic pending flag. If one content-dirty wake
-is already in flight, the IO actor only updates the snapshot slot.
+is already in flight, the VT Actor only updates the snapshot slot.
 
 ### Commands
 
-Use one simple `std::sync::mpsc::Sender<VtCommand>` for v1. The IO actor drains
+Use one simple `std::sync::mpsc::Sender<VtCommand>` for v1. The VT Actor drains
 and coalesces command classes internally.
 
 ```rust
@@ -280,6 +317,7 @@ pub enum VtCommand {
     SetThemeColors(ThemeColors),
     ScrollLines(i32),
     SetCursorShape(CursorShape),
+    AckRendered(u64),
     Shutdown,
 }
 ```
@@ -291,14 +329,16 @@ Drain behavior:
 - coalesce `SetThemeColors` to the latest value
 - accumulate `ScrollLines` deltas
 - coalesce `SetCursorShape` to the latest value
+- coalesce `AckRendered` to the max generation
 - exit promptly on `Shutdown`
 
 Apply drained commands in deterministic order:
 
-1. resize
-2. theme and cursor changes
-3. scroll
-4. writes
+1. render-generation acknowledgement
+2. resize
+3. theme and cursor changes
+4. scroll
+5. writes
 
 Publish a snapshot after every VT-visible mutation:
 
@@ -309,7 +349,7 @@ Publish a snapshot after every VT-visible mutation:
 - scroll viewport
 
 Do not publish after `Write` alone; shell echo or output will publish after PTY
-data arrives.
+data arrives. Do not publish after `AckRendered` alone.
 
 ### Command errors
 
@@ -319,13 +359,14 @@ data arrives.
 pub fn write(&self, bytes: bytes::Bytes) -> Result<(), VtSessionError>;
 pub fn resize(&self, resize: Resize) -> Result<(), VtSessionError>;
 pub fn scroll_lines(&self, delta: i32) -> Result<(), VtSessionError>;
+pub fn ack_rendered(&self, generation: u64) -> Result<(), VtSessionError>;
 ```
 
 App callsites may explicitly ignore or log these errors. `Drop` ignores errors.
 
 ### Shutdown
 
-`VtSessionHandle` owns the IO thread join handle internally. `Drop` sends
+`VtSessionHandle` owns the VT Actor thread join handle internally. `Drop` sends
 `Shutdown` and notifies the poller, but must not block waiting for the thread to
 exit. Add an explicit `join(self)` for tests and controlled shutdown paths.
 
@@ -339,8 +380,10 @@ readiness strategy exists.
 
 Use:
 
-- `portable-pty` reader/writer objects for actual reads and writes
-- `MasterPty::as_raw_fd()` only for readiness polling
+- a private PTY Adapter Seam inside `seance-vt`
+- `portable-pty` reader/writer objects for the production Adapter
+- a scripted test Adapter for deterministic actor command/publication tests
+- `MasterPty::as_raw_fd()` only for readiness polling in the production Adapter
 - `O_NONBLOCK` on the master fd
 - `polling::Poller::notify()` for command wakeups
 
@@ -391,7 +434,7 @@ most one snapshot per parse batch, subject to the DEC 2026 gate.
 
 ### VT-originated responses
 
-VT-originated responses such as DA reports and cursor reports are IO-local
+VT-originated responses such as DA reports and cursor reports are VT Actor-local
 writes back to the PTY:
 
 ```rust
@@ -410,7 +453,7 @@ Do not use `Arc<Mutex<Vec<u8>>>` for actor responses.
 
 ## DEC 2026 synchronized output
 
-Honor DEC 2026 in the IO actor using libghostty's `Mode::SYNC_OUTPUT` state.
+Honor DEC 2026 in the VT Actor using libghostty's `Mode::SYNC_OUTPUT` state.
 
 Publication rules:
 
@@ -430,16 +473,16 @@ mode directly unless a safe API exists.
 ### Cursor shape
 
 Keep the current behavior of seeding the configured default cursor shape into VT
-with DECSCUSR bytes, but do it on the IO actor:
+with DECSCUSR bytes, but do it in VT Core on the VT Actor:
 
 - `VtSessionOptions { initial_cursor_shape: CursorShape }`
-- feed DECSCUSR after terminal creation
+- feed DECSCUSR during VT Core creation
 - publish a snapshot afterward
 - hot reload sends `VtCommand::SetCursorShape(shape)`
 
 ### Theme colors
 
-Send theme colors to libghostty on the IO actor so OSC queries and default
+Send theme colors to libghostty through VT Core so OSC queries and default
 palette behavior remain correct. Snapshot cells still store symbolic colors;
 renderer-side theme reload can repaint from the same snapshot.
 
@@ -478,6 +521,7 @@ UI mutates VT only through `VtSessionHandle` commands:
 - scroll lines
 - set theme colors
 - set cursor shape
+- acknowledge rendered VT Snapshot generations
 
 ### Resize flow
 
@@ -488,11 +532,22 @@ metrics, scale factor, and padding.
 2. UI updates renderer surface/metrics/padding
 3. UI computes `(cols, rows)` through `renderer.grid_size()`
 4. UI sends `VtCommand::Resize`
-5. IO actor resizes VT and PTY, then publishes a snapshot
+5. VT Actor resizes VT Core and PTY, then publishes a snapshot
 6. UI redraws on `ContentDirty`
 
 On `WindowEvent::Resized`, do not force an immediate draw with a stale snapshot.
-Wait for the IO actor's resized snapshot.
+Wait for the VT Actor's resized snapshot.
+
+### Render acknowledgement
+
+`App::draw()` records the generation of the Pane Session's latest VT Snapshot,
+renders through `SnapshotFrameSource`, and sends `ack_rendered(generation)` only
+when `TerminalRenderer::render()` returns `true`. It does not acknowledge while
+the surface is occluded and repeated acknowledgements of the same generation are
+safe.
+
+`ContentDirty` wake dedupe only controls event-loop wakeups. It is not a dirty
+acknowledgement mechanism.
 
 ### Mouse wheel and paste
 
@@ -557,12 +612,12 @@ state-sharing choices differ.
 
 | Aspect               | Ghostty                                | Alacritty                   | WezTerm                   | séance v1 target                        |
 | -------------------- | -------------------------------------- | --------------------------- | ------------------------- | --------------------------------------- |
-| Threads per terminal | 4 (UI / renderer / IO-write / read)    | 2 (UI / reader+parser)      | 3+ (UI / reader / parser) | 2 (UI / IO actor)                       |
+| Threads per terminal | 4 (UI / renderer / IO-write / read)    | 2 (UI / reader+parser)      | 3+ (UI / reader / parser) | 2 (UI / VT Actor)                       |
 | Dedicated renderer   | yes                                    | no                          | no                        | no                                      |
-| VT parse location    | reader thread                          | reader thread               | parser thread             | IO actor                                |
+| VT parse location    | reader thread                          | reader thread               | parser thread             | VT Actor                                |
 | Live VT shared w/UI  | renderer-state mutex + copied snapshot | `FairMutex` around terminal | `Mutex` around terminal   | no; owned `VtSnapshot` only             |
 | Wake mechanism       | `xev.Async`                            | `EventLoopProxy` equivalent | mux notification fan-out  | `VtEvent::ContentDirty` via app adapter |
-| Write path           | mailbox to writer thread               | mpsc to IO thread           | locked master writer      | `VtCommand::Write(Bytes)` to IO actor   |
+| Write path           | mailbox to writer thread               | mpsc to IO thread           | locked master writer      | `VtCommand::Write(Bytes)` to VT Actor   |
 
 Reference source locations from the previous survey remain useful for context:
 
@@ -588,14 +643,14 @@ Landing order:
 | ----- | ------------------------ | ------ |
 | 1     | docs/issues correction   | done   |
 | 2     | snapshot model           | done   |
-| 3     | IO actor                 | done   |
+| 3     | VT Actor                 | done   |
 | 4     | app integration + rename | done   |
 
 Issue mapping:
 
 - [#166] covered the owned snapshot model.
 - [#167] covered the nonblocking Unix actor API and loop.
-- [#23] DEC 2026 is implemented as part of the IO actor's publication gate.
+- [#23] DEC 2026 is implemented as part of the VT Actor's publication gate.
 - [#24] deadline-scheduled redraw is already shipped and remains UI-side.
 - [#168]-[#172] should be kept only where their scope still applies after the
   actor rewrite; otherwise supersede them with smaller actor/snapshot

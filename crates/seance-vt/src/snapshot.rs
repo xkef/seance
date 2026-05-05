@@ -14,10 +14,11 @@ use crate::selection::{GridPos, Selection, SelectionGranularity};
 /// Immutable, séance-owned terminal state for one render/copy handoff.
 ///
 /// Cells are row-major and store byte offsets into [`Self::text`] instead of
-/// allocating a string per cell. v1 snapshots are full-grid snapshots, but the
-/// dirty field is preserved so later actor work can publish row-level deltas.
+/// allocating a string per cell. `generation` is assigned by VT Core and used
+/// to acknowledge dirty rows after a successful render/present.
 #[derive(Debug, Clone)]
 pub struct VtSnapshot {
+    pub generation: u64,
     pub cols: u16,
     pub rows: u16,
     pub cells: Vec<SnapshotCell>,
@@ -33,6 +34,7 @@ impl VtSnapshot {
     /// Build an empty snapshot with capacity for `cols * rows` cells.
     pub fn empty(cols: u16, rows: u16) -> Self {
         Self {
+            generation: 0,
             cols,
             rows,
             cells: Vec::with_capacity(usize::from(cols) * usize::from(rows)),

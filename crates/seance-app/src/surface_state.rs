@@ -44,6 +44,12 @@ impl PaneSession {
         }
     }
 
+    pub(crate) fn ack_rendered(&self, generation: u64) {
+        if let Err(err) = self.vt.ack_rendered(generation) {
+            log::warn!("failed to ack rendered VT snapshot: {err}");
+        }
+    }
+
     fn modes(&self) -> TerminalModes {
         self.latest_snapshot
             .as_ref()

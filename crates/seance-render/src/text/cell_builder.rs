@@ -182,9 +182,8 @@ impl CellBuilder {
         config: BuildFrameConfig<'_>,
     ) {
         // Sample the dirty set first so the rest of the build can mutate the
-        // source freely. The snapshot is owned by the builder; the matching
-        // `clear_dirty` call below acknowledges it on the VT side so the
-        // next frame reports only post-snapshot changes.
+        // source freely. Immutable VT snapshots ignore `clear_dirty`; the app
+        // acknowledges rendered generations through the VT actor after present.
         self.last_dirty = source.dirty_rows();
         source.clear_dirty();
 

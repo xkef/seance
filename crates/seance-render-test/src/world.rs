@@ -4,7 +4,7 @@
 //! phases add a lazy headless wgpu instance for L5 render-to-texture;
 //! Phase A keeps GPU state out of scope.
 
-use seance_vt::FrameSource;
+use seance_vt::SnapshotFrameSource;
 use seance_vt::test_support::HeadlessTerminal;
 
 use crate::clock::TestClock;
@@ -88,8 +88,12 @@ impl TestWorld {
     }
 
     pub fn dump_frame(&mut self) -> String {
-        let source: &mut dyn FrameSource = &mut self.vt;
-        dump_frame(source)
+        let snapshot = self
+            .vt
+            .snapshot()
+            .expect("Headless VT snapshot should build");
+        let mut source = SnapshotFrameSource::new(&snapshot);
+        dump_frame(&mut source)
     }
 }
 

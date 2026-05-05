@@ -104,7 +104,16 @@ impl App {
             .map(Into::into)
             .unwrap_or_else(|| self.config.cursor.style.into());
         surface.render_inputs.vt_cursor_visible = !self.config.cursor.blink || surface.blink_on;
-        surface.renderer.render(&surface.render_inputs);
+        let rendered_generation = surface
+            .pane
+            .latest_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.generation);
+        if surface.renderer.render(&surface.render_inputs)
+            && let Some(generation) = rendered_generation
+        {
+            surface.pane.ack_rendered(generation);
+        }
     }
 
     /// Advance the cursor blink state if we have crossed an edge. Called

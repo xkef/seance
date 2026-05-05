@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use bytes::{Buf, Bytes};
 
+use crate::core::VtCoreError;
 use crate::frame::CursorShape;
 use crate::snapshot::VtSnapshot;
 
@@ -22,10 +23,6 @@ const SYNC_OUTPUT_TIMEOUT: Duration = Duration::from_millis(150);
 const READ_CHUNK: usize = 16 * 1024;
 #[cfg(unix)]
 const MAX_READ_PER_TICK: usize = 256 * 1024;
-#[cfg(unix)]
-const MAX_SCROLLBACK: usize = 10_000;
-#[cfg(unix)]
-const KITTY_IMAGE_STORAGE_LIMIT_BYTES: u64 = 64 * 1024 * 1024;
 #[cfg(unix)]
 const PTY_KEY: usize = 0;
 
@@ -60,12 +57,6 @@ pub struct Resize {
     pub pixel_height: u16,
 }
 
-impl Resize {
-    fn cell_pixels(self) -> (u32, u32) {
-        cell_px(self.cols, self.rows, self.pixel_width, self.pixel_height)
-    }
-}
-
 /// Default colors/palette to seed into libghostty.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemeColors {
@@ -96,6 +87,7 @@ pub enum VtCommand {
     SetThemeColors(ThemeColors),
     ScrollLines(i32),
     SetCursorShape(CursorShape),
+    AckRendered(u64),
     Shutdown,
 }
 
@@ -129,7 +121,7 @@ pub enum SpawnError {
     NoRawFd,
     Io(io::Error),
     Pty(String),
-    Vt(&'static str),
+    VtCore(VtCoreError),
     Init(String),
 }
 
@@ -140,7 +132,7 @@ impl fmt::Display for SpawnError {
             Self::NoRawFd => f.write_str("PTY master did not expose a Unix raw fd"),
             Self::Io(err) => write!(f, "IO error: {err}"),
             Self::Pty(err) => write!(f, "PTY error: {err}"),
-            Self::Vt(op) => write!(f, "libghostty operation failed: {op}"),
+            Self::VtCore(err) => write!(f, "VT core error: {err}"),
             Self::Init(err) => write!(f, "actor initialization failed: {err}"),
         }
     }
@@ -150,6 +142,7 @@ impl std::error::Error for SpawnError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(err) => Some(err),
+            Self::VtCore(err) => Some(err),
             _ => None,
         }
     }
@@ -229,6 +222,10 @@ impl VtSessionHandle {
         self.send(VtCommand::SetCursorShape(shape))
     }
 
+    pub fn ack_rendered(&self, generation: u64) -> Result<(), VtSessionError> {
+        self.send(VtCommand::AckRendered(generation))
+    }
+
     /// Send shutdown, notify the actor, and wait for the IO thread to exit.
     pub fn join(mut self) -> thread::Result<()> {
         let _ = self.shutdown();
@@ -290,6 +287,7 @@ struct CoalescedCommands {
     theme: Option<ThemeColors>,
     scroll_delta: i32,
     cursor_shape: Option<CursorShape>,
+    ack_generation: Option<u64>,
     shutdown: bool,
 }
 
@@ -326,6 +324,12 @@ impl CoalescedCommands {
                 self.scroll_delta = self.scroll_delta.saturating_add(delta);
             }
             VtCommand::SetCursorShape(shape) => self.cursor_shape = Some(shape),
+            VtCommand::AckRendered(generation) => {
+                self.ack_generation = Some(
+                    self.ack_generation
+                        .map_or(generation, |current| current.max(generation)),
+                );
+            }
             VtCommand::Shutdown => self.shutdown = true,
         }
     }
@@ -336,6 +340,7 @@ impl CoalescedCommands {
             && self.theme.is_none()
             && self.scroll_delta == 0
             && self.cursor_shape.is_none()
+            && self.ack_generation.is_none()
             && !self.shutdown
     }
 }
@@ -486,15 +491,10 @@ mod unix_actor {
     use std::io::{Read, Write};
     use std::os::fd::{BorrowedFd, RawFd};
 
-    use libghostty_vt::RenderState;
-    use libghostty_vt::style::RgbColor;
-    use libghostty_vt::terminal::{Mode, ScrollViewport};
-    use libghostty_vt::{Terminal as VtTerminal, TerminalOptions};
     use polling::{Event, Events, Poller};
     use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
-    use crate::frame_source::build_snapshot_from_parts;
-    use crate::terminal::install_png_decoder_for_this_thread;
+    use crate::core::{DEFAULT_MAX_SCROLLBACK, VtCore, VtCoreOptions};
 
     pub(super) fn spawn_vt_session_unix<F>(
         options: VtSessionOptions,
@@ -551,52 +551,25 @@ mod unix_actor {
         }
     }
 
-    struct VtActor<F>
-    where
-        F: Fn(VtEvent),
-    {
-        vt: Box<VtTerminal<'static, 'static>>,
-        render_state: RenderState<'static>,
+    trait PtyAdapter: Read + Write + Send {
+        fn resize(&mut self, size: PtySize);
+        fn child_exited(&mut self) -> bool;
+        fn kill_child(&mut self);
+        fn raw_fd(&self) -> Option<RawFd> {
+            None
+        }
+    }
+
+    struct PortablePtyAdapter {
         reader: Box<dyn Read + Send>,
         writer: Box<dyn Write + Send>,
         master: Box<dyn MasterPty + Send>,
         child: Box<dyn Child + Send + Sync>,
-        commands: mpsc::Receiver<VtCommand>,
-        response_rx: mpsc::Receiver<Bytes>,
-        pending_writes: PendingWrites,
-        notifier: ContentNotifier<F>,
-        poller: Arc<Poller>,
         fd: RawFd,
-        cell_width_px: u32,
-        cell_height_px: u32,
-        sync_gate: SyncOutputGate,
     }
 
-    impl<F> VtActor<F>
-    where
-        F: Fn(VtEvent),
-    {
-        fn new(
-            options: VtSessionOptions,
-            commands: mpsc::Receiver<VtCommand>,
-            poller: Arc<Poller>,
-            notifier: ContentNotifier<F>,
-        ) -> Result<Self, SpawnError> {
-            install_png_decoder_for_this_thread();
-
-            let mut vt = Box::new(
-                VtTerminal::new(TerminalOptions {
-                    cols: options.cols,
-                    rows: options.rows,
-                    max_scrollback: MAX_SCROLLBACK,
-                })
-                .map_err(|_| SpawnError::Vt("terminal new"))?,
-            );
-            configure_kitty_graphics(&mut vt)?;
-
-            let render_state =
-                RenderState::new().map_err(|_| SpawnError::Vt("render state new"))?;
-
+    impl PortablePtyAdapter {
+        fn open(options: VtSessionOptions) -> Result<Self, SpawnError> {
             let pair = native_pty_system()
                 .openpty(PtySize {
                     rows: options.rows,
@@ -619,51 +592,122 @@ mod unix_actor {
                 .map_err(|err| SpawnError::Pty(err.to_string()))?;
             let fd = pair.master.as_raw_fd().ok_or(SpawnError::NoRawFd)?;
             set_nonblocking(fd)?;
-
-            let (cell_width_px, cell_height_px) = cell_px(
-                options.cols,
-                options.rows,
-                options.pixel_width,
-                options.pixel_height,
-            );
-            vt.resize(options.cols, options.rows, cell_width_px, cell_height_px)
-                .map_err(|_| SpawnError::Vt("terminal resize"))?;
-
-            let (response_tx, response_rx) = mpsc::channel::<Bytes>();
-            vt.on_pty_write(move |_, data| {
-                let _ = response_tx.send(Bytes::copy_from_slice(data));
-            })
-            .map_err(|_| SpawnError::Vt("on pty write"))?;
-            seed_cursor_shape(&mut vt, options.initial_cursor_shape);
-
-            let mut actor = Self {
-                vt,
-                render_state,
+            Ok(Self {
                 reader,
                 writer,
                 master: pair.master,
                 child,
+                fd,
+            })
+        }
+    }
+
+    impl Read for PortablePtyAdapter {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.reader.read(buf)
+        }
+    }
+
+    impl Write for PortablePtyAdapter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.writer.write(buf)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.writer.flush()
+        }
+    }
+
+    impl PtyAdapter for PortablePtyAdapter {
+        fn resize(&mut self, size: PtySize) {
+            let _ = self.master.resize(size);
+        }
+
+        fn child_exited(&mut self) -> bool {
+            !matches!(self.child.try_wait(), Ok(None))
+        }
+
+        fn kill_child(&mut self) {
+            let _ = self.child.kill();
+        }
+
+        fn raw_fd(&self) -> Option<RawFd> {
+            Some(self.fd)
+        }
+    }
+
+    struct VtActor<F, P>
+    where
+        F: Fn(VtEvent),
+        P: PtyAdapter,
+    {
+        core: VtCore,
+        pty: P,
+        commands: mpsc::Receiver<VtCommand>,
+        pending_writes: PendingWrites,
+        notifier: ContentNotifier<F>,
+        poller: Arc<Poller>,
+        fd: Option<RawFd>,
+        sync_gate: SyncOutputGate,
+    }
+
+    impl<F> VtActor<F, PortablePtyAdapter>
+    where
+        F: Fn(VtEvent),
+    {
+        fn new(
+            options: VtSessionOptions,
+            commands: mpsc::Receiver<VtCommand>,
+            poller: Arc<Poller>,
+            notifier: ContentNotifier<F>,
+        ) -> Result<Self, SpawnError> {
+            let pty = PortablePtyAdapter::open(options.clone())?;
+            Self::with_pty(options, pty, commands, poller, notifier)
+        }
+    }
+
+    impl<F, P> VtActor<F, P>
+    where
+        F: Fn(VtEvent),
+        P: PtyAdapter,
+    {
+        fn with_pty(
+            options: VtSessionOptions,
+            pty: P,
+            commands: mpsc::Receiver<VtCommand>,
+            poller: Arc<Poller>,
+            notifier: ContentNotifier<F>,
+        ) -> Result<Self, SpawnError> {
+            let core = VtCore::new(VtCoreOptions {
+                cols: options.cols,
+                rows: options.rows,
+                pixel_width: options.pixel_width,
+                pixel_height: options.pixel_height,
+                max_scrollback: DEFAULT_MAX_SCROLLBACK,
+                initial_cursor_shape: options.initial_cursor_shape,
+            })
+            .map_err(SpawnError::VtCore)?;
+
+            let fd = pty.raw_fd();
+            let mut actor = Self {
+                core,
+                pty,
                 commands,
-                response_rx,
                 pending_writes: PendingWrites::default(),
                 notifier,
                 poller,
                 fd,
-                cell_width_px,
-                cell_height_px,
                 sync_gate: SyncOutputGate::default(),
             };
             actor.drain_responses();
-            actor
-                .publish_snapshot()
-                .ok_or(SpawnError::Vt("initial snapshot"))?;
+            actor.publish_snapshot().map_err(SpawnError::VtCore)?;
 
-            let mut interest = Event::readable(PTY_KEY);
-            interest.set_interrupt(true);
-            // SAFETY: `fd` belongs to `actor.master`, which is stored in the
-            // actor and deleted from the poller before `master` is dropped.
-            unsafe {
-                actor.poller.add(fd, interest)?;
+            if let Some(fd) = actor.fd {
+                let mut interest = Event::readable(PTY_KEY);
+                interest.set_interrupt(true);
+                unsafe {
+                    actor.poller.add(fd, interest)?;
+                }
             }
 
             Ok(actor)
@@ -744,19 +788,22 @@ mod unix_actor {
                 }
             }
 
-            let _ = self
-                .poller
-                .delete(unsafe { BorrowedFd::borrow_raw(self.fd) });
+            if let Some(fd) = self.fd {
+                let _ = self.poller.delete(unsafe { BorrowedFd::borrow_raw(fd) });
+            }
             if !self.child_exited() {
-                let _ = self.child.kill();
+                self.pty.kill_child();
             }
         }
 
         fn reregister(&self) -> io::Result<()> {
+            let Some(fd) = self.fd else {
+                return Ok(());
+            };
             let mut interest = Event::new(PTY_KEY, true, !self.pending_writes.is_empty());
             interest.set_interrupt(true);
             self.poller
-                .modify(unsafe { BorrowedFd::borrow_raw(self.fd) }, interest)
+                .modify(unsafe { BorrowedFd::borrow_raw(fd) }, interest)
         }
 
         fn drain_and_apply_commands(&mut self) -> bool {
@@ -768,23 +815,26 @@ mod unix_actor {
                 return true;
             }
 
+            if let Some(generation) = batch.ack_generation {
+                self.core.ack_rendered(generation);
+            }
             if let Some(resize) = batch.resize {
                 self.apply_resize(resize);
                 self.sync_gate.clear();
                 let _ = self.publish_snapshot();
             }
             if let Some(theme) = batch.theme {
-                apply_theme_colors(&mut self.vt, theme);
+                self.core
+                    .set_theme_colors(theme.fg, theme.bg, theme.cursor, theme.palette);
                 let _ = self.publish_snapshot();
             }
             if let Some(shape) = batch.cursor_shape {
-                seed_cursor_shape(&mut self.vt, shape);
+                self.core.seed_cursor_shape(shape);
                 self.drain_responses();
                 let _ = self.publish_snapshot();
             }
             if batch.scroll_delta != 0 {
-                self.vt
-                    .scroll_viewport(ScrollViewport::Delta(batch.scroll_delta as isize));
+                self.core.scroll_lines(batch.scroll_delta);
                 let _ = self.publish_snapshot();
             }
             self.pending_writes.extend(batch.writes);
@@ -792,11 +842,15 @@ mod unix_actor {
         }
 
         fn apply_resize(&mut self, resize: Resize) {
-            let (cell_w, cell_h) = resize.cell_pixels();
-            self.cell_width_px = cell_w;
-            self.cell_height_px = cell_h;
-            let _ = self.vt.resize(resize.cols, resize.rows, cell_w, cell_h);
-            let _ = self.master.resize(PtySize {
+            if let Err(err) = self.core.resize(
+                resize.cols,
+                resize.rows,
+                resize.pixel_width,
+                resize.pixel_height,
+            ) {
+                log::warn!("VT actor failed to resize VT core: {err}");
+            }
+            self.pty.resize(PtySize {
                 rows: resize.rows,
                 cols: resize.cols,
                 pixel_width: resize.pixel_width,
@@ -805,7 +859,7 @@ mod unix_actor {
         }
 
         fn flush_pending_writes(&mut self) -> io::Result<()> {
-            self.pending_writes.flush(&mut self.writer)
+            self.pending_writes.flush(&mut self.pty)
         }
 
         fn read_pty_batch(&mut self) -> io::Result<ReadOutcome> {
@@ -814,12 +868,12 @@ mod unix_actor {
             let mut buf = [0u8; READ_CHUNK];
 
             while total < MAX_READ_PER_TICK {
-                match self.reader.read(&mut buf) {
+                match self.pty.read(&mut buf) {
                     Ok(0) => return Ok(ReadOutcome::Eof),
                     Ok(n) => {
                         total += n;
                         changed = true;
-                        self.vt.vt_write(&buf[..n]);
+                        self.core.feed(&buf[..n]);
                         self.drain_responses();
                     }
                     Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
@@ -839,57 +893,29 @@ mod unix_actor {
         }
 
         fn drain_responses(&mut self) {
-            while let Ok(bytes) = self.response_rx.try_recv() {
+            for bytes in self.core.drain_responses() {
                 self.pending_writes.push(bytes);
             }
         }
 
-        fn publish_snapshot(&mut self) -> Option<()> {
-            let snapshot = build_snapshot_from_parts(
-                &mut self.vt,
-                &mut self.render_state,
-                self.cell_width_px,
-                self.cell_height_px,
-            )?;
+        fn publish_snapshot(&mut self) -> Result<(), VtCoreError> {
+            let snapshot = self.core.snapshot()?;
             self.notifier.publish(Arc::new(snapshot));
-            Some(())
+            Ok(())
         }
 
         fn sync_active(&self) -> bool {
-            self.vt.mode(Mode::SYNC_OUTPUT).unwrap_or(false)
+            self.core.sync_active()
         }
 
         fn child_exited(&mut self) -> bool {
-            !matches!(self.child.try_wait(), Ok(None))
+            self.pty.child_exited()
         }
     }
 
     enum ReadOutcome {
         Alive,
         Eof,
-    }
-
-    fn configure_kitty_graphics(
-        vt: &mut Box<VtTerminal<'static, 'static>>,
-    ) -> Result<(), SpawnError> {
-        vt.set_kitty_image_storage_limit(KITTY_IMAGE_STORAGE_LIMIT_BYTES)
-            .map_err(|_| SpawnError::Vt("kitty storage limit"))?;
-        let _ = vt.set_kitty_image_from_file_allowed(true);
-        let _ = vt.set_kitty_image_from_temp_file_allowed(true);
-        let _ = vt.set_kitty_image_from_shared_mem_allowed(true);
-        Ok(())
-    }
-
-    fn seed_cursor_shape(vt: &mut VtTerminal<'static, 'static>, shape: CursorShape) {
-        vt.vt_write(cursor_shape_sequence(shape));
-    }
-
-    fn apply_theme_colors(vt: &mut VtTerminal<'static, 'static>, colors: ThemeColors) {
-        let rgb = |[r, g, b]: [u8; 3]| RgbColor { r, g, b };
-        let _ = vt.set_default_fg_color(Some(rgb(colors.fg)));
-        let _ = vt.set_default_bg_color(Some(rgb(colors.bg)));
-        let _ = vt.set_default_cursor_color(Some(rgb(colors.cursor)));
-        let _ = vt.set_default_color_palette(Some(colors.palette.map(rgb)));
     }
 
     fn set_nonblocking(fd: RawFd) -> io::Result<()> {
@@ -906,32 +932,239 @@ mod unix_actor {
             Ok(())
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::frame::DirtySnapshot;
+
+        type TestSink = Box<dyn Fn(VtEvent)>;
+        type ActorFixture = (
+            mpsc::Sender<VtCommand>,
+            VtActor<TestSink, ScriptedPtyAdapter>,
+            SnapshotSlot,
+            Arc<AtomicBool>,
+            Arc<Mutex<Vec<VtEvent>>>,
+        );
+
+        enum ScriptRead {
+            Data(Bytes),
+            Eof,
+        }
+
+        #[derive(Default)]
+        struct ScriptedPtyAdapter {
+            reads: VecDeque<ScriptRead>,
+            written: Vec<u8>,
+            resizes: Vec<PtySize>,
+            exited: bool,
+            killed: bool,
+        }
+
+        impl ScriptedPtyAdapter {
+            fn new(reads: impl IntoIterator<Item = ScriptRead>) -> Self {
+                Self {
+                    reads: reads.into_iter().collect(),
+                    ..Self::default()
+                }
+            }
+
+            fn push_read(&mut self, bytes: &'static [u8]) {
+                self.reads
+                    .push_back(ScriptRead::Data(Bytes::from_static(bytes)));
+            }
+        }
+
+        impl Read for ScriptedPtyAdapter {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                match self.reads.pop_front() {
+                    Some(ScriptRead::Data(bytes)) => {
+                        let n = bytes.len().min(buf.len());
+                        buf[..n].copy_from_slice(&bytes[..n]);
+                        if n < bytes.len() {
+                            self.reads.push_front(ScriptRead::Data(bytes.slice(n..)));
+                        }
+                        Ok(n)
+                    }
+                    Some(ScriptRead::Eof) => Ok(0),
+                    None => Err(io::Error::from(io::ErrorKind::WouldBlock)),
+                }
+            }
+        }
+
+        impl Write for ScriptedPtyAdapter {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.written.extend_from_slice(buf);
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl PtyAdapter for ScriptedPtyAdapter {
+            fn resize(&mut self, size: PtySize) {
+                self.resizes.push(size);
+            }
+
+            fn child_exited(&mut self) -> bool {
+                self.exited
+            }
+
+            fn kill_child(&mut self) {
+                self.killed = true;
+            }
+        }
+
+        fn actor_with_script(reads: impl IntoIterator<Item = ScriptRead>) -> ActorFixture {
+            let poller = Arc::new(Poller::new().unwrap());
+            let (tx, rx) = mpsc::channel();
+            let slot = SnapshotSlot::new();
+            let pending = Arc::new(AtomicBool::new(false));
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let sink_events = Arc::clone(&events);
+            let notifier = ContentNotifier {
+                slot: slot.clone(),
+                content_dirty_pending: Arc::clone(&pending),
+                event_sink: Box::new(move |event| sink_events.lock().unwrap().push(event))
+                    as TestSink,
+            };
+            let actor = VtActor::with_pty(
+                VtSessionOptions {
+                    cols: 8,
+                    rows: 3,
+                    pixel_width: 80,
+                    pixel_height: 30,
+                    initial_cursor_shape: CursorShape::Block,
+                },
+                ScriptedPtyAdapter::new(reads),
+                rx,
+                poller,
+                notifier,
+            )
+            .expect("scripted actor should construct");
+            (tx, actor, slot, pending, events)
+        }
+
+        fn clear_wake_state(pending: &AtomicBool, events: &Mutex<Vec<VtEvent>>) {
+            pending.store(false, Ordering::SeqCst);
+            events.lock().unwrap().clear();
+        }
+
+        #[test]
+        fn scripted_actor_publishes_initial_snapshot() {
+            let (_tx, _actor, slot, _pending, events) = actor_with_script([]);
+            assert!(slot.latest_snapshot().is_some());
+            assert_eq!(events.lock().unwrap().as_slice(), &[VtEvent::ContentDirty]);
+        }
+
+        #[test]
+        fn scripted_actor_preserves_write_order() {
+            let (tx, mut actor, _slot, _pending, _events) = actor_with_script([]);
+            tx.send(VtCommand::Write(Bytes::from_static(b"a"))).unwrap();
+            tx.send(VtCommand::Write(Bytes::from_static(b"bc")))
+                .unwrap();
+
+            assert!(!actor.drain_and_apply_commands());
+            actor.flush_pending_writes().unwrap();
+
+            assert_eq!(actor.pty.written, b"abc");
+        }
+
+        #[test]
+        fn scripted_actor_reads_pty_bytes_into_vt_core() {
+            let (_tx, mut actor, slot, pending, events) = actor_with_script([]);
+            clear_wake_state(&pending, &events);
+            actor.pty.push_read(b"hi");
+
+            assert!(matches!(actor.read_pty_batch(), Ok(ReadOutcome::Alive)));
+
+            let snapshot = slot.latest_snapshot().unwrap();
+            assert_eq!(snapshot.cell_text(&snapshot.cells[0]), "h");
+            assert_eq!(snapshot.cell_text(&snapshot.cells[1]), "i");
+            assert_eq!(events.lock().unwrap().as_slice(), &[VtEvent::ContentDirty]);
+        }
+
+        #[test]
+        fn scripted_actor_applies_visible_commands_without_reordering() {
+            let (tx, mut actor, slot, pending, events) = actor_with_script([]);
+            clear_wake_state(&pending, &events);
+            tx.send(VtCommand::Resize {
+                cols: 10,
+                rows: 4,
+                pixel_width: 100,
+                pixel_height: 40,
+            })
+            .unwrap();
+            tx.send(VtCommand::SetThemeColors(ThemeColors {
+                fg: [1, 2, 3],
+                bg: [4, 5, 6],
+                cursor: [7, 8, 9],
+                palette: [[0, 0, 0]; 256],
+            }))
+            .unwrap();
+            tx.send(VtCommand::SetCursorShape(CursorShape::Underline))
+                .unwrap();
+            tx.send(VtCommand::ScrollLines(1)).unwrap();
+
+            assert!(!actor.drain_and_apply_commands());
+
+            assert_eq!(actor.pty.resizes.len(), 1);
+            assert_eq!(actor.pty.resizes[0].cols, 10);
+            assert_eq!(actor.pty.resizes[0].rows, 4);
+            assert_eq!(slot.latest_snapshot().unwrap().cols, 10);
+            assert_eq!(events.lock().unwrap().as_slice(), &[VtEvent::ContentDirty]);
+        }
+
+        #[test]
+        fn scripted_actor_ack_does_not_publish() {
+            let (tx, mut actor, slot, pending, events) = actor_with_script([]);
+            let generation = slot.latest_snapshot().unwrap().generation;
+            clear_wake_state(&pending, &events);
+            tx.send(VtCommand::AckRendered(generation)).unwrap();
+
+            assert!(!actor.drain_and_apply_commands());
+
+            assert!(events.lock().unwrap().is_empty());
+            assert_eq!(slot.latest_snapshot().unwrap().generation, generation);
+        }
+
+        #[test]
+        fn dirty_rows_survive_actor_publication_until_render_ack() {
+            let (tx, mut actor, slot, pending, events) = actor_with_script([]);
+            let initial = slot.latest_snapshot().unwrap();
+            tx.send(VtCommand::AckRendered(initial.generation)).unwrap();
+            assert!(!actor.drain_and_apply_commands());
+            clear_wake_state(&pending, &events);
+
+            actor.pty.push_read(b"x");
+            assert!(matches!(actor.read_pty_batch(), Ok(ReadOutcome::Alive)));
+            let dirty = slot.latest_snapshot().unwrap();
+            assert_eq!(dirty.dirty, DirtySnapshot::Partial(vec![0]));
+
+            clear_wake_state(&pending, &events);
+            actor.publish_snapshot().unwrap();
+            let republished = slot.latest_snapshot().unwrap();
+            assert_eq!(republished.dirty, DirtySnapshot::Partial(vec![0]));
+
+            tx.send(VtCommand::AckRendered(republished.generation))
+                .unwrap();
+            assert!(!actor.drain_and_apply_commands());
+            actor.publish_snapshot().unwrap();
+            assert_eq!(slot.latest_snapshot().unwrap().dirty, DirtySnapshot::Clean);
+        }
+
+        #[test]
+        fn scripted_actor_reports_eof_deterministically() {
+            let (_tx, mut actor, _slot, _pending, _events) = actor_with_script([ScriptRead::Eof]);
+            assert!(matches!(actor.read_pty_batch(), Ok(ReadOutcome::Eof)));
+        }
+    }
 }
 
 #[cfg(unix)]
 use unix_actor::spawn_vt_session_unix;
-
-fn cursor_shape_sequence(shape: CursorShape) -> &'static [u8] {
-    match shape {
-        CursorShape::Block => b"\x1b[2 q",
-        CursorShape::Bar => b"\x1b[6 q",
-        CursorShape::Underline => b"\x1b[4 q",
-    }
-}
-
-fn cell_px(cols: u16, rows: u16, pixel_width: u16, pixel_height: u16) -> (u32, u32) {
-    let w = if cols == 0 {
-        0
-    } else {
-        u32::from(pixel_width) / u32::from(cols)
-    };
-    let h = if rows == 0 {
-        0
-    } else {
-        u32::from(pixel_height) / u32::from(rows)
-    };
-    (w, h)
-}
 
 #[cfg(test)]
 mod tests {
@@ -1030,6 +1263,9 @@ mod tests {
             .unwrap();
         tx.send(VtCommand::SetCursorShape(CursorShape::Underline))
             .unwrap();
+        tx.send(VtCommand::AckRendered(3)).unwrap();
+        tx.send(VtCommand::AckRendered(7)).unwrap();
+        tx.send(VtCommand::AckRendered(5)).unwrap();
 
         let batch = CoalescedCommands::drain(&rx);
         assert_eq!(
@@ -1048,6 +1284,7 @@ mod tests {
         assert_eq!(batch.theme, Some(theme(2)));
         assert_eq!(batch.scroll_delta, -3);
         assert_eq!(batch.cursor_shape, Some(CursorShape::Underline));
+        assert_eq!(batch.ack_generation, Some(7));
         assert!(!batch.shutdown);
     }
 
