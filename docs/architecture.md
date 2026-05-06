@@ -261,6 +261,14 @@ into one framebuffer** — no render-target-per-pane.
 - IME preedit: winit `Ime::Preedit` → shape inline at cursor column,
   `RenderLayer::ImePreedit`.
 
+The `Domain` trait is the seam future remote transports
+([#221](https://github.com/xkef/seance/issues/221)) attach to. Phase 2-5 (Unix
+socket / SSH / TLS / multi-client) build on it without reshaping the API. The
+renderer-facing accessor is `Pane::frame_source(&self) -> &dyn FrameSource`, not
+`Pane::vt()`, so remote panes (where the VT lives on the other end) satisfy the
+same interface as `LocalDomain` panes. The in-process wire-protocol shape
+closing Phase 1 is tracked in [#222](https://github.com/xkef/seance/issues/222).
+
 ---
 
 ## Config surface
