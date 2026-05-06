@@ -6,11 +6,11 @@ model. It supersedes the earlier plan that attempted to make
 `Terminal` `!Send`; séance's design follows that constraint instead of working
 around it.
 
-[#165]: https://github.com/xkef/seance/issues/165
-[#166]: https://github.com/xkef/seance/issues/166
-[#167]: https://github.com/xkef/seance/issues/167
-[#168]: https://github.com/xkef/seance/issues/168
+[#45]: https://github.com/xkef/seance/issues/45
+[#171]: https://github.com/xkef/seance/issues/171
 [#172]: https://github.com/xkef/seance/issues/172
+[#221]: https://github.com/xkef/seance/issues/221
+[#222]: https://github.com/xkef/seance/issues/222
 [#23]: https://github.com/xkef/seance/issues/23
 [#24]: https://github.com/xkef/seance/issues/24
 [#26]: https://github.com/xkef/seance/issues/26
@@ -632,10 +632,10 @@ Reference source locations from the previous survey remain useful for context:
 
 ## Implementation chain
 
-[#165] remains the parent threading issue. Its snapshot/actor/app-integration
-sub-issues have been aligned to this actor/snapshot architecture; follow-up
-threading work should not execute the previous `Terminal: Send`/shared-mutex
-plan.
+The actor model + owned snapshot has shipped. The follow-on Phase-1 work that
+future remote transports ([#221]) attach to is tracked in [#222]: codec-friendly
+types, a `WireFrame` envelope with a `Partial(dirty rows)` variant, and a
+server-keyed kitty image cache.
 
 Landing order:
 
@@ -646,15 +646,20 @@ Landing order:
 | 3     | VT Actor                 | done   |
 | 4     | app integration + rename | done   |
 
-Issue mapping:
+Open follow-ups:
 
-- [#166] covered the owned snapshot model.
-- [#167] covered the nonblocking Unix actor API and loop.
-- [#23] DEC 2026 is implemented as part of the VT Actor's publication gate.
-- [#24] deadline-scheduled redraw is already shipped and remains UI-side.
-- [#168]-[#172] should be kept only where their scope still applies after the
-  actor rewrite; otherwise supersede them with smaller actor/snapshot
-  follow-ups.
+- [#222] in-process client/server seam (Phase 1 wire protocol).
+- [#45] `Domain` trait + `LocalDomain` for multi-pane.
+- [#171] optional coalesce delay between actor drain and publish.
+- [#172] threading stress harness.
+
+Already in code from earlier work:
+
+- [#23] DEC 2026 implemented inside the VT Actor's publication gate.
+- [#24] deadline-scheduled redraw shipped UI-side.
+
+Other M2 threading-chain issues (#165-#170) are closed; their work either
+shipped under the actor model or was superseded by it.
 
 ---
 
