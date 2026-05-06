@@ -25,6 +25,14 @@ state
 routing, handshake, ordered pane updates, frame deltas, image cache events, and
 classified lifecycle errors. _Avoid_: VT command wire ABI
 
+**Mux Client**: The client-side mux module that owns Pane Views, sends pane
+commands through a Domain, and applies ordered Pane Updates. _Avoid_: pane
+manager, terminal client
+
+**Domain**: A pane-owning mux endpoint behind the Domain seam. A local Domain
+wraps VT Actors; a remote Domain speaks the Mux Protocol over a transport.
+_Avoid_: pane service, terminal backend
+
 **Pane Update**: One ordered server update for a pane. It carries a `PaneRef`,
 `ServerSeq`, zero or more image cache events, and an optional frame delta.
 _Avoid_: VT event, dirty wake
@@ -34,6 +42,10 @@ materialized into a VT Snapshot. _Avoid_: latest snapshot diff without base
 
 **Pane View**: Client-side pane state that materializes pane updates and owns
 selection/view state. _Avoid_: shared terminal state
+
+**Pane Handle**: The app-facing handle for one Pane View. It sends pane commands
+through the Mux Client and exposes render/copy state from the Pane View.
+_Avoid_: pane session, terminal handle
 
 **Image Cache Event**: Out-of-band image payload or eviction message ordered
 with pane frames. _Avoid_: renderer eviction, placement
@@ -52,9 +64,15 @@ adapter
 - A **Headless VT** owns exactly one **VT Core**.
 - A **VT Core** produces zero or more **VT Snapshots**.
 - A **VT Actor** publishes zero or more **VT Snapshots**.
+- A **Domain** owns zero or more server-side panes and publishes **Pane
+  Updates**.
+- A **Mux Client** owns one or more **Pane Views**.
+- A **Mux Client** creates one or more **Pane Handles**.
+- A **Mux Client** sends commands through exactly one **Domain**.
+- A **Mux Client** applies **Pane Updates** to **Pane Views**.
+- A **Pane Handle** sends commands through its **Mux Client**.
+- A **Pane Handle** exposes render/copy state from one **Pane View**.
 - A **Pane View** materializes **Pane Updates** into a current **VT Snapshot**.
-- A **Pane View** sends commands through the mux to exactly one local or remote
-  pane owner.
 - A **Pane Update** may carry a **Frame Delta** and **Image Cache Events**.
 - A **Headless VT** uses the same extraction path as a **VT Actor** to produce
   **VT Snapshots**.

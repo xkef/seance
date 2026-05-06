@@ -55,10 +55,11 @@ varint(length << 1 | compressed_bit) || postcard(Envelope)
 
 Future network transports may map protocol concerns onto separate streams
 (`CONTROL`, `INPUT`, `OUTPUT`, `IMAGES`) to avoid image transfers head-of-line
-blocking typing or pane lifecycle messages. Phase 1 defines a frame-oriented
-`Transport` trait and an mpsc-backed `InProcessTransport`; the local app path
-serializes `ClientMessage` and `ServerMessage` through this transport even
-though both endpoints live in one process.
+blocking typing or pane lifecycle messages. The protocol crate defines a
+frame-oriented `Transport` trait, an mpsc-backed `InProcessTransport`, and typed
+client/server frame codecs. The production single-binary app path uses a direct
+`LocalDomain`; `ProtocolDomain` uses the same Domain seam over `Transport` for
+remote transports and conformance tests.
 
 `Envelope` contains:
 
@@ -124,7 +125,7 @@ Server payloads include:
 - `Lines`
 
 `VtCommand` and `VtEvent` remain local VT Actor implementation details. The
-local mux maps them into pane-scoped mux events.
+local Domain maps them into pane-scoped mux wakes and ordered Pane Updates.
 
 ## Frame deltas
 
@@ -167,13 +168,13 @@ and placements can change even when cell buffers stay clean.
 `PaneUpdate { pane, seq, image_events, frame }` is the ordered server update
 unit. Image events in a `PaneUpdate` apply before the frame in the same update.
 
-The local mux keeps a per-pane `PaneFrameHistory` ring plus the latest full
-update. On first attach it can send topology followed by a full frame. On resume
-with `last_seen_seq`, retained updates replay in order; if the requested
+The pane-owning Domain keeps a per-pane `PaneFrameHistory` ring plus the latest
+full update. On first attach it can send topology followed by a full frame. On
+resume with `last_seen_seq`, retained updates replay in order; if the requested
 sequence is older than the ring, the client receives a resync/full reset.
 
-Phase 1 uses the same materialization path for the single local pane that future
-remote clients use.
+The Mux Client uses the same Pane View materialization path for the single local
+pane that future remote clients use.
 
 ## Image cache events
 
@@ -197,15 +198,15 @@ publication is being moved to ordered image events.
 
 The build order is intentionally incremental:
 
-1. Single binary, in-process, mpsc-backed transport with serialized protocol
-   messages on the app path.
+1. Single binary with `MuxClient` over `LocalDomain`, plus `ProtocolDomain` over
+   `InProcessTransport` for transport conformance tests.
 2. Two local processes over Unix domain sockets.
 3. SSH-tunneled TCP or UDS, plus TLS where needed.
 4. QUIC only when connection migration, stream multiplexing, or latency
    constraints justify the extra moving parts.
 
 The same conformance suite should run against every transport. Phase 1 stops at
-schema, codec, local adapter, and simulated replay.
+schema, codec, local Domain, protocol client adapter, and simulated replay.
 
 ## Flow control
 

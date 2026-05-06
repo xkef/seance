@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::fmt;
+use std::sync::mpsc;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_big_array::BigArray;
@@ -1055,6 +1056,63 @@ pub struct TransportFrame {
     pub bytes: Vec<u8>,
 }
 
+pub trait Transport {
+    fn send(&self, frame: TransportFrame) -> Result<(), TransportError>;
+
+    fn try_recv(&self) -> Result<Option<TransportFrame>, TransportError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransportError {
+    Closed,
+}
+
+impl fmt::Display for TransportError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Closed => f.write_str("transport is closed"),
+        }
+    }
+}
+
+impl std::error::Error for TransportError {}
+
+pub struct InProcessTransport {
+    tx: mpsc::Sender<TransportFrame>,
+    rx: mpsc::Receiver<TransportFrame>,
+}
+
+impl InProcessTransport {
+    pub fn pair() -> (Self, Self) {
+        let (client_tx, server_rx) = mpsc::channel();
+        let (server_tx, client_rx) = mpsc::channel();
+        (
+            Self {
+                tx: client_tx,
+                rx: client_rx,
+            },
+            Self {
+                tx: server_tx,
+                rx: server_rx,
+            },
+        )
+    }
+}
+
+impl Transport for InProcessTransport {
+    fn send(&self, frame: TransportFrame) -> Result<(), TransportError> {
+        self.tx.send(frame).map_err(|_| TransportError::Closed)
+    }
+
+    fn try_recv(&self) -> Result<Option<TransportFrame>, TransportError> {
+        match self.rx.try_recv() {
+            Ok(frame) => Ok(Some(frame)),
+            Err(mpsc::TryRecvError::Empty) => Ok(None),
+            Err(mpsc::TryRecvError::Disconnected) => Err(TransportError::Closed),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope {
     pub request_id: RequestId,
@@ -1069,15 +1127,31 @@ impl Envelope {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageDirection {
+    Client,
+    Server,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodecError {
     UnknownMessage(u16),
-    OversizedFrame { len: usize, max: usize },
+    OversizedFrame {
+        len: usize,
+        max: usize,
+    },
     TruncatedFrame,
     BadCompressionFlag,
     VarintOverflow,
     CorruptPayload(String),
-    WrongMessageKind { expected: MessageKind, actual: u16 },
+    UnexpectedMessageKind {
+        direction: MessageDirection,
+        kind: MessageKind,
+    },
+    WrongMessageKind {
+        expected: MessageKind,
+        actual: u16,
+    },
 }
 
 impl fmt::Display for CodecError {
@@ -1089,6 +1163,9 @@ impl fmt::Display for CodecError {
             Self::BadCompressionFlag => f.write_str("compression flag is set but unsupported"),
             Self::VarintOverflow => f.write_str("frame length varint overflow"),
             Self::CorruptPayload(err) => write!(f, "corrupt payload: {err}"),
+            Self::UnexpectedMessageKind { direction, kind } => {
+                write!(f, "expected {direction:?} message kind, got {kind:?}")
+            }
             Self::WrongMessageKind { expected, actual } => {
                 write!(f, "wrong message kind: expected {expected:?}, got {actual}")
             }
@@ -1151,6 +1228,121 @@ pub fn decode_typed_payload<T: DeserializeOwned>(
         });
     }
     decode_payload(&envelope.payload)
+}
+
+pub fn encode_client_frame(
+    message: ClientMessage,
+    request_id: RequestId,
+) -> Result<TransportFrame, CodecError> {
+    let kind = message.kind();
+    let bytes = encode_envelope(kind, request_id, ServerSeq(0), &message)?;
+    Ok(TransportFrame {
+        stream_id: client_stream(&message),
+        bytes,
+    })
+}
+
+pub fn encode_server_frame(message: ServerMessage) -> Result<TransportFrame, CodecError> {
+    let kind = message.kind();
+    let seq = server_seq(&message);
+    let bytes = encode_envelope(kind, RequestId::PUSH, seq, &message)?;
+    Ok(TransportFrame {
+        stream_id: server_stream(&message),
+        bytes,
+    })
+}
+
+pub fn decode_client_frame(frame: &TransportFrame) -> Result<ClientMessage, CodecError> {
+    let (envelope, _consumed) = decode_envelope(&frame.bytes, MAX_DECODED_MESSAGE_BYTES)?;
+    let kind = envelope.known_kind()?;
+    ensure_client_kind(kind)?;
+    let message: ClientMessage = decode_typed_payload(&envelope, kind)?;
+    if message.kind() != kind {
+        return Err(CodecError::WrongMessageKind {
+            expected: message.kind(),
+            actual: kind.into(),
+        });
+    }
+    Ok(message)
+}
+
+pub fn decode_server_frame(frame: &TransportFrame) -> Result<ServerMessage, CodecError> {
+    let (envelope, _consumed) = decode_envelope(&frame.bytes, MAX_DECODED_MESSAGE_BYTES)?;
+    let kind = envelope.known_kind()?;
+    ensure_server_kind(kind)?;
+    let message: ServerMessage = decode_typed_payload(&envelope, kind)?;
+    if message.kind() != kind {
+        return Err(CodecError::WrongMessageKind {
+            expected: message.kind(),
+            actual: kind.into(),
+        });
+    }
+    Ok(message)
+}
+
+pub fn client_stream(message: &ClientMessage) -> StreamId {
+    match message {
+        ClientMessage::PaneInput { .. } => StreamId::INPUT,
+        ClientMessage::ImageCacheMiss { .. } => StreamId::IMAGES,
+        _ => StreamId::CONTROL,
+    }
+}
+
+pub fn server_stream(message: &ServerMessage) -> StreamId {
+    match message {
+        ServerMessage::PaneUpdate(update) if !update.image_events.is_empty() => StreamId::IMAGES,
+        ServerMessage::PaneUpdate(_) | ServerMessage::Lines(_) => StreamId::OUTPUT,
+        _ => StreamId::CONTROL,
+    }
+}
+
+pub fn server_seq(message: &ServerMessage) -> ServerSeq {
+    match message {
+        ServerMessage::PaneUpdate(update) => update.seq,
+        ServerMessage::Lines(lines) => lines.seq,
+        _ => ServerSeq(0),
+    }
+}
+
+fn ensure_client_kind(kind: MessageKind) -> Result<(), CodecError> {
+    match kind {
+        MessageKind::ClientHello
+        | MessageKind::ClientSubscribe
+        | MessageKind::ClientSpawnPane
+        | MessageKind::ClientClosePane
+        | MessageKind::ClientResizePane
+        | MessageKind::ClientPaneInput
+        | MessageKind::ClientRequestSnapshot
+        | MessageKind::ClientImageCacheMiss
+        | MessageKind::ClientAckApplied
+        | MessageKind::ClientAckPresented
+        | MessageKind::ClientPing
+        | MessageKind::ClientGetLines
+        | MessageKind::ClientScrollPane
+        | MessageKind::ClientSetPaneTheme
+        | MessageKind::ClientSetPaneCursorShape => Ok(()),
+        _ => Err(CodecError::UnexpectedMessageKind {
+            direction: MessageDirection::Client,
+            kind,
+        }),
+    }
+}
+
+fn ensure_server_kind(kind: MessageKind) -> Result<(), CodecError> {
+    match kind {
+        MessageKind::ServerHello
+        | MessageKind::ServerError
+        | MessageKind::ServerTopology
+        | MessageKind::ServerPaneUpdate
+        | MessageKind::ServerPaneExited
+        | MessageKind::ServerResyncRequired
+        | MessageKind::ServerPong
+        | MessageKind::ServerLines => Ok(()),
+        _ => Err(CodecError::UnexpectedMessageKind {
+            direction: MessageDirection::Server,
+            kind,
+        }),
+    }
 }
 
 pub fn encode_length_prefixed(payload: &[u8], compressed: bool) -> Vec<u8> {
@@ -1332,6 +1524,36 @@ mod tests {
         };
         assert_ne!(first, second);
         assert_eq!(ImageKey::local(ImageId(7)).pane, PaneRef::LOCAL);
+    }
+
+    #[test]
+    fn protocol_transport_round_trips_typed_frames() {
+        let (client, server) = InProcessTransport::pair();
+        let pane = pane();
+        let message = ClientMessage::PaneInput {
+            pane,
+            bytes: b"abc".to_vec(),
+        };
+        client
+            .send(encode_client_frame(message.clone(), RequestId(1)).unwrap())
+            .unwrap();
+
+        let frame = server.try_recv().unwrap().unwrap();
+        assert_eq!(frame.stream_id, StreamId::INPUT);
+        assert_eq!(decode_client_frame(&frame).unwrap(), message);
+        assert!(server.try_recv().unwrap().is_none());
+    }
+
+    #[test]
+    fn protocol_decode_rejects_wrong_direction() {
+        let frame = encode_server_frame(ServerMessage::Pong { nonce: 9 }).unwrap();
+        assert_eq!(
+            decode_client_frame(&frame).unwrap_err(),
+            CodecError::UnexpectedMessageKind {
+                direction: MessageDirection::Client,
+                kind: MessageKind::ServerPong,
+            }
+        );
     }
 
     #[test]

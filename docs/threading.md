@@ -243,9 +243,9 @@ Wake ordering:
 1. VT Actor builds an owned `VtSnapshot`.
 2. VT Actor publishes it to `SnapshotSlot`.
 3. VT Actor sends/dedupes `VtEvent::ContentDirty`.
-4. The local mux handles `ContentDirty`, clears the pending flag before cloning
-   the latest snapshot, materializes a pane update, and forwards a pane-scoped
-   dirty event to the app.
+4. `LocalDomain` handles `ContentDirty`, clears the pending flag before cloning
+   the latest snapshot, materializes a Pane Update, and forwards a pane-scoped
+   dirty wake to the app.
 
 Clearing before the clone prevents a publish that races with UI handling from
 being lost behind an already-set pending flag. Extra wakes are acceptable;
@@ -254,8 +254,8 @@ missed wakes are not.
 Acknowledgement ordering:
 
 1. The renderer builds and presents a frame from a VT Snapshot.
-2. If present succeeds, the pane view sends `AckRendered(generation)` through
-   the local mux for that VT Snapshot.
+2. If present succeeds, the Pane Handle sends `AckRendered(generation)` through
+   `MuxClient` and `LocalDomain` for that VT Snapshot.
 3. VT Core drops dirty deltas for generations `<= generation`.
 4. VT Actor does not publish solely because of an acknowledgement.
 
@@ -266,16 +266,19 @@ cleared on snapshot publication.
 
 ## Mux protocol seam
 
-`seance-mux` is the app-facing local pane facade. It owns the `VtSessionHandle`,
-stamps a `PaneRef` onto local events, and materializes `FrameDelta` values into
-a client-side pane view. `seance-app` no longer imports `seance-vt` directly.
+`seance-mux` is the app-facing mux layer. `LocalDomain` owns the
+`VtSessionHandle`, stamps a `PaneRef` onto local events, and produces ordered
+Pane Updates. `MuxClient` materializes `FrameDelta` values into client-side Pane
+Views and exposes app-facing Pane Handles. `seance-app` no longer imports
+`seance-vt` directly.
 
-Even in the single-process local path, mux commands and pane updates cross an
-mpsc-backed `Transport` as length-prefixed postcard envelopes. Client commands
-encode as `ClientMessage` values, and server pane updates encode as
-`ServerMessage::PaneUpdate` before the pane view materializes them. This keeps
-the in-process seam on the same serialization path future UDS/SSH/TLS transports
-will use.
+The production single-process local path uses `LocalDomain` directly instead of
+serializing local commands as a ritual. The Mux Protocol path lives in
+`ProtocolDomain`, which implements the same Domain seam over a `Transport` using
+length-prefixed postcard envelopes. Client commands encode as `ClientMessage`
+values, and server pane updates encode as `ServerMessage::PaneUpdate` before a
+Pane View materializes them. This keeps future UDS/SSH/TLS transports on the
+same Domain Interface without making the local path pay for transport framing.
 
 The local materializer distinguishes three counters:
 

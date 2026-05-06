@@ -127,7 +127,7 @@ impl App {
             }
         }
         if old_config.cursor.style != self.config.cursor.style
-            && let Some(surface) = self.surface.as_ref()
+            && let Some(surface) = self.surface.as_mut()
         {
             surface.set_cursor_shape(mux_shape_from_config(self.config.cursor.style));
         }

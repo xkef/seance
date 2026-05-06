@@ -14,7 +14,8 @@ use winit::event::Modifiers;
 use winit::window::Window;
 
 use seance_mux::{
-    CursorShape as MuxCursorShape, GridPos, Pane, Resize, TerminalModes, ThemeColors,
+    ClientRefresh, CursorShape as MuxCursorShape, GridPos, LocalDomain, MuxClient, PaneRef, Resize,
+    TerminalModes, ThemeColors,
 };
 use seance_render::{RenderInputs, TerminalRenderer};
 
@@ -23,7 +24,8 @@ use crate::mouse::MouseState;
 pub(crate) struct SurfaceState {
     pub(crate) window: Arc<Window>,
     pub(crate) renderer: TerminalRenderer,
-    pub(crate) pane: Pane,
+    pub(crate) mux: MuxClient<LocalDomain>,
+    pub(crate) active_pane: PaneRef,
     pub(crate) render_inputs: RenderInputs,
     pub(crate) modifiers: Modifiers,
     pub(crate) cell_size: [f32; 2],
@@ -39,14 +41,16 @@ impl SurfaceState {
     pub(crate) fn new(
         window: Arc<Window>,
         renderer: TerminalRenderer,
-        pane: Pane,
+        mux: MuxClient<LocalDomain>,
+        active_pane: PaneRef,
         render_inputs: RenderInputs,
     ) -> Self {
         let cell_size = renderer.cell_size();
         Self {
             window,
             renderer,
-            pane,
+            mux,
+            active_pane,
             render_inputs,
             modifiers: Modifiers::default(),
             cell_size,
@@ -68,6 +72,10 @@ impl SurfaceState {
         self.request_redraw();
     }
 
+    pub(crate) fn refresh_updates(&mut self) -> Result<ClientRefresh, seance_mux::PaneError> {
+        self.mux.refresh_updates()
+    }
+
     /// Resize the surface and ask the local pane to reflow the terminal grid.
     ///
     /// The redraw is intentionally deferred until the pane publishes the
@@ -77,7 +85,7 @@ impl SurfaceState {
             .resize_surface(pixel_size.width, pixel_size.height);
         self.cell_size = self.renderer.cell_size();
         let (cols, rows) = self.renderer.grid_size();
-        if let Err(err) = self.pane.resize(Resize {
+        if let Err(err) = self.mux.pane(self.active_pane).resize(Resize {
             cols,
             rows,
             pixel_width: pixel_size.width as u16,
@@ -88,49 +96,65 @@ impl SurfaceState {
     }
 
     pub(crate) fn terminal_modes(&self) -> TerminalModes {
-        self.pane.modes()
+        self.mux
+            .pane_view(self.active_pane)
+            .map_or(TerminalModes::default(), |view| view.modes())
     }
 
-    pub(crate) fn write_to_pty(&self, bytes: Bytes) {
-        if let Err(err) = self.pane.write(bytes) {
+    pub(crate) fn write_to_pty(&mut self, bytes: Bytes) {
+        if let Err(err) = self.mux.pane(self.active_pane).write(bytes) {
             log::warn!("failed to send pane write: {err}");
         }
     }
 
-    pub(crate) fn scroll_lines(&self, delta: i32) {
-        if let Err(err) = self.pane.scroll_lines(delta) {
+    pub(crate) fn scroll_lines(&mut self, delta: i32) {
+        if let Err(err) = self.mux.pane(self.active_pane).scroll_lines(delta) {
             log::warn!("failed to send pane scroll: {err}");
         }
     }
 
-    pub(crate) fn set_theme_colors(&self, theme: &seance_config::Theme) {
-        if let Err(err) = self.pane.set_theme_colors(ThemeColors {
-            fg: theme.fg,
-            bg: [theme.bg[0], theme.bg[1], theme.bg[2]],
-            cursor: [theme.cursor[0], theme.cursor[1], theme.cursor[2]],
-            palette: theme.palette,
-        }) {
+    pub(crate) fn set_theme_colors(&mut self, theme: &seance_config::Theme) {
+        if let Err(err) = self
+            .mux
+            .pane(self.active_pane)
+            .set_theme_colors(ThemeColors {
+                fg: theme.fg,
+                bg: [theme.bg[0], theme.bg[1], theme.bg[2]],
+                cursor: [theme.cursor[0], theme.cursor[1], theme.cursor[2]],
+                palette: theme.palette,
+            })
+        {
             log::warn!("failed to send pane theme colors: {err}");
         }
     }
 
-    pub(crate) fn set_cursor_shape(&self, shape: MuxCursorShape) {
-        if let Err(err) = self.pane.set_cursor_shape(shape) {
+    pub(crate) fn set_cursor_shape(&mut self, shape: MuxCursorShape) {
+        if let Err(err) = self.mux.pane(self.active_pane).set_cursor_shape(shape) {
             log::warn!("failed to send pane cursor shape: {err}");
         }
     }
 
+    pub(crate) fn ack_presented(&mut self, generation: u64) {
+        if let Err(err) = self.mux.pane(self.active_pane).ack_presented(generation) {
+            log::warn!("failed to ack presented pane frame: {err}");
+        }
+    }
+
     pub(crate) fn has_selection(&self) -> bool {
-        self.pane.has_selection()
+        self.mux
+            .pane_view(self.active_pane)
+            .is_some_and(|view| view.has_selection())
     }
 
     pub(crate) fn clear_selection(&mut self) {
-        self.pane.clear_selection();
+        self.mux.pane(self.active_pane).clear_selection();
         self.render_inputs.selection = None;
     }
 
     pub(crate) fn selection_range(&self) -> Option<(GridPos, GridPos)> {
-        self.pane.selection_range()
+        self.mux
+            .pane_view(self.active_pane)
+            .and_then(|view| view.selection_range())
     }
 
     pub(crate) fn sync_selection_to_overlay(&mut self) {
@@ -138,28 +162,34 @@ impl SurfaceState {
     }
 
     pub(crate) fn start_selection(&mut self, col: u16, row: u16) {
-        self.pane.start_selection(col, row);
+        self.mux.pane(self.active_pane).start_selection(col, row);
     }
 
     pub(crate) fn start_word_selection(&mut self, col: u16, row: u16) {
-        self.pane.start_word_selection(col, row);
+        self.mux
+            .pane(self.active_pane)
+            .start_word_selection(col, row);
     }
 
     pub(crate) fn start_line_selection(&mut self, row: u16) {
-        self.pane.start_line_selection(row);
+        self.mux.pane(self.active_pane).start_line_selection(row);
     }
 
     pub(crate) fn update_selection(&mut self, col: u16, row: u16) {
-        self.pane.update_selection(col, row);
+        self.mux.pane(self.active_pane).update_selection(col, row);
     }
 
     pub(crate) fn select_all(&mut self) {
         let (cols, rows) = self.renderer.grid_size();
-        self.pane.select_all(cols, rows);
+        self.mux.pane(self.active_pane).select_all(cols, rows);
     }
 
     pub(crate) fn copy_selection_to_clipboard(&self) {
-        let Some(text) = self.pane.selection_text() else {
+        let Some(text) = self
+            .mux
+            .pane_view(self.active_pane)
+            .and_then(|view| view.selection_text())
+        else {
             return;
         };
         if text.is_empty() {
@@ -170,7 +200,7 @@ impl SurfaceState {
         }
     }
 
-    pub(crate) fn paste_from_clipboard(&self) {
+    pub(crate) fn paste_from_clipboard(&mut self) {
         let Ok(mut cb) = arboard::Clipboard::new() else {
             return;
         };

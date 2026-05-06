@@ -21,7 +21,9 @@ use winit::window::{Window, WindowId};
 
 use seance_config::Config;
 use seance_input::InputHandler;
-use seance_mux::{CursorShape as MuxCursorShape, LocalMux, MuxEvent, PaneEvent, PaneSpawnOptions};
+use seance_mux::{
+    CursorShape as MuxCursorShape, LocalDomain, MuxClient, MuxEvent, PaneEvent, PaneSpawnOptions,
+};
 use seance_render::{RenderInputs, RendererConfig, TerminalRenderer};
 
 use crate::UserEvent;
@@ -42,7 +44,6 @@ pub(crate) struct App {
     pub(crate) config: Config,
     pub(crate) font_size: f32,
     proxy: EventLoopProxy<UserEvent>,
-    mux: LocalMux,
     watcher: Option<ConfigWatcher>,
 }
 
@@ -60,7 +61,6 @@ impl App {
             config,
             font_size,
             proxy,
-            mux: LocalMux::new(),
             watcher: None,
         }
     }
@@ -85,8 +85,15 @@ impl App {
         }
         if surface.content_dirty {
             surface.content_dirty = false;
-            surface.last_vt_cursor_shape = surface.pane.cursor_shape();
-            if let Some(mut source) = surface.pane.frame_source() {
+            surface.last_vt_cursor_shape = surface
+                .mux
+                .pane_view(surface.active_pane)
+                .and_then(|view| view.cursor_shape());
+            if let Some(mut source) = surface
+                .mux
+                .pane_view(surface.active_pane)
+                .and_then(|view| view.frame_source())
+            {
                 surface.renderer.update_frame(&mut source);
             }
         }
@@ -98,12 +105,14 @@ impl App {
             .map(Into::into)
             .unwrap_or_else(|| self.config.cursor.style.into());
         surface.render_inputs.vt_cursor_visible = !self.config.cursor.blink || surface.blink_on;
-        let rendered_generation = surface.pane.generation();
+        let rendered_generation = surface
+            .mux
+            .pane_view(surface.active_pane)
+            .and_then(|view| view.generation());
         if surface.renderer.render(&surface.render_inputs)
             && let Some(generation) = rendered_generation
-            && let Err(err) = surface.pane.ack_presented(generation)
         {
-            log::warn!("failed to ack presented pane frame: {err}");
+            surface.ack_presented(generation);
         }
     }
 
@@ -196,27 +205,24 @@ impl ApplicationHandler<UserEvent> for App {
 
         let (cols, rows) = renderer.grid_size();
         let proxy = self.proxy.clone();
-        let pane = self
-            .mux
-            .spawn_pane(
-                PaneSpawnOptions {
-                    cols,
-                    rows,
-                    pixel_width: size.width as u16,
-                    pixel_height: size.height as u16,
-                    initial_cursor_shape: mux_shape_from_config(self.config.cursor.style),
-                },
-                move |event| {
-                    let _ = proxy.send_event(UserEvent::Mux(event));
-                },
-            )
+        let mut mux = MuxClient::new(LocalDomain::new(move |event| {
+            let _ = proxy.send_event(UserEvent::Mux(event));
+        }));
+        let active_pane = mux
+            .spawn_pane(PaneSpawnOptions {
+                cols,
+                rows,
+                pixel_width: size.width as u16,
+                pixel_height: size.height as u16,
+                initial_cursor_shape: mux_shape_from_config(self.config.cursor.style),
+            })
             .expect("failed to spawn local pane");
 
         let render_inputs = RenderInputs {
             cursor_shape: self.config.cursor.style.into(),
             ..RenderInputs::default()
         };
-        let mut surface = SurfaceState::new(window, renderer, pane, render_inputs);
+        let mut surface = SurfaceState::new(window, renderer, mux, active_pane, render_inputs);
         self.apply_terminal_theme_to(&mut surface, &theme);
         self.surface = Some(surface);
 
@@ -233,27 +239,43 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             UserEvent::ConfigFileChanged => self.reload_config(),
             UserEvent::ThemeFileChanged(path) => self.on_theme_file_changed(&path),
-            UserEvent::Mux(MuxEvent::Pane { event, .. }) => match event {
-                PaneEvent::FrameDirty => {
-                    if let Some(surface) = self.surface_mut() {
-                        surface.pane.refresh_updates();
-                        surface.mark_dirty();
+            UserEvent::Mux(MuxEvent::Pane { pane, event }) => {
+                let mut should_exit = false;
+                if let Some(surface) = self.surface_mut() {
+                    match surface.refresh_updates() {
+                        Ok(refresh) => {
+                            let frame_dirty = refresh.frame_dirty;
+                            let image_events = refresh.image_events;
+                            let exited = refresh.exited;
+                            for image_event in &image_events {
+                                surface.renderer.apply_image_cache_event(image_event);
+                            }
+                            for err in refresh.errors {
+                                log::warn!("pane error: {err}");
+                            }
+                            if frame_dirty || !image_events.is_empty() {
+                                surface.mark_dirty();
+                            }
+                            should_exit |= exited.contains(&surface.active_pane);
+                            should_exit |=
+                                matches!(event, PaneEvent::Exited) && pane == surface.active_pane;
+                        }
+                        Err(err) => log::warn!("mux refresh failed: {err}"),
+                    }
+                    match event {
+                        PaneEvent::ImageCache(event) => {
+                            surface.renderer.apply_image_cache_event(&event);
+                            surface.mark_dirty();
+                        }
+                        PaneEvent::Error(err) => log::warn!("pane error: {err}"),
+                        PaneEvent::FrameDirty | PaneEvent::Exited => {}
                     }
                 }
-                PaneEvent::ImageCache(event) => {
-                    if let Some(surface) = self.surface_mut() {
-                        surface.renderer.apply_image_cache_event(&event);
-                        surface.mark_dirty();
-                    }
-                }
-                PaneEvent::Exited => {
+                if should_exit {
                     self.surface = None;
                     event_loop.exit();
                 }
-                PaneEvent::Error(err) => {
-                    log::warn!("pane error: {err}");
-                }
-            },
+            }
         }
     }
 

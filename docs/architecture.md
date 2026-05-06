@@ -50,7 +50,7 @@ Epic index:
 │   VT Core owns libghostty Terminal/RenderState + Kitty setup         │
 │   nonblocking poll → read PTY → VT Core vt_write()                   │
 │   DEC 2026 gate controls snapshot publication                        │
-│   publish owned Arc<VtSnapshot> → local mux PaneUpdate materializer  │
+│   publish owned Arc<VtSnapshot> → LocalDomain → MuxClient/PaneView   │
 │ UI renders PaneView/FrameSource; it never reads live libghostty state│
 │ UI acks presented VT Snapshot generations after successful present   │
 └──────────────────────────────────────────────────────────────────────┘
@@ -76,18 +76,18 @@ Epic index:
 
 ## Crate structure
 
-| Crate                | Owns                                                  | Status           |
-| -------------------- | ----------------------------------------------------- | ---------------- |
-| `seance-app`         | winit event loop, `App`, renderer/redraw driver       | [IMPLEMENTED]    |
-| `seance-protocol`    | owned serializable protocol/frame data and codec      | [IMPLEMENTED/M6] |
-| `seance-frame`       | render-facing frame traits and borrowed adapters      | [IMPLEMENTED/M6] |
-| `seance-input`       | winit → VT key/mouse encoding (via libghostty-vt)     | [IMPLEMENTED]    |
-| `seance-render`      | font pipeline, GPU pipelines, GlyphAtlas, image cache | [IMPLEMENTED]    |
-| `seance-vt`          | VT Core, PTY actor, snapshot/command API              | [IMPLEMENTED/M2] |
-| `seance-config`      | TOML config + theme files, hot-reload, diffing        | [IMPLEMENTED]    |
-| `seance-mux`         | local pane facade, pane-update materialization        | [IMPLEMENTED/M6] |
-| `seance-bench`       | criterion benches for hot paths                       | [IMPLEMENTED]    |
-| `seance-render-test` | render-harness fixtures (L1 logic, L4 frame snapshot) | [IMPLEMENTED]    |
+| Crate                | Owns                                                   | Status           |
+| -------------------- | ------------------------------------------------------ | ---------------- |
+| `seance-app`         | winit event loop, `App`, renderer/redraw driver        | [IMPLEMENTED]    |
+| `seance-protocol`    | owned protocol/frame data, transport frame codec       | [IMPLEMENTED/M6] |
+| `seance-frame`       | render-facing frame traits and borrowed adapters       | [IMPLEMENTED/M6] |
+| `seance-input`       | winit → VT key/mouse encoding (via libghostty-vt)      | [IMPLEMENTED]    |
+| `seance-render`      | font pipeline, GPU pipelines, GlyphAtlas, image cache  | [IMPLEMENTED]    |
+| `seance-vt`          | VT Core, PTY actor, snapshot/command API               | [IMPLEMENTED/M2] |
+| `seance-config`      | TOML config + theme files, hot-reload, diffing         | [IMPLEMENTED]    |
+| `seance-mux`         | Mux Client, Domain adapters, Pane View materialization | [IMPLEMENTED/M6] |
+| `seance-bench`       | criterion benches for hot paths                        | [IMPLEMENTED]    |
+| `seance-render-test` | render-harness fixtures (L1 logic, L4 frame snapshot)  | [IMPLEMENTED]    |
 
 Current dependency direction:
 
@@ -230,17 +230,18 @@ Deadline-scheduled (`cf4a1b1`, #24): `ControlFlow::WaitUntil(next_due)` across
 all animation sources — cursor blink, SGR blink, bell, Kitty GIF frames,
 custom-shader animation. Idle terminal = 0 fps. Modelled on WezTerm's
 `has_animation` pattern. PTY wakes are out-of-band via `EventLoopProxy`, fed by
-pane-scoped `MuxEvent` values from `seance-mux` after VT snapshot publication.
+pane-scoped `MuxEvent` values from `seance-mux`; the UI then asks the Mux Client
+to drain ordered Domain events into Pane Views.
 
 ### Threading model
 
 VT parsing and all libghostty state live inside VT Core on a Unix VT Actor. The
 actor owns PTY reads/writes and publishes owned `Arc<VtSnapshot>` values through
-its local session API. `seance-mux` wraps that API, stamps pane identity onto
-local events, materializes ordered `PaneUpdate` frame deltas into a client-side
-pane view, and exposes app-facing commands. The UI renders that pane view via
-`seance-frame` and acknowledges the presented VT Snapshot generation after a
-successful present.
+its local session API. `LocalDomain` wraps that API, stamps pane identity onto
+local events, and publishes ordered Pane Updates. `MuxClient` applies those
+updates into Pane Views and exposes app-facing Pane Handles. The UI renders a
+Pane View via `seance-frame` and acknowledges the presented VT Snapshot
+generation after a successful present.
 
 Resize follows the same rule: the UI computes the new grid size, sends a resize
 command, and redraws after the actor publishes the resized snapshot rather than
@@ -254,10 +255,10 @@ and the renderer-thread revisit metric: see
 
 ## Multiplexing model [IMPLEMENTED/M6 + PLANNED: [M6][m6]]
 
-Phase 1 `seance-mux` is implemented as a local single-pane facade. It owns the
-local VT session internally, materializes ordered `PaneUpdate` frame deltas into
-a client-side pane view, owns selection/view state, and keeps `seance-app` from
-depending on `seance-vt`.
+Phase 1 `seance-mux` is implemented as `MuxClient` over one implicit local pane.
+`LocalDomain` owns the VT Actor and server-side Pane Update history; `PaneView`
+materializes ordered Frame Deltas and owns selection/view state. This keeps
+`seance-app` from depending on `seance-vt`.
 
 Full #45 mux topology remains planned:
 
@@ -282,13 +283,15 @@ into one framebuffer** — no render-target-per-pane.
 - IME preedit: winit `Ime::Preedit` → shape inline at cursor column,
   `RenderLayer::ImePreedit`.
 
-The future `Domain` trait is the seam remote transports
-([#221](https://github.com/xkef/seance/issues/221)) attach to. Unix socket, SSH,
-TLS, multi-client attach, full tabs, splits, and multi-window UX remain planned.
-The renderer-facing accessor is `Pane::frame_source(&self) -> &dyn FrameSource`,
-not `Pane::vt()`, so remote panes (where the VT lives on the other end) satisfy
-the same interface as local panes. The protocol shape for that future work is
-now canonicalized in [`docs/protocol.md`](./protocol.md).
+The `Domain` trait is the seam remote transports
+([#221](https://github.com/xkef/seance/issues/221)) attach to. `LocalDomain` is
+the production adapter today; `ProtocolDomain` is a client-side Mux Protocol
+adapter over a `Transport`. Unix socket, SSH, TLS, multi-client attach, full
+tabs, splits, and multi-window UX remain planned. The renderer-facing accessor
+is a Pane View `FrameSource`, not `Pane::vt()`, so remote panes (where the VT
+lives on the other end) satisfy the same interface as local panes. The protocol
+shape for that future work is canonicalized in
+[`docs/protocol.md`](./protocol.md).
 
 ---
 
