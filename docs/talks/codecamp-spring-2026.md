@@ -18,7 +18,7 @@ _DEC VT100, 1978._
 
 _The wire format every modern terminal still implements._
 
-_photo: <https://nikhiljha.com/posts/vt100/>_
+_photo: nikhiljha.com/posts/vt100_
 
 <!-- column: 1 -->
 
