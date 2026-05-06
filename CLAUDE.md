@@ -86,18 +86,33 @@ When picking up a sub-issue:
    pushing — these are the same commands CI runs, so a green local run is the
    bar.
 
+## GitHub issue, PR, and comment bodies
+
+When creating or editing GitHub issue bodies, PR bodies, or comments, do not
+apply the 72-column commit-message wrapping rule to prose. Use one physical line
+per paragraph and let GitHub/GFM wrap it. Hard-wrap only content that should not
+reflow: fenced code, logs, quoted output, tables, and ASCII diagrams. Titles
+stay single-line and short, ideally around 50–70 characters.
+
+When fixing existing GitHub body wrapping, change wrapping only unless the user
+explicitly asks for content edits. Do not add a comment just to announce a
+wrapping-only body edit. There is no supported way to suppress GitHub's edit
+metadata/history, so do not promise a trace-free edit.
+
 ## Commit messages
 
 Use Conventional Commits (<https://www.conventionalcommits.org/>) for every
 commit and PR title: `type(scope): summary`, with `type` drawn from `feat`,
 `fix`, `refactor`, `perf`, `docs`, `test`, `style`, `chore`, `build`, `ci`. Keep
-the subject line under 72 characters. Put the why (and any design narration that
-would otherwise leak into code comments) in the body.
+the subject line under 72 characters. Wrap commit bodies at 72 columns. Put the
+why (and any design narration that would otherwise leak into code comments) in
+the body.
 
 ## Pull requests
 
-PRs opened by Claude MUST follow the same format as commits. The PR title is the
-subject; the PR body is the commit body. Apply these rules to both.
+PRs opened by Claude MUST use a Conventional Commit title. PR bodies explain the
+same why as commit bodies, but GitHub renders them with GFM, so do not manually
+wrap prose.
 
 ### Subject (PR title / commit subject)
 
@@ -107,11 +122,11 @@ subject; the PR body is the commit body. Apply these rules to both.
 - Imperative mood, no trailing period, lowercase after the type.
 - Aim for ≤50 characters; 72 is the hard limit (GitHub truncates beyond it).
 
-### Body (PR body / commit body)
+### Body (PR body)
 
-- Wrap every line at 72 columns.
+- Use one physical line per prose paragraph; do not hard-wrap at 72 columns.
 - Explain _why_, not _what_. The diff already shows what changed.
-- Separate the subject from the body with a blank line.
+- Separate paragraphs with blank lines.
 - Footers (last block): `Closes #<issue>` is REQUIRED whenever the PR addresses
   one or more issues — list one per line so GitHub auto-closes them on merge.
   Use `Refs: #<issue>` only for issues the PR references but does not fully
