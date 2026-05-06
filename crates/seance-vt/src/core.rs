@@ -8,8 +8,8 @@ use libghostty_vt::terminal::{Mode, ScrollViewport};
 use libghostty_vt::{RenderState, Terminal as VtTerminal, TerminalOptions};
 
 use crate::frame::{CursorShape, DirtySnapshot};
-use crate::frame_source::{SnapshotExtraction, extract_snapshot};
 use crate::snapshot::VtSnapshot;
+use crate::snapshot_extraction::{SnapshotExtraction, extract_snapshot};
 use crate::terminal::install_png_decoder_for_this_thread;
 
 pub(crate) const DEFAULT_MAX_SCROLLBACK: usize = 10_000;
