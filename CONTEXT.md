@@ -22,6 +22,11 @@ Snapshot, and selection. _Avoid_: window session, terminal state
 **Headless VT**: A PTY-less VT adapter used by tests to feed bytes and produce
 VT Snapshots. _Avoid_: fake terminal, direct frame source
 
+**Kitty Graphics Extraction**: The VT Core-internal capture of Kitty graphics
+placements, image payloads, virtual placeholders, and placeholder-cell text
+suppression for inclusion in a VT Snapshot. _Avoid_: image renderer, graphics
+adapter
+
 ## Relationships
 
 - A **VT Actor** owns exactly one **VT Core**.
@@ -32,6 +37,8 @@ VT Snapshots. _Avoid_: fake terminal, direct frame source
 - A **Pane Session** sends commands to exactly one **VT Actor**.
 - A **Headless VT** uses the same extraction path as a **VT Actor** to produce
   **VT Snapshots**.
+- **Kitty Graphics Extraction** is part of **VT Core**'s **VT Snapshot**
+  production path.
 
 ## Example dialogue
 
