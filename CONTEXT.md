@@ -16,8 +16,27 @@ source
 **VT Actor**: The owning thread for one VT Core and its PTY I/O. _Avoid_: worker
 thread, reader thread, terminal service
 
-**Pane Session**: The UI-owned state for one pane's VT command handle, latest VT
-Snapshot, and selection. _Avoid_: window session, terminal state
+**Pane Session**: Historical name for the pre-mux UI-owned state that combined
+one pane's VT command handle, latest VT Snapshot, and selection. New code should
+use **Pane View** for client-side pane state. _Avoid_: window session, terminal
+state
+
+**Mux Protocol**: The transport-neutral message schema for client/server pane
+routing, handshake, ordered pane updates, frame deltas, image cache events, and
+classified lifecycle errors. _Avoid_: VT command wire ABI
+
+**Pane Update**: One ordered server update for a pane. It carries a `PaneRef`,
+`ServerSeq`, zero or more image cache events, and an optional frame delta.
+_Avoid_: VT event, dirty wake
+
+**Frame Delta**: A full snapshot or a base-explicit partial frame that can be
+materialized into a VT Snapshot. _Avoid_: latest snapshot diff without base
+
+**Pane View**: Client-side pane state that materializes pane updates and owns
+selection/view state. _Avoid_: shared terminal state
+
+**Image Cache Event**: Out-of-band image payload or eviction message ordered
+with pane frames. _Avoid_: renderer eviction, placement
 
 **Headless VT**: A PTY-less VT adapter used by tests to feed bytes and produce
 VT Snapshots. _Avoid_: fake terminal, direct frame source
@@ -33,8 +52,10 @@ adapter
 - A **Headless VT** owns exactly one **VT Core**.
 - A **VT Core** produces zero or more **VT Snapshots**.
 - A **VT Actor** publishes zero or more **VT Snapshots**.
-- A **Pane Session** keeps the latest **VT Snapshot** for rendering and copy.
-- A **Pane Session** sends commands to exactly one **VT Actor**.
+- A **Pane View** materializes **Pane Updates** into a current **VT Snapshot**.
+- A **Pane View** sends commands through the mux to exactly one local or remote
+  pane owner.
+- A **Pane Update** may carry a **Frame Delta** and **Image Cache Events**.
 - A **Headless VT** uses the same extraction path as a **VT Actor** to produce
   **VT Snapshots**.
 - **Kitty Graphics Extraction** is part of **VT Core**'s **VT Snapshot**

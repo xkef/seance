@@ -1,7 +1,8 @@
 [package]
 name = "seance-app"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "seance terminal multiplexer application"
 
@@ -10,24 +11,28 @@ name = "seance"
 path = "src/main.rs"
 
 [dependencies]
+# internal
+seance-config.workspace = true
+seance-input.workspace = true
+seance-mux.workspace = true
+seance-render.workspace = true
+
+# external
+arboard.workspace = true
 bytes.workspace = true
-seance-config = { path = "../seance-config" }
-seance-input = { path = "../seance-input" }
-seance-render = { path = "../seance-render" }
-seance-vt = { path = "../seance-vt" }
-arboard = "3"
-notify = "8"
-notify-debouncer-full = "0.6"
-pollster = "0.4"
-log.workspace = true
 env_logger.workspace = true
-winit = "0.30"
+log.workspace = true
+notify.workspace = true
+notify-debouncer-full.workspace = true
+pollster.workspace = true
+winit.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# external
+objc2.workspace = true
+objc2-app-kit.workspace = true
+objc2-quartz-core.workspace = true
+raw-window-handle.workspace = true
 
 [lints]
 workspace = true
-
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.6"
-objc2-app-kit = "0.3"
-objc2-quartz-core = "0.3"
-raw-window-handle = "0.6"

@@ -1,21 +1,27 @@
 [package]
 name = "seance-render-test"
 version = "0.0.0"
-publish = false
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Layered test harness for the seance renderer (Phase A)"
+publish = false
 
 [dependencies]
-seance-vt = { path = "../seance-vt" }
+# internal
+seance-frame.workspace = true
+seance-protocol.workspace = true
+seance-vt.workspace = true
+
+# external
 libghostty-vt.workspace = true
-rand_core = "0.6"
+rand_core.workspace = true
 rand_pcg.workspace = true
-unicode-width = "0.2"
+unicode-width.workspace = true
 
 [dev-dependencies]
+# external
 insta.workspace = true
-pretty_assertions.workspace = true
 
 [lints]
 workspace = true

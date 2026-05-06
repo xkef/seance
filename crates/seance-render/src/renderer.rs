@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use seance_config::Theme;
-use seance_vt::{FrameSource, GridPos};
+use seance_frame::FrameSource;
+use seance_protocol::{GridPos, ImageCacheEvent};
 use winit::window::Window;
 
 pub use crate::gpu::uniforms::CursorShape;
@@ -117,6 +118,10 @@ impl TerminalRenderer {
         let col = ((x as f32 - pad[0]) / self.cell_size[0]).max(0.0) as u16;
         let row = ((y as f32 - pad[1]) / self.cell_size[1]).max(0.0) as u16;
         (col, row)
+    }
+
+    pub fn apply_image_cache_event(&mut self, event: &ImageCacheEvent) {
+        self.gpu.apply_image_cache_event(event);
     }
 
     pub fn resize_surface(&mut self, width: u32, height: u32) {

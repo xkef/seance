@@ -12,7 +12,8 @@ use crate::image::ImageRenderer;
 use crate::renderer::RenderInputs;
 use crate::text::{CellText, FrameInfo, GlyphAtlas};
 use seance_config::Theme;
-use seance_vt::{DirtySnapshot, FrameSource, PlacementLayer};
+use seance_frame::{FrameSource, PlacementLayer};
+use seance_protocol::{DirtySnapshot, ImageCacheEvent};
 
 const ATLAS_GRAYSCALE_FORMAT: TextureFormat = TextureFormat::R8Unorm;
 const ATLAS_COLOR_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
@@ -146,6 +147,11 @@ impl GpuState {
             size,
             surface_dirty: false,
         }
+    }
+
+    pub(crate) fn apply_image_cache_event(&mut self, event: &ImageCacheEvent) {
+        self.images
+            .apply_cache_event(&self.device, &self.queue, event);
     }
 
     /// Collect kitty image placements + upload image textures. Call

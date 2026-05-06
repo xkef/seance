@@ -3,7 +3,7 @@
 
 use seance_config::ConfigDiff;
 
-use crate::app::{App, vt_shape_from_config};
+use crate::app::{App, mux_shape_from_config};
 use crate::platform;
 use crate::surface_state::SurfaceState;
 
@@ -129,7 +129,7 @@ impl App {
         if old_config.cursor.style != self.config.cursor.style
             && let Some(surface) = self.surface.as_ref()
         {
-            surface.set_cursor_shape(vt_shape_from_config(self.config.cursor.style));
+            surface.set_cursor_shape(mux_shape_from_config(self.config.cursor.style));
         }
         if diff.repaint_only {
             self.mark_dirty();

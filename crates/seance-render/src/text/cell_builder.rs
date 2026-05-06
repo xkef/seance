@@ -18,7 +18,8 @@ use std::collections::HashMap;
 
 use rustc_hash::FxBuildHasher;
 use seance_config::Theme;
-use seance_vt::{CellColor, CellView, CellVisitor, DirtySnapshot, FrameSource};
+use seance_frame::{CellView, CellVisitor, FrameSource};
+use seance_protocol::{CellColor, DirtySnapshot};
 
 use super::atlas::{AtlasEntry, GlyphAtlas};
 use super::backend::{FontAttrs, GlyphFormat, GlyphId, ShapedGlyph, TextBackend};
@@ -498,7 +499,8 @@ mod tests {
     use crate::text::backend::{
         CellMetrics, FontAttrs, GlyphId, RasterizedGlyph, ShapedGlyph, TextBackend,
     };
-    use seance_vt::{CellAttrs, CellColor, CellVisitor, CursorInfo, GridPos};
+    use seance_frame::CellVisitor;
+    use seance_protocol::{CellAttrs, CellColor, CursorInfo, GridPos};
 
     type FakeCell<'a> = (&'a str, CellColor, CellColor, CellAttrs);
 

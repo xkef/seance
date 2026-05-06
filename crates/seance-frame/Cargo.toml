@@ -1,19 +1,14 @@
 [package]
-name = "seance-input"
+name = "seance-frame"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Input handling and modal key system for seance"
+description = "Render-facing frame traits and borrowed adapters for seance"
 
 [dependencies]
 # internal
 seance-protocol.workspace = true
-
-# external
-libghostty-vt.workspace = true
-log.workspace = true
-winit.workspace = true
 
 [lints]
 workspace = true

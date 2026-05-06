@@ -1,4 +1,4 @@
-//! GPU-side image cache keyed by `image_id`.
+//! GPU-side image cache keyed by scoped protocol image keys.
 //!
 //! One wgpu texture per distinct image; bind groups are created once per
 //! texture and reused across frames. Entries survive a grace window of
@@ -6,7 +6,8 @@
 //! during a scroll) don't churn the GPU.
 
 use rustc_hash::FxHashMap;
-use seance_vt::{ImageInfo, ImageVisitor};
+use seance_frame::{ImageInfo, ImageVisitor};
+use seance_protocol::{ImageCacheEvent, ImageKey, ImagePayload};
 use wgpu::*;
 
 /// Frames of grace before an unreferenced image is dropped. At ~240Hz
@@ -23,7 +24,7 @@ pub(crate) struct CachedImage {
 }
 
 pub(crate) struct ImageCache {
-    entries: FxHashMap<u32, CachedImage>,
+    entries: FxHashMap<ImageKey, CachedImage>,
     current_frame: u64,
     sampler: Sampler,
     bgl: BindGroupLayout,
@@ -51,8 +52,38 @@ impl ImageCache {
         self.current_frame = self.current_frame.wrapping_add(1);
     }
 
-    pub(crate) fn bind_group(&self, image_id: u32) -> Option<&BindGroup> {
-        self.entries.get(&image_id).map(|e| &e.bind_group)
+    pub(crate) fn bind_group(&self, image_key: ImageKey) -> Option<&BindGroup> {
+        self.entries.get(&image_key).map(|e| &e.bind_group)
+    }
+
+    pub(crate) fn apply_event(&mut self, device: &Device, queue: &Queue, event: &ImageCacheEvent) {
+        match event {
+            ImageCacheEvent::Put(payload) => self.put_payload(device, queue, payload),
+            ImageCacheEvent::Evict { key } => self.evict(*key),
+            ImageCacheEvent::PutStart(_)
+            | ImageCacheEvent::PutChunk(_)
+            | ImageCacheEvent::PutComplete { .. } => {}
+        }
+    }
+
+    pub(crate) fn put_payload(&mut self, device: &Device, queue: &Queue, payload: &ImagePayload) {
+        let info = ImageInfo {
+            image_id: payload.key.image_id,
+            width: payload.width,
+            height: payload.height,
+            rgba: &payload.rgba,
+        };
+        self.upload(device, queue, &info);
+    }
+
+    pub(crate) fn evict(&mut self, image_key: ImageKey) {
+        self.entries.remove(&image_key);
+    }
+
+    pub(crate) fn touch(&mut self, image_key: ImageKey) {
+        if let Some(entry) = self.entries.get_mut(&image_key) {
+            entry.last_seen_frame = self.current_frame;
+        }
     }
 
     pub(crate) fn upload(&mut self, device: &Device, queue: &Queue, info: &ImageInfo<'_>) {
@@ -66,7 +97,7 @@ impl ImageCache {
             return;
         }
 
-        let entry = self.entries.entry(info.image_id);
+        let entry = self.entries.entry(ImageKey::local(info.image_id));
         match entry {
             std::collections::hash_map::Entry::Occupied(mut slot) => {
                 let existing = slot.get_mut();

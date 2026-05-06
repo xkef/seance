@@ -10,7 +10,8 @@
 
 use std::fmt::Write;
 
-use seance_vt::{CellColor, CellView, CellVisitor, FrameSource};
+use seance_frame::{CellView, CellVisitor, FrameSource};
+use seance_protocol::{CellColor, GridPos};
 use unicode_width::UnicodeWidthStr;
 
 /// Build the L4 text dump for `source`.
@@ -124,7 +125,7 @@ fn render_cursor(out: &mut String, col: u16, row: u16, visible: bool) {
     let _ = writeln!(out, "cursor: ({row},{col}) visible={visible}");
 }
 
-fn render_selection(out: &mut String, selection: Option<(seance_vt::GridPos, seance_vt::GridPos)>) {
+fn render_selection(out: &mut String, selection: Option<(GridPos, GridPos)>) {
     match selection {
         Some((start, end)) => {
             let _ = writeln!(

@@ -1,6 +1,6 @@
 //! Kitty graphics image compositing.
 //!
-//! Keyed by `image_id`: one wgpu texture per image, cached across frames
+//! Keyed by scoped image key: one wgpu texture per image, cached across frames
 //! and evicted when unreferenced for `EVICT_AGE_FRAMES`. Placements for
 //! each z-layer (below-bg, below-text, above-text) are collected into a
 //! single instance buffer; `record_layer` issues one draw per placement
@@ -10,7 +10,8 @@ mod builder;
 mod cache;
 mod pipeline;
 
-use seance_vt::{FrameSource, PlacementLayer};
+use seance_frame::{FrameSource, PlacementLayer};
+use seance_protocol::ImageCacheEvent;
 use wgpu::*;
 
 use crate::text::FrameInfo;
@@ -44,6 +45,15 @@ impl ImageRenderer {
         }
     }
 
+    pub(crate) fn apply_cache_event(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        event: &ImageCacheEvent,
+    ) {
+        self.cache.apply_event(device, queue, event);
+    }
+
     /// Drive per-frame image cache upload and placement collection.
     pub(crate) fn update_frame(
         &mut self,
@@ -75,6 +85,15 @@ impl ImageRenderer {
             source.visit_placements(layer, &mut collector);
         }
         self.frame.finalize();
+        for layer in [
+            PlacementLayer::BelowBg,
+            PlacementLayer::BelowText,
+            PlacementLayer::AboveText,
+        ] {
+            for draw in self.frame.draws_for(layer) {
+                self.cache.touch(draw.image_key);
+            }
+        }
 
         self.cache.evict_stale(EVICT_AGE_FRAMES);
 
@@ -116,7 +135,7 @@ impl ImageRenderer {
         pass.set_bind_group(0, uniform_bg, &[]);
         pass.set_vertex_buffer(0, buf.slice(..));
         for draw in draws {
-            let Some(bg) = self.cache.bind_group(draw.image_id) else {
+            let Some(bg) = self.cache.bind_group(draw.image_key) else {
                 continue;
             };
             pass.set_bind_group(1, bg, &[]);

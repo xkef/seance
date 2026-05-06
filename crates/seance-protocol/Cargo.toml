@@ -1,0 +1,20 @@
+[package]
+name = "seance-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Transport-neutral protocol and owned frame data for seance"
+
+[dependencies]
+# external
+postcard.workspace = true
+serde.workspace = true
+serde-big-array.workspace = true
+
+[dev-dependencies]
+# external
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true

@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 
 use bytes::{Buf, Bytes};
 
+pub use seance_protocol::{Resize, ThemeColors};
+
 use crate::core::VtCoreError;
 use crate::frame::CursorShape;
 use crate::snapshot::VtSnapshot;
@@ -46,24 +48,6 @@ impl Default for VtSessionOptions {
             initial_cursor_shape: CursorShape::Block,
         }
     }
-}
-
-/// Pixel and cell dimensions for a resize command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Resize {
-    pub cols: u16,
-    pub rows: u16,
-    pub pixel_width: u16,
-    pub pixel_height: u16,
-}
-
-/// Default colors/palette to seed into libghostty.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ThemeColors {
-    pub fg: [u8; 3],
-    pub bg: [u8; 3],
-    pub cursor: [u8; 3],
-    pub palette: [[u8; 3]; 256],
 }
 
 /// Public events emitted by the VT actor.

@@ -6,7 +6,8 @@
 //! for per-draw bind-group rebinds.
 
 use bytemuck::{Pod, Zeroable};
-use seance_vt::{PlacementLayer, PlacementSnapshot, PlacementVisitor};
+use seance_frame::{PlacementLayer, PlacementVisitor};
+use seance_protocol::{ImageKey, PlacementSnapshot};
 
 use crate::text::FrameInfo;
 
@@ -20,7 +21,7 @@ pub(crate) struct ImageInstance {
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct ImageDraw {
-    pub image_id: u32,
+    pub image_key: ImageKey,
     pub instance: u32,
 }
 
@@ -31,9 +32,9 @@ pub(crate) struct ImageFrame {
 
     /// Scratch buckets populated during `visit_placements`; merged into
     /// `instances` during `finalize`.
-    below_bg_scratch: Vec<(i32, ImageInstance, u32)>,
-    below_text_scratch: Vec<(i32, ImageInstance, u32)>,
-    above_text_scratch: Vec<(i32, ImageInstance, u32)>,
+    below_bg_scratch: Vec<(i32, ImageInstance, ImageKey)>,
+    below_text_scratch: Vec<(i32, ImageInstance, ImageKey)>,
+    above_text_scratch: Vec<(i32, ImageInstance, ImageKey)>,
 
     /// Resolved draw commands after finalize, partitioned by layer.
     below_bg_draws: Vec<ImageDraw>,
@@ -52,7 +53,7 @@ impl ImageFrame {
         self.above_text_draws.clear();
     }
 
-    fn scratch_mut(&mut self, layer: PlacementLayer) -> &mut Vec<(i32, ImageInstance, u32)> {
+    fn scratch_mut(&mut self, layer: PlacementLayer) -> &mut Vec<(i32, ImageInstance, ImageKey)> {
         match layer {
             PlacementLayer::BelowBg => &mut self.below_bg_scratch,
             PlacementLayer::BelowText => &mut self.below_text_scratch,
@@ -90,16 +91,16 @@ impl ImageFrame {
 }
 
 fn drain_bucket(
-    scratch: &mut Vec<(i32, ImageInstance, u32)>,
+    scratch: &mut Vec<(i32, ImageInstance, ImageKey)>,
     instances: &mut Vec<ImageInstance>,
     draws: &mut Vec<ImageDraw>,
 ) {
     scratch.sort_by_key(|(z, _, _)| *z);
-    for (_z, instance, image_id) in scratch.drain(..) {
+    for (_z, instance, image_key) in scratch.drain(..) {
         let idx = instances.len() as u32;
         instances.push(instance);
         draws.push(ImageDraw {
-            image_id,
+            image_key,
             instance: idx,
         });
     }
@@ -142,7 +143,7 @@ impl PlacementVisitor for PlacementCollector<'_> {
                 dest_rect,
                 source_uv,
             },
-            p.image_id,
+            ImageKey::local(p.image_id),
         ));
     }
 }

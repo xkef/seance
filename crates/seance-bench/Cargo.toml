@@ -1,7 +1,8 @@
 [package]
 name = "seance-bench"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Frame-time bench harness for M2 perf work (CPU + headless GPU submit)"
 publish = false
@@ -11,8 +12,9 @@ name = "frame-time"
 path = "src/bin/frame_time.rs"
 
 [dependencies]
-pollster = "0.4"
-wgpu = "29"
+# external
+pollster.workspace = true
+wgpu.workspace = true
 
 [lints]
 workspace = true

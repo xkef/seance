@@ -21,11 +21,8 @@ use winit::window::{Window, WindowId};
 
 use seance_config::Config;
 use seance_input::InputHandler;
+use seance_mux::{CursorShape as MuxCursorShape, LocalMux, MuxEvent, PaneEvent, PaneSpawnOptions};
 use seance_render::{RenderInputs, RendererConfig, TerminalRenderer};
-use seance_vt::{
-    CursorShape as VtCursorShape, FrameSource, SnapshotFrameSource, VtEvent, VtSessionOptions,
-    spawn_vt_session,
-};
 
 use crate::UserEvent;
 use crate::keybinds::Keybinds;
@@ -45,6 +42,7 @@ pub(crate) struct App {
     pub(crate) config: Config,
     pub(crate) font_size: f32,
     proxy: EventLoopProxy<UserEvent>,
+    mux: LocalMux,
     watcher: Option<ConfigWatcher>,
 }
 
@@ -62,6 +60,7 @@ impl App {
             config,
             font_size,
             proxy,
+            mux: LocalMux::new(),
             watcher: None,
         }
     }
@@ -86,13 +85,8 @@ impl App {
         }
         if surface.content_dirty {
             surface.content_dirty = false;
-            if let Some(snapshot) = surface.pane.latest_snapshot.as_ref() {
-                let mut source = SnapshotFrameSource::new(snapshot);
-                // Cache the VT's DECSCUSR-tracked shape (if any) before the
-                // renderer consumes the source — mode changes in neovim arrive
-                // as actor-published snapshots that set `content_dirty`, so
-                // this branch runs on every mode transition.
-                surface.last_vt_cursor_shape = source.cursor().shape;
+            surface.last_vt_cursor_shape = surface.pane.cursor_shape();
+            if let Some(mut source) = surface.pane.frame_source() {
                 surface.renderer.update_frame(&mut source);
             }
         }
@@ -104,15 +98,12 @@ impl App {
             .map(Into::into)
             .unwrap_or_else(|| self.config.cursor.style.into());
         surface.render_inputs.vt_cursor_visible = !self.config.cursor.blink || surface.blink_on;
-        let rendered_generation = surface
-            .pane
-            .latest_snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.generation);
+        let rendered_generation = surface.pane.generation();
         if surface.renderer.render(&surface.render_inputs)
             && let Some(generation) = rendered_generation
+            && let Err(err) = surface.pane.ack_presented(generation)
         {
-            surface.pane.ack_rendered(generation);
+            log::warn!("failed to ack presented pane frame: {err}");
         }
     }
 
@@ -139,7 +130,7 @@ impl App {
     /// Earliest instant at which any animation source needs the next
     /// wake. `None` means the terminal is idle — `about_to_wait` will
     /// drop into `ControlFlow::Wait` and the OS suspends us until either
-    /// a window event arrives or the IO actor signals via the proxy.
+    /// a window event arrives or the mux signals via the proxy.
     fn next_animation_deadline(&self) -> Option<Instant> {
         let surface = self.surface.as_ref()?;
         // Occluded windows skip rendering anyway, so don't bother
@@ -205,25 +196,27 @@ impl ApplicationHandler<UserEvent> for App {
 
         let (cols, rows) = renderer.grid_size();
         let proxy = self.proxy.clone();
-        let vt = spawn_vt_session(
-            VtSessionOptions {
-                cols,
-                rows,
-                pixel_width: size.width as u16,
-                pixel_height: size.height as u16,
-                initial_cursor_shape: vt_shape_from_config(self.config.cursor.style),
-            },
-            move |event| {
-                let _ = proxy.send_event(UserEvent::Vt(event));
-            },
-        )
-        .expect("failed to spawn terminal actor");
+        let pane = self
+            .mux
+            .spawn_pane(
+                PaneSpawnOptions {
+                    cols,
+                    rows,
+                    pixel_width: size.width as u16,
+                    pixel_height: size.height as u16,
+                    initial_cursor_shape: mux_shape_from_config(self.config.cursor.style),
+                },
+                move |event| {
+                    let _ = proxy.send_event(UserEvent::Mux(event));
+                },
+            )
+            .expect("failed to spawn local pane");
 
         let render_inputs = RenderInputs {
             cursor_shape: self.config.cursor.style.into(),
             ..RenderInputs::default()
         };
-        let mut surface = SurfaceState::new(window, renderer, vt, render_inputs);
+        let mut surface = SurfaceState::new(window, renderer, pane, render_inputs);
         self.apply_terminal_theme_to(&mut surface, &theme);
         self.surface = Some(surface);
 
@@ -240,16 +233,27 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             UserEvent::ConfigFileChanged => self.reload_config(),
             UserEvent::ThemeFileChanged(path) => self.on_theme_file_changed(&path),
-            UserEvent::Vt(VtEvent::ContentDirty) => {
-                if let Some(surface) = self.surface_mut() {
-                    surface.pane.refresh_latest_snapshot();
-                    surface.mark_dirty();
+            UserEvent::Mux(MuxEvent::Pane { event, .. }) => match event {
+                PaneEvent::FrameDirty => {
+                    if let Some(surface) = self.surface_mut() {
+                        surface.pane.refresh_updates();
+                        surface.mark_dirty();
+                    }
                 }
-            }
-            UserEvent::Vt(VtEvent::Exited) => {
-                self.surface = None;
-                event_loop.exit();
-            }
+                PaneEvent::ImageCache(event) => {
+                    if let Some(surface) = self.surface_mut() {
+                        surface.renderer.apply_image_cache_event(&event);
+                        surface.mark_dirty();
+                    }
+                }
+                PaneEvent::Exited => {
+                    self.surface = None;
+                    event_loop.exit();
+                }
+                PaneEvent::Error(err) => {
+                    log::warn!("pane error: {err}");
+                }
+            },
         }
     }
 
@@ -308,8 +312,8 @@ impl ApplicationHandler<UserEvent> for App {
         }
         // Deadline-scheduled redraw: sleep until the next animation
         // edge, or fully `Wait` when nothing is animating. PTY output
-        // wakes us out-of-band via `UserEvent::Vt(ContentDirty)` from the
-        // actor, so an idle terminal really does park the event loop.
+        // wakes us out-of-band via `UserEvent::Mux(FrameDirty)`, so an idle
+        // terminal really does park the event loop.
         match self.next_animation_deadline() {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
@@ -325,11 +329,11 @@ fn initial_window_size_from_env() -> Option<LogicalSize<u32>> {
     Some(LogicalSize::new(width, height))
 }
 
-pub(crate) fn vt_shape_from_config(style: seance_config::CursorStyle) -> VtCursorShape {
+pub(crate) fn mux_shape_from_config(style: seance_config::CursorStyle) -> MuxCursorShape {
     match style {
-        seance_config::CursorStyle::Block => VtCursorShape::Block,
-        seance_config::CursorStyle::Bar => VtCursorShape::Bar,
-        seance_config::CursorStyle::Underline => VtCursorShape::Underline,
+        seance_config::CursorStyle::Block => MuxCursorShape::Block,
+        seance_config::CursorStyle::Bar => MuxCursorShape::Bar,
+        seance_config::CursorStyle::Underline => MuxCursorShape::Underline,
     }
 }
 
