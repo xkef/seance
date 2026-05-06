@@ -7,12 +7,12 @@
 
 mod core;
 mod frame;
-mod frame_source;
-mod kitty_placeholder;
+mod kitty_graphics;
 mod modes;
 pub mod selection;
 mod session;
 mod snapshot;
+mod snapshot_extraction;
 mod terminal;
 
 #[doc(hidden)]
