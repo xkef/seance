@@ -1,0 +1,1769 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>séance: overview</title>
+    <style>
+      :root {
+        --base: #303446;
+        --mantle: #292c3c;
+        --crust: #232634;
+        --surface: #414559;
+        --surface2: #51576d;
+        --overlay: #737994;
+        --text: #c6d0f5;
+        --subtext: #b5bfe2;
+        --blue: #8caaee;
+        --lavender: #babbf1;
+        --mauve: #ca9ee6;
+        --red: #e78284;
+        --peach: #ef9f76;
+        --yellow: #e5c890;
+        --green: #a6d189;
+        --sapphire: #85c1dc;
+        --pink: #f4b8e4;
+        --teal: #81c8be;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: var(--base);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text",
+                     "Inter", "Helvetica Neue", sans-serif;
+        font-size: 16px;
+        line-height: 1.55;
+      }
+
+      main {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 48px 32px 96px;
+      }
+
+      header {
+        border-bottom: 1px solid var(--surface);
+        padding-bottom: 24px;
+        margin-bottom: 40px;
+      }
+
+      h1 {
+        font-size: 48px;
+        font-weight: 700;
+        margin: 0 0 8px;
+        color: var(--peach);
+        letter-spacing: -0.02em;
+      }
+
+      .tagline { margin: 0; color: var(--subtext); font-size: 18px; }
+      .tagline strong { color: var(--lavender); font-weight: 600; }
+
+      h2 {
+        font-size: 28px;
+        margin: 56px 0 16px;
+        color: var(--blue);
+        border-left: 4px solid var(--blue);
+        padding-left: 16px;
+        line-height: 1.2;
+      }
+
+      h3 {
+        font-size: 18px;
+        margin: 28px 0 8px;
+        color: var(--lavender);
+        font-weight: 600;
+      }
+
+      p { margin: 8px 0 12px; }
+
+      code {
+        font-family: "JetBrains Mono", "SF Mono", Menlo,
+                     "Fira Code", monospace;
+        font-size: 14px;
+        background: var(--mantle);
+        color: var(--sapphire);
+        padding: 2px 6px;
+        border-radius: 4px;
+      }
+
+      pre {
+        background: var(--crust);
+        border: 1px solid var(--surface);
+        border-radius: 8px;
+        padding: 16px 20px;
+        overflow-x: auto;
+        margin: 12px 0 20px;
+        font-size: 13.5px;
+        line-height: 1.5;
+      }
+
+      pre code {
+        background: transparent;
+        color: var(--text);
+        padding: 0;
+        font-size: inherit;
+      }
+
+      pre .kw   { color: var(--mauve); }
+      pre .ty   { color: var(--yellow); }
+      pre .str  { color: var(--green); }
+      pre .num  { color: var(--peach); }
+      pre .cmt  { color: var(--overlay); font-style: italic; }
+      pre .fn   { color: var(--blue); }
+      pre .esc  { color: var(--red); }
+      pre .name { color: var(--peach); font-weight: 600; }
+
+      .shape-svg {
+        display: block;
+        width: 100%;
+        height: auto;
+        margin: 12px 0 14px;
+        background: var(--crust);
+        border: 1px solid var(--surface);
+        border-radius: 8px;
+      }
+
+      .card .feat {
+        display: inline-block;
+        font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+        font-size: 12px;
+        color: var(--mauve);
+        background: var(--surface);
+        border-radius: 4px;
+        padding: 2px 8px;
+        margin: 0 0 10px;
+      }
+
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        margin: 12px 0 20px;
+        font-size: 14px;
+      }
+
+      th, td {
+        text-align: left;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--surface);
+      }
+
+      th {
+        color: var(--mauve);
+        font-weight: 600;
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+
+      td code { background: var(--mantle); color: var(--sapphire); }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 24px;
+      }
+
+      .card {
+        background: var(--mantle);
+        border: 1px solid var(--surface);
+        border-radius: 8px;
+        padding: 18px 20px;
+      }
+
+      .card h3 { margin-top: 0; }
+      .card pre { margin-bottom: 0; }
+
+      .pill {
+        display: inline-block;
+        background: var(--surface);
+        color: var(--lavender);
+        border-radius: 999px;
+        padding: 2px 10px;
+        font-size: 12px;
+        margin-right: 6px;
+        margin-bottom: 4px;
+      }
+
+      .diagram {
+        display: block;
+        width: 100%;
+        height: auto;
+        margin: 20px 0 28px;
+        background: var(--mantle);
+        border: 1px solid var(--surface);
+        border-radius: 12px;
+      }
+
+      .diagram .node-fill   { fill: var(--mantle); }
+      .diagram .node-fill-2 { fill: var(--crust); }
+      .diagram .node-stroke { stroke: var(--surface); stroke-width: 1.5; }
+      .diagram .node-blue   { stroke: var(--blue); stroke-width: 2; }
+      .diagram .node-lav    { stroke: var(--lavender); stroke-width: 2; }
+      .diagram .node-peach  { stroke: var(--peach); stroke-width: 2; }
+      .diagram .node-mauve  { stroke: var(--mauve); stroke-width: 2; }
+      .diagram .label-mono  { font-family: "JetBrains Mono", "SF Mono", Menlo, monospace; }
+      .diagram .label-sans  { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; }
+      .diagram .t-blue      { fill: var(--blue); }
+      .diagram .t-lav       { fill: var(--lavender); }
+      .diagram .t-peach     { fill: var(--peach); }
+      .diagram .t-mauve     { fill: var(--mauve); }
+      .diagram .t-text      { fill: var(--text); }
+      .diagram .t-sub       { fill: var(--subtext); }
+      .diagram .t-overlay   { fill: var(--overlay); }
+      .diagram .t-green     { fill: var(--green); }
+      .diagram .t-red       { fill: var(--red); }
+      .diagram .t-sapph     { fill: var(--sapphire); }
+      .diagram .l-out       { stroke: var(--green);  stroke-width: 2; fill: none; }
+      .diagram .l-in        { stroke: var(--peach);  stroke-width: 2; fill: none; }
+      .diagram .l-flow      { stroke: var(--blue);   stroke-width: 2; fill: none; }
+      .diagram .l-faint     { stroke: var(--surface); stroke-width: 1; fill: none; }
+      .diagram .arr-out path { fill: var(--green); }
+      .diagram .arr-in path  { fill: var(--peach); }
+      .diagram .arr-flow path{ fill: var(--blue); }
+      .diagram .red-bg      { fill: var(--red); opacity: 0.85; }
+      .diagram .green-bg    { fill: var(--green); opacity: 0.20; }
+      .diagram .blue-bg     { fill: var(--blue); opacity: 0.18; }
+      .diagram .peach-bg    { fill: var(--peach); opacity: 0.20; }
+      .diagram .mauve-bg    { fill: var(--mauve); opacity: 0.20; }
+      .diagram .yellow-bg   { fill: var(--yellow); opacity: 0.18; }
+
+      footer {
+        margin-top: 80px;
+        padding-top: 24px;
+        border-top: 1px solid var(--surface);
+        color: var(--overlay);
+        font-size: 13px;
+      }
+
+      a { color: var(--sapphire); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+
+      @media (max-width: 720px) {
+        .grid { grid-template-columns: 1fr; }
+        h1 { font-size: 36px; }
+        h2 { font-size: 22px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>séance</h1>
+        <p class="tagline">
+          A GPU-rendered terminal, multiplexer-first.<br />
+          <strong>One VT parser. One GPU pipeline. Many panes.</strong>
+        </p>
+        <p style="margin-top:14px">
+          <span class="pill">Rust</span>
+          <span class="pill">libghostty-vt</span>
+          <span class="pill">cosmic-text</span>
+          <span class="pill">swash</span>
+          <span class="pill">etagere</span>
+          <span class="pill">wgpu</span>
+          <span class="pill">winit</span>
+        </p>
+      </header>
+
+      <section>
+        <h2>Architecture</h2>
+        <p>
+          tmux and screen wrap a <em>second</em> VT parser around the host
+          terminal. Doubled glyphs, broken keybinds, no image protocol, no GPU
+          path. séance inverts the model: one terminal, one parser, splits and
+          tabs live natively above the grid.
+        </p>
+
+        <svg class="diagram" viewBox="0 0 1100 280" role="img" aria-label="Data flow from shell through PTY, libghostty-vt, wgpu, to pixels">
+          <defs>
+            <marker id="arr-out" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 Z" style="fill: var(--green)"/></marker>
+            <marker id="arr-in" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 Z" style="fill: var(--peach)"/></marker>
+            <marker id="arr-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 Z" style="fill: var(--blue)"/></marker>
+          </defs>
+
+          <!-- shell -->
+          <g>
+            <rect x="30" y="80" width="160" height="120" rx="14" class="node-fill" style="stroke: var(--surface); stroke-width: 1.5"/>
+            <text x="110" y="120" text-anchor="middle" class="label-mono t-blue" font-size="22" font-weight="700">zsh</text>
+            <text x="110" y="148" text-anchor="middle" class="label-sans t-sub" font-size="13">shell process</text>
+            <text x="110" y="172" text-anchor="middle" class="label-mono t-overlay" font-size="11">stdout · stdin</text>
+          </g>
+
+          <!-- PTY (kernel) -->
+          <g>
+            <rect x="240" y="80" width="160" height="120" rx="14" class="node-fill-2" style="stroke: var(--mauve); stroke-width: 2; stroke-dasharray: 6 4"/>
+            <text x="320" y="120" text-anchor="middle" class="label-mono t-mauve" font-size="22" font-weight="700">PTY</text>
+            <text x="320" y="148" text-anchor="middle" class="label-sans t-sub" font-size="13">kernel pseudo-tty</text>
+            <text x="320" y="172" text-anchor="middle" class="label-mono t-overlay" font-size="11">slave ⇄ master</text>
+          </g>
+
+          <!-- libghostty-vt -->
+          <g>
+            <rect x="450" y="80" width="240" height="120" rx="14" class="node-fill" style="stroke: var(--blue); stroke-width: 2"/>
+            <text x="570" y="118" text-anchor="middle" class="label-mono t-blue" font-size="20" font-weight="700">libghostty-vt</text>
+            <text x="570" y="144" text-anchor="middle" class="label-sans t-sub" font-size="13">CSI · OSC · DCS parser</text>
+            <text x="570" y="168" text-anchor="middle" class="label-mono t-overlay" font-size="11">bytes → ops → grid</text>
+          </g>
+
+          <!-- wgpu -->
+          <g>
+            <rect x="740" y="80" width="200" height="120" rx="14" class="node-fill" style="stroke: var(--peach); stroke-width: 2"/>
+            <text x="840" y="118" text-anchor="middle" class="label-mono t-peach" font-size="20" font-weight="700">wgpu</text>
+            <text x="840" y="144" text-anchor="middle" class="label-sans t-sub" font-size="13">GPU renderer</text>
+            <text x="840" y="168" text-anchor="middle" class="label-mono t-overlay" font-size="11">shape · atlas · draw</text>
+          </g>
+
+          <!-- pixels -->
+          <g>
+            <rect x="975" y="105" width="100" height="70" rx="10" style="fill: var(--green); opacity: 0.18; stroke: var(--green); stroke-width: 1.5"/>
+            <text x="1025" y="148" text-anchor="middle" class="label-sans t-green" font-size="15" font-weight="600">pixels</text>
+          </g>
+
+          <!-- grid+scrollback under vt -->
+          <g>
+            <rect x="475" y="222" width="190" height="40" rx="8" style="fill: var(--mantle); stroke: var(--surface); stroke-width: 1"/>
+            <text x="570" y="247" text-anchor="middle" class="label-mono t-sub" font-size="12">grid + scrollback</text>
+            <line x1="570" y1="200" x2="570" y2="222" class="l-faint"/>
+          </g>
+
+          <!-- arrows: forward (top track) -->
+          <line x1="190" y1="115" x2="240" y2="115" class="l-out" marker-end="url(#arr-out)"/>
+          <line x1="400" y1="115" x2="450" y2="115" class="l-out" marker-end="url(#arr-out)"/>
+          <line x1="690" y1="115" x2="740" y2="115" class="l-flow" marker-end="url(#arr-flow)"/>
+          <line x1="940" y1="140" x2="975" y2="140" class="l-out" marker-end="url(#arr-out)"/>
+
+          <!-- arrows: backward (bottom track) -->
+          <line x1="240" y1="170" x2="190" y2="170" class="l-in" marker-end="url(#arr-in)"/>
+          <line x1="450" y1="170" x2="400" y2="170" class="l-in" marker-end="url(#arr-in)"/>
+
+          <!-- labels -->
+          <text x="215" y="108" text-anchor="middle" class="label-mono t-overlay" font-size="11">bytes</text>
+          <text x="425" y="108" text-anchor="middle" class="label-mono t-overlay" font-size="11">bytes</text>
+          <text x="715" y="108" text-anchor="middle" class="label-mono t-overlay" font-size="11">grid</text>
+
+          <text x="215" y="184" text-anchor="middle" class="label-mono t-overlay" font-size="11">keys</text>
+          <text x="425" y="184" text-anchor="middle" class="label-mono t-overlay" font-size="11">keys</text>
+
+          <!-- legend -->
+          <g transform="translate(30, 30)">
+            <line x1="0" y1="6" x2="20" y2="6" class="l-out"/>
+            <text x="26" y="10" class="label-sans t-sub" font-size="11">output (bytes / grid / pixels)</text>
+            <line x1="220" y1="6" x2="240" y2="6" class="l-in"/>
+            <text x="246" y="10" class="label-sans t-sub" font-size="11">input (keystrokes, resize)</text>
+          </g>
+        </svg>
+
+        <table>
+          <thead>
+            <tr><th>Crate</th><th>Role</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>seance-app</code></td><td>winit event loop, PTY polling, redraw dispatch</td></tr>
+            <tr><td><code>seance-vt</code></td><td><code>libghostty-vt</code> adapter, kitty graphics, frame source</td></tr>
+            <tr><td><code>seance-render</code></td><td>wgpu pipelines, glyph atlas, image renderer</td></tr>
+            <tr><td><code>seance-input</code></td><td>key/mouse to VT escape sequences, shortcut dispatch</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>CSI, OSC, DCS: 50 years of wire format</h2>
+        <p>
+          The DEC VT100 (1978) shipped a wire format every modern terminal
+          still implements. Three escape-sequence families share the same
+          <code>ESC</code> (<code>\x1b</code>) prefix and split by introducer.
+        </p>
+
+        <h3>CSI (<code>ESC [</code>): control</h3>
+<pre><code><span class="esc">\x1b[31m</span>         <span class="name">SGR</span>       set foreground red
+<span class="esc">\x1b[2J</span>          <span class="name">ED</span>        erase in display
+<span class="esc">\x1b[10;5H</span>       <span class="name">CUP</span>       cursor to row 10, col 5
+<span class="esc">\x1b[?1049h</span>      <span class="name">DECSET</span>    enter alt screen
+<span class="esc">\x1b[?25l</span>        <span class="name">DECTCEM</span>   hide cursor
+<span class="esc">\x1b[6n</span>          <span class="name">DSR</span>       report cursor position</code></pre>
+
+        <h3>OSC (<code>ESC ]</code>): system</h3>
+<pre><code><span class="esc">\x1b]0;title\x07</span>          <span class="name">OSC 0</span>    window title
+<span class="esc">\x1b]52;c;&lt;b64&gt;\x07</span>       <span class="name">OSC 52</span>   write clipboard
+<span class="esc">\x1b]8;;url\x07x\x1b]8;;\x07</span>
+                          <span class="name">OSC 8</span>    hyperlink "x"</code></pre>
+
+        <h3>DCS (<code>ESC P</code>) / APC (<code>ESC _</code>): payloads</h3>
+<pre><code><span class="esc">\x1bPq...\x1b\\</span>           <span class="name">DCS Sixel</span>     pixel image
+<span class="esc">\x1bP+q544e...\x1b\\</span>      <span class="name">XTGETTCAP</span>     query terminfo cap
+<span class="esc">\x1b_Gf=100,a=T;&lt;b64&gt;\x1b\\</span>
+                          <span class="name">APC Kitty</span>     graphics protocol</code></pre>
+      </section>
+
+      <section>
+        <h2>PTY and VT</h2>
+
+        <p>
+          A single byte stream traces the whole stack. Watch
+          <code>\x1b[31mhello\x1b[0m world</code> walk in.
+        </p>
+
+        <svg class="diagram" viewBox="0 0 1100 460" role="img" aria-label="VT byte stream parsed into ops and applied to the grid">
+          <!-- panel: bytes -->
+          <g>
+            <rect x="40" y="30" width="1020" height="80" rx="10" class="node-fill" style="stroke: var(--surface); stroke-width: 1"/>
+            <text x="60" y="22" class="label-sans t-overlay" font-size="13">1. byte stream from PTY</text>
+
+            <!-- escape -->
+            <rect x="60" y="50" width="80" height="40" rx="6" class="red-bg"/>
+            <text x="100" y="76" text-anchor="middle" class="label-mono t-text" font-size="14" font-weight="700">\x1b[31m</text>
+
+            <!-- hello -->
+            <rect x="160" y="50" width="120" height="40" rx="6" class="green-bg"/>
+            <text x="220" y="76" text-anchor="middle" class="label-mono t-green" font-size="14" font-weight="700">hello</text>
+
+            <!-- escape reset -->
+            <rect x="300" y="50" width="80" height="40" rx="6" class="red-bg"/>
+            <text x="340" y="76" text-anchor="middle" class="label-mono t-text" font-size="14" font-weight="700">\x1b[0m</text>
+
+            <!-- space + world -->
+            <rect x="400" y="50" width="140" height="40" rx="6" style="fill: var(--surface); opacity: 0.5"/>
+            <text x="470" y="76" text-anchor="middle" class="label-mono t-text" font-size="14" font-weight="700"> world</text>
+
+            <text x="700" y="76" class="label-mono t-overlay" font-size="12">→ libghostty-vt parses</text>
+          </g>
+
+          <!-- arrow -->
+          <line x1="550" y1="120" x2="550" y2="160" class="l-flow" marker-end="url(#arr-flow)"/>
+          <text x="566" y="148" class="label-mono t-overlay" font-size="11">parse</text>
+
+          <!-- panel: ops -->
+          <g>
+            <rect x="40" y="170" width="1020" height="100" rx="10" class="node-fill" style="stroke: var(--surface); stroke-width: 1"/>
+            <text x="60" y="162" class="label-sans t-overlay" font-size="13">2. parsed ops</text>
+
+            <!-- op pills -->
+            <g>
+              <rect x="60" y="195" width="180" height="48" rx="24" class="red-bg"/>
+              <text x="150" y="225" text-anchor="middle" class="label-mono t-text" font-size="14" font-weight="600">SetFg(Red)</text>
+            </g>
+            <g>
+              <rect x="260" y="195" width="200" height="48" rx="24" class="blue-bg" style="stroke: var(--blue); stroke-width: 1.5"/>
+              <text x="360" y="225" text-anchor="middle" class="label-mono t-blue" font-size="14" font-weight="600">Print("hello")</text>
+            </g>
+            <g>
+              <rect x="480" y="195" width="120" height="48" rx="24" style="fill: var(--surface); opacity: 0.6"/>
+              <text x="540" y="225" text-anchor="middle" class="label-mono t-sub" font-size="14" font-weight="600">Reset</text>
+            </g>
+            <g>
+              <rect x="620" y="195" width="220" height="48" rx="24" class="blue-bg" style="stroke: var(--blue); stroke-width: 1.5"/>
+              <text x="730" y="225" text-anchor="middle" class="label-mono t-blue" font-size="14" font-weight="600">Print(" world")</text>
+            </g>
+          </g>
+
+          <!-- arrow -->
+          <line x1="550" y1="280" x2="550" y2="320" class="l-flow" marker-end="url(#arr-flow)"/>
+          <text x="566" y="308" class="label-mono t-overlay" font-size="11">apply</text>
+
+          <!-- panel: grid -->
+          <g>
+            <rect x="40" y="330" width="1020" height="100" rx="10" class="node-fill" style="stroke: var(--surface); stroke-width: 1"/>
+            <text x="60" y="322" class="label-sans t-overlay" font-size="13">3. terminal grid</text>
+
+            <!-- grid cells -->
+            <g transform="translate(280, 350)">
+              <!-- 11 cells, first 5 red bg -->
+              <g>
+                <rect x="0"   y="0" width="40" height="50" rx="3" class="red-bg"/>
+                <rect x="44"  y="0" width="40" height="50" rx="3" class="red-bg"/>
+                <rect x="88"  y="0" width="40" height="50" rx="3" class="red-bg"/>
+                <rect x="132" y="0" width="40" height="50" rx="3" class="red-bg"/>
+                <rect x="176" y="0" width="40" height="50" rx="3" class="red-bg"/>
+                <rect x="220" y="0" width="40" height="50" rx="3" style="fill: var(--surface); opacity: 0.4"/>
+                <rect x="264" y="0" width="40" height="50" rx="3" style="fill: var(--surface); opacity: 0.4"/>
+                <rect x="308" y="0" width="40" height="50" rx="3" style="fill: var(--surface); opacity: 0.4"/>
+                <rect x="352" y="0" width="40" height="50" rx="3" style="fill: var(--surface); opacity: 0.4"/>
+                <rect x="396" y="0" width="40" height="50" rx="3" style="fill: var(--surface); opacity: 0.4"/>
+                <rect x="440" y="0" width="40" height="50" rx="3" style="fill: var(--surface); opacity: 0.4"/>
+              </g>
+              <g class="label-mono" font-size="22" font-weight="700">
+                <text x="20"  y="34" text-anchor="middle" class="t-text">h</text>
+                <text x="64"  y="34" text-anchor="middle" class="t-text">e</text>
+                <text x="108" y="34" text-anchor="middle" class="t-text">l</text>
+                <text x="152" y="34" text-anchor="middle" class="t-text">l</text>
+                <text x="196" y="34" text-anchor="middle" class="t-text">o</text>
+                <text x="240" y="34" text-anchor="middle" class="t-sub"> </text>
+                <text x="284" y="34" text-anchor="middle" class="t-text">w</text>
+                <text x="328" y="34" text-anchor="middle" class="t-text">o</text>
+                <text x="372" y="34" text-anchor="middle" class="t-text">r</text>
+                <text x="416" y="34" text-anchor="middle" class="t-text">l</text>
+                <text x="460" y="34" text-anchor="middle" class="t-text">d</text>
+              </g>
+            </g>
+          </g>
+        </svg>
+
+        <div class="grid">
+          <div class="card">
+            <h3>PTY: kernel pseudo-terminal</h3>
+            <p>
+              Two file descriptors that pretend to be a serial line. The shell
+              sees the slave as <code>/dev/pts/N</code>: line discipline,
+              winsize, <code>SIGWINCH</code> on resize. séance owns the master,
+              reads raw output, writes user keys.
+            </p>
+            <p>
+              <code>portable-pty</code> spawns the pair. An IO thread bridges
+              the master fd to the parser.
+            </p>
+          </div>
+          <div class="card">
+            <h3>VT: libghostty-vt</h3>
+            <p>
+              State machine. Bytes in, ops out. Ghostty's parser, exposed via
+              FFI. No second parser to maintain, no drift from upstream as new
+              quirks land.
+            </p>
+<pre><code><span class="kw">let mut</span> vt = <span class="ty">VtTerminal</span>::<span class="fn">new</span>(opts)?;
+vt.<span class="fn">vt_write</span>(bytes);
+<span class="kw">let</span> snap = render_state.<span class="fn">update</span>(&amp;vt)?;
+<span class="kw">for</span> row <span class="kw">in</span> snap.<span class="fn">rows</span>() { <span class="cmt">/* … */</span> }</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>The renderer: shape, raster, atlas, GPU</h2>
+        <p>
+          The grid is a logical model. Turning it into pixels takes four
+          stages, each backed by a focused crate. Trace
+          <code>"fi  =&gt;"</code> through the pipeline.
+        </p>
+
+        <svg class="diagram" viewBox="0 0 1100 320" role="img" aria-label="Renderer pipeline: text run → shape → rasterize → atlas → GPU draw">
+          <defs>
+            <marker id="arr-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 Z" style="fill: var(--blue)"/></marker>
+          </defs>
+
+          <!-- stage 1: text run -->
+          <g>
+            <rect x="20" y="80" width="180" height="160" rx="12" class="node-fill" style="stroke: var(--lavender); stroke-width: 2"/>
+            <text x="110" y="64" text-anchor="middle" class="label-sans t-lav" font-size="13" font-weight="600">1. text run</text>
+            <text x="110" y="50" text-anchor="middle" class="label-sans t-overlay" font-size="11">grid cells</text>
+
+            <text x="110" y="148" text-anchor="middle" class="label-mono t-text" font-size="32" font-weight="600">fi  =&gt;</text>
+            <text x="110" y="178" text-anchor="middle" class="label-mono t-sub" font-size="12">+ font, weight, size</text>
+            <text x="110" y="218" text-anchor="middle" class="label-sans t-overlay" font-size="11">cosmic-text · rustybuzz</text>
+          </g>
+
+          <line x1="200" y1="160" x2="232" y2="160" class="l-flow" marker-end="url(#arr-r)"/>
+
+          <!-- stage 2: shape -->
+          <g>
+            <rect x="232" y="80" width="200" height="160" rx="12" class="node-fill" style="stroke: var(--blue); stroke-width: 2"/>
+            <text x="332" y="64" text-anchor="middle" class="label-sans t-blue" font-size="13" font-weight="600">2. shape</text>
+            <text x="332" y="50" text-anchor="middle" class="label-sans t-overlay" font-size="11">glyph IDs + offsets</text>
+
+            <!-- glyph chips -->
+            <g>
+              <rect x="252" y="120" width="76" height="50" rx="8" class="blue-bg" style="stroke: var(--blue); stroke-width: 1.5"/>
+              <text x="290" y="142" text-anchor="middle" class="label-mono t-blue" font-size="11" font-weight="600">id 67</text>
+              <text x="290" y="158" text-anchor="middle" class="label-mono t-sub" font-size="10">"fi"</text>
+
+              <rect x="336" y="120" width="76" height="50" rx="8" class="blue-bg" style="stroke: var(--blue); stroke-width: 1.5"/>
+              <text x="374" y="142" text-anchor="middle" class="label-mono t-blue" font-size="11" font-weight="600">id 142</text>
+              <text x="374" y="158" text-anchor="middle" class="label-mono t-sub" font-size="10">"=&gt;"</text>
+            </g>
+            <text x="332" y="200" text-anchor="middle" class="label-mono t-overlay" font-size="11">x_advance per glyph</text>
+            <text x="332" y="218" text-anchor="middle" class="label-sans t-overlay" font-size="11">2 cells → 1 ligature glyph</text>
+          </g>
+
+          <line x1="432" y1="160" x2="464" y2="160" class="l-flow" marker-end="url(#arr-r)"/>
+
+          <!-- stage 3: rasterize -->
+          <g>
+            <rect x="464" y="80" width="180" height="160" rx="12" class="node-fill" style="stroke: var(--peach); stroke-width: 2"/>
+            <text x="554" y="64" text-anchor="middle" class="label-sans t-peach" font-size="13" font-weight="600">3. rasterize</text>
+            <text x="554" y="50" text-anchor="middle" class="label-sans t-overlay" font-size="11">bitmap pixels</text>
+
+            <!-- pixel grid -->
+            <g transform="translate(490, 110)">
+              <g class="peach-bg">
+                <!-- 12x6 pixel grid showing a stylized "=>" -->
+                <rect x="0"  y="20" width="6" height="6"/>
+                <rect x="6"  y="20" width="6" height="6"/>
+                <rect x="12" y="20" width="6" height="6"/>
+                <rect x="18" y="20" width="6" height="6"/>
+                <rect x="24" y="20" width="6" height="6"/>
+                <rect x="30" y="20" width="6" height="6"/>
+                <rect x="36" y="20" width="6" height="6"/>
+                <rect x="42" y="20" width="6" height="6"/>
+                <rect x="0"  y="34" width="6" height="6"/>
+                <rect x="6"  y="34" width="6" height="6"/>
+                <rect x="12" y="34" width="6" height="6"/>
+                <rect x="18" y="34" width="6" height="6"/>
+                <rect x="24" y="34" width="6" height="6"/>
+                <rect x="30" y="34" width="6" height="6"/>
+                <rect x="36" y="34" width="6" height="6"/>
+                <rect x="42" y="34" width="6" height="6"/>
+                <rect x="48" y="20" width="6" height="6"/>
+                <rect x="54" y="14" width="6" height="6"/>
+                <rect x="60" y="8"  width="6" height="6"/>
+                <rect x="48" y="34" width="6" height="6"/>
+                <rect x="54" y="40" width="6" height="6"/>
+                <rect x="60" y="46" width="6" height="6"/>
+              </g>
+              <rect x="-2" y="-2" width="74" height="60" rx="3" style="fill: none; stroke: var(--surface); stroke-width: 1"/>
+            </g>
+            <text x="554" y="200" text-anchor="middle" class="label-mono t-overlay" font-size="11">img.data, img.placement</text>
+            <text x="554" y="218" text-anchor="middle" class="label-sans t-overlay" font-size="11">swash · COLR / SVG / mono</text>
+          </g>
+
+          <line x1="644" y1="160" x2="676" y2="160" class="l-flow" marker-end="url(#arr-r)"/>
+
+          <!-- stage 4: atlas -->
+          <g>
+            <rect x="676" y="80" width="200" height="160" rx="12" class="node-fill" style="stroke: var(--mauve); stroke-width: 2"/>
+            <text x="776" y="64" text-anchor="middle" class="label-sans t-mauve" font-size="13" font-weight="600">4. atlas</text>
+            <text x="776" y="50" text-anchor="middle" class="label-sans t-overlay" font-size="11">packed sub-rect</text>
+
+            <!-- atlas mini-view -->
+            <g transform="translate(696, 110)">
+              <rect x="0" y="0" width="160" height="80" rx="4" class="node-fill-2" style="stroke: var(--surface); stroke-width: 1"/>
+              <!-- packed rects -->
+              <rect x="4"  y="4"  width="34" height="32" class="mauve-bg"/>
+              <rect x="40" y="4"  width="22" height="32" class="blue-bg"/>
+              <rect x="64" y="4"  width="50" height="22" class="green-bg"/>
+              <rect x="64" y="28" width="50" height="14" class="peach-bg"/>
+              <rect x="116" y="4" width="40" height="32" class="yellow-bg"/>
+              <!-- highlighted: our ligature -->
+              <rect x="4"  y="40" width="60" height="22" style="fill: var(--peach); opacity: 0.95; stroke: var(--peach); stroke-width: 1.5"/>
+              <text x="34" y="56" text-anchor="middle" class="label-mono" font-size="11" font-weight="700" style="fill: var(--crust)">=&gt;</text>
+              <rect x="68"  y="40" width="30" height="22" class="blue-bg"/>
+              <rect x="100" y="40" width="56" height="22" class="green-bg"/>
+              <rect x="4"  y="64" width="80" height="14" style="fill: var(--surface); opacity: 0.6"/>
+              <rect x="88" y="64" width="68" height="14" style="fill: var(--surface); opacity: 0.6"/>
+            </g>
+            <text x="776" y="218" text-anchor="middle" class="label-sans t-overlay" font-size="11">etagere · 2048² mono + 1024² rgba</text>
+          </g>
+
+          <line x1="876" y1="160" x2="908" y2="160" class="l-flow" marker-end="url(#arr-r)"/>
+
+          <!-- stage 5: GPU -->
+          <g>
+            <rect x="908" y="80" width="172" height="160" rx="12" class="node-fill" style="stroke: var(--green); stroke-width: 2"/>
+            <text x="994" y="64" text-anchor="middle" class="label-sans t-green" font-size="13" font-weight="600">5. GPU draw</text>
+            <text x="994" y="50" text-anchor="middle" class="label-sans t-overlay" font-size="11">instanced quad</text>
+
+            <!-- screen frame -->
+            <g transform="translate(926, 100)">
+              <rect x="0" y="0" width="136" height="80" rx="6" style="fill: var(--crust); stroke: var(--surface); stroke-width: 1"/>
+              <text x="68" y="48" text-anchor="middle" class="label-mono t-peach" font-size="32" font-weight="700">=&gt;</text>
+            </g>
+            <text x="994" y="218" text-anchor="middle" class="label-sans t-overlay" font-size="11">wgpu · texture sample</text>
+          </g>
+        </svg>
+
+        <div class="grid">
+          <div class="card">
+            <h3>Shape (<code>cosmic-text</code> + <code>rustybuzz</code>)</h3>
+            <p>
+              Run of styled text becomes glyph IDs and offsets. Ligatures
+              (<code>=&gt;</code>), ZWJ chains, regional flag pairs, and
+              combining marks collapse multiple cells onto one or more glyph
+              instances.
+            </p>
+<pre><code>buf.<span class="fn">set_text</span>(
+    &amp;<span class="kw">mut</span> fs, text, &amp;attrs,
+    <span class="ty">Shaping</span>::<span class="fn">Advanced</span>, <span class="ty">None</span>,
+);
+buf.<span class="fn">shape_until_scroll</span>(&amp;<span class="kw">mut</span> fs, <span class="kw">false</span>);
+<span class="cmt">// → glyph_id, x_advance per run</span></code></pre>
+          </div>
+
+          <div class="card">
+            <h3>Rasterize (<code>swash</code>)</h3>
+            <p>
+              Glyph ID becomes a pixel bitmap. Mono for plain glyphs, RGBA for
+              COLR / SVG colour fonts. Cached per <code>CacheKey</code> (font,
+              glyph, size, weight, flags).
+            </p>
+<pre><code><span class="kw">let</span> img = swash.<span class="fn">get_image</span>(&amp;<span class="kw">mut</span> fs, key);
+<span class="cmt">// → img.data, img.placement</span></code></pre>
+          </div>
+
+          <div class="card">
+            <h3>Atlas (<code>etagere</code>)</h3>
+            <p>
+              Bitmaps pack into one big GPU texture. Two planes: 2048×2048 R8
+              for mono, 1024×1024 RGBA for colour. Each glyph gets a sub-rect;
+              misses fall back to LRU eviction.
+            </p>
+<pre><code><span class="kw">let</span> slot = atlas.<span class="fn">allocate</span>(
+    <span class="ty">Size</span>::<span class="fn">new</span>(w, h),
+)?;
+<span class="fn">copy_bitmap</span>(&amp;<span class="kw">mut</span> tex, slot, &amp;bitmap);
+<span class="cmt">// → slot.rectangle in atlas</span></code></pre>
+          </div>
+
+          <div class="card">
+            <h3>Upload + draw (<code>wgpu</code>)</h3>
+            <p>
+              Dirty rects pushed to the GPU. One render pass, three pipelines:
+              <code>bg_color</code> (fullscreen quad),
+              <code>cell_bg</code> (per-cell rectangles),
+              <code>cell_text</code> (instanced quads sampling the atlas).
+              Runs on Metal, Vulkan, DX12.
+            </p>
+<pre><code>queue.<span class="fn">write_texture</span>(
+    view, &amp;bytes, layout, extent,
+);
+<span class="cmt">// frag: textureSample(atlas, uv)</span></code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>What shaping actually does</h2>
+        <p>
+          Shaping turns Unicode codepoints into glyphs. The mapping is almost
+          never 1:1. <code>rustybuzz</code> (wrapped by <code>cosmic-text</code>)
+          walks the font's OpenType tables: <strong>GSUB</strong> substitutes
+          glyph runs (ligatures, contextual alternates, joining forms),
+          <strong>GPOS</strong> positions them (kerning, mark attachment, cursive
+          joining). The output is a list of glyph IDs with
+          <code>x_advance</code> values plus a cluster index that maps each
+          glyph back to its source codepoints.
+        </p>
+        <p>
+          Four cases that come up constantly in a terminal:
+        </p>
+
+        <div class="grid">
+          <div class="card">
+            <h3>1. Typographic ligature</h3>
+            <span class="feat">GSUB · liga</span>
+            <svg class="diagram shape-svg" viewBox="0 0 480 180" role="img" aria-label="f and i merge into a single fi ligature glyph">
+              <defs>
+                <marker id="arr-s1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M0,0 L10,5 L0,10 Z" style="fill: var(--mauve)"/>
+                </marker>
+              </defs>
+              <text x="80"  y="22" text-anchor="middle" class="label-sans t-overlay" font-size="11">2 codepoints</text>
+              <text x="400" y="22" text-anchor="middle" class="label-sans t-overlay" font-size="11">1 glyph</text>
+
+              <rect x="10"  y="32" width="70" height="74" rx="6" class="blue-bg" style="stroke: var(--blue); stroke-width: 1.5"/>
+              <text x="45"  y="74" text-anchor="middle" class="label-mono t-text" font-size="32" font-weight="600">f</text>
+              <text x="45"  y="98" text-anchor="middle" class="label-mono t-overlay" font-size="10">U+0066</text>
+
+              <rect x="90"  y="32" width="70" height="74" rx="6" class="blue-bg" style="stroke: var(--blue); stroke-width: 1.5"/>
+              <text x="125" y="74" text-anchor="middle" class="label-mono t-text" font-size="32" font-weight="600">i</text>
+              <text x="125" y="98" text-anchor="middle" class="label-mono t-overlay" font-size="10">U+0069</text>
+
+              <path d="M 80 69 Q 245 69 330 56" style="fill:none; stroke: var(--mauve); stroke-width: 1.5" marker-end="url(#arr-s1)"/>
+              <path d="M 160 69 Q 245 69 330 82" style="fill:none; stroke: var(--mauve); stroke-width: 1.5" marker-end="url(#arr-s1)"/>
+
+              <rect x="330" y="32" width="140" height="74" rx="6" class="peach-bg" style="stroke: var(--peach); stroke-width: 1.5"/>
+              <text x="400" y="76" text-anchor="middle" class="label-mono t-peach" font-size="34" font-weight="700">fi</text>
+              <text x="400" y="98" text-anchor="middle" class="label-mono t-overlay" font-size="10">glyph #137</text>
+
+              <text x="245" y="140" text-anchor="middle" class="label-mono t-mauve" font-size="12" font-weight="600">substitute 2 → 1</text>
+              <text x="245" y="158" text-anchor="middle" class="label-sans t-overlay" font-size="10">single x_advance, cluster=[0..2]</text>
+            </svg>
+            <p>
+              The font's <code>liga</code> table replaces f + i with one
+              ligature glyph. Two grid cells still hold the run; the renderer
+              anchors the wide glyph at the leftmost cell.
+            </p>
+          </div>
+
+          <div class="card">
+            <h3>2. Programming ligature</h3>
+            <span class="feat">GSUB · calt</span>
+            <svg class="diagram shape-svg" viewBox="0 0 480 180" role="img" aria-label="equals and greater-than merge into one arrow glyph">
+              <defs>
+                <marker id="arr-s2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M0,0 L10,5 L0,10 Z" style="fill: var(--mauve)"/>
+                </marker>
+              </defs>
+              <text x="80"  y="22" text-anchor="middle" class="label-sans t-overlay" font-size="11">2 codepoints</text>
+              <text x="400" y="22" text-anchor="middle" class="label-sans t-overlay" font-size="11">1 glyph</text>
+
+              <rect x="10"  y="32" width="70" height="74" rx="6" class="blue-bg" style="stroke: var(--blue); stroke-width: 1.5"/>
+              <text x="45"  y="74" text-anchor="middle" class="label-mono t-text" font-size="32" font-weight="600">=</text>
+              <text x="45"  y="98" text-anchor="middle" class="label-mono t-overlay" font-size="10">U+003D</text>
+
+              <rect x="90"  y="32" width="70" height="74" rx="6" class="blue-bg" style="stroke: var(--blue); stroke-width: 1.5"/>
+              <text x="125" y="74" text-anchor="middle" class="label-mono t-text" font-size="32" font-weight="600">&gt;</text>
+              <text x="125" y="98" text-anchor="middle" class="label-mono t-overlay" font-size="10">U+003E</text>
+
+              <path d="M 80 69 Q 245 69 330 56" style="fill:none; stroke: var(--mauve); stroke-width: 1.5" marker-end="url(#arr-s2)"/>
+              <path d="M 160 69 Q 245 69 330 82" style="fill:none; stroke: var(--mauve); stroke-width: 1.5" marker-end="url(#arr-s2)"/>
+
+              <rect x="330" y="32" width="140" height="74" rx="6" class="peach-bg" style="stroke: var(--peach); stroke-width: 1.5"/>
+              <text x="400" y="76" text-anchor="middle" class="label-mono t-peach" font-size="32" font-weight="700">⇒</text>
+              <text x="400" y="98" text-anchor="middle" class="label-mono t-overlay" font-size="10">glyph #842</text>
+
+              <text x="245" y="140" text-anchor="middle" class="label-mono t-mauve" font-size="12" font-weight="600">contextual alternate</text>
+              <text x="245" y="158" text-anchor="middle" class="label-sans t-overlay" font-size="10">enabled when surrounding chars allow</text>
+            </svg>
+            <p>
+              JetBrains Mono and Fira Code define <code>calt</code> rules that
+              swap = + &gt; for an arrow glyph, but only in code-like contexts.
+              Same 2 → 1 collapse, different OpenType table.
+            </p>
+          </div>
+
+          <div class="card">
+            <h3>3. Combining mark</h3>
+            <span class="feat">GSUB · ccmp · GPOS · mark</span>
+            <svg class="diagram shape-svg" viewBox="0 0 480 180" role="img" aria-label="e plus combining acute accent renders one accented e">
+              <defs>
+                <marker id="arr-s3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M0,0 L10,5 L0,10 Z" style="fill: var(--mauve)"/>
+                </marker>
+              </defs>
+              <text x="80"  y="22" text-anchor="middle" class="label-sans t-overlay" font-size="11">2 codepoints</text>
+              <text x="400" y="22" text-anchor="middle" class="label-sans t-overlay" font-size="11">1 glyph</text>
+
+              <rect x="10"  y="32" width="70" height="74" rx="6" class="blue-bg" style="stroke: var(--blue); stroke-width: 1.5"/>
+              <text x="45"  y="74" text-anchor="middle" class="label-mono t-text" font-size="32" font-weight="600">e</text>
+              <text x="45"  y="98" text-anchor="middle" class="label-mono t-overlay" font-size="10">U+0065</text>
+
+              <rect x="90"  y="32" width="70" height="74" rx="6" class="blue-bg" style="stroke: var(--blue); stroke-width: 1.5"/>
+              <text x="125" y="74" text-anchor="middle" class="label-mono t-text" font-size="32" font-weight="600">◌́</text>
+              <text x="125" y="98" text-anchor="middle" class="label-mono t-overlay" font-size="10">U+0301</text>
+
+              <path d="M 80 69 Q 245 69 330 56" style="fill:none; stroke: var(--mauve); stroke-width: 1.5" marker-end="url(#arr-s3)"/>
+              <path d="M 160 69 Q 245 69 330 82" style="fill:none; stroke: var(--mauve); stroke-width: 1.5" marker-end="url(#arr-s3)"/>
+
+              <rect x="330" y="32" width="140" height="74" rx="6" class="peach-bg" style="stroke: var(--peach); stroke-width: 1.5"/>
+              <text x="400" y="76" text-anchor="middle" class="label-mono t-peach" font-size="34" font-weight="700">é</text>
+              <text x="400" y="98" text-anchor="middle" class="label-mono t-overlay" font-size="10">glyph #233</text>
+
+              <text x="245" y="140" text-anchor="middle" class="label-mono t-mauve" font-size="12" font-weight="600">precompose or attach</text>
+              <text x="245" y="158" text-anchor="middle" class="label-sans t-overlay" font-size="10">GSUB swap, or GPOS anchor mark above</text>
+            </svg>
+            <p>
+              Two codepoints describe one accented letter. GSUB may swap them
+              for a precomposed <code>é</code> glyph; otherwise GPOS positions
+              the combining acute above the <code>e</code> via mark anchors.
+              One grid cell either way.
+            </p>
+          </div>
+
+          <div class="card">
+            <h3>4. ZWJ cluster</h3>
+            <span class="feat">emoji_zwj_sequences</span>
+            <svg class="diagram shape-svg" viewBox="0 0 480 180" role="img" aria-label="man plus ZWJ plus laptop forms one composite emoji glyph">
+              <defs>
+                <marker id="arr-s4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M0,0 L10,5 L0,10 Z" style="fill: var(--mauve)"/>
+                </marker>
+              </defs>
+              <text x="125" y="22" text-anchor="middle" class="label-sans t-overlay" font-size="11">3 codepoints</text>
+              <text x="400" y="22" text-anchor="middle" class="label-sans t-overlay" font-size="11">1 glyph</text>
+
+              <rect x="10"  y="32" width="70" height="74" rx="6" class="blue-bg" style="stroke: var(--blue); stroke-width: 1.5"/>
+              <text x="45"  y="74" text-anchor="middle" class="label-mono t-text" font-size="32" font-weight="600">👨</text>
+              <text x="45"  y="98" text-anchor="middle" class="label-mono t-overlay" font-size="9">U+1F468</text>
+
+              <rect x="85"  y="32" width="80" height="74" rx="6" style="fill: var(--surface); opacity: 0.7; stroke: var(--overlay); stroke-width: 1.5; stroke-dasharray: 3 3"/>
+              <text x="125" y="70" text-anchor="middle" class="label-mono t-overlay" font-size="13" font-weight="600">ZWJ</text>
+              <text x="125" y="86" text-anchor="middle" class="label-mono t-overlay" font-size="10">(invisible)</text>
+              <text x="125" y="100" text-anchor="middle" class="label-mono t-overlay" font-size="9">U+200D</text>
+
+              <rect x="170" y="32" width="70" height="74" rx="6" class="blue-bg" style="stroke: var(--blue); stroke-width: 1.5"/>
+              <text x="205" y="74" text-anchor="middle" class="label-mono t-text" font-size="32" font-weight="600">💻</text>
+              <text x="205" y="98" text-anchor="middle" class="label-mono t-overlay" font-size="9">U+1F4BB</text>
+
+              <path d="M 80  69 Q 280 69 330 50" style="fill:none; stroke: var(--mauve); stroke-width: 1.5" marker-end="url(#arr-s4)"/>
+              <path d="M 165 69 Q 280 69 330 69" style="fill:none; stroke: var(--mauve); stroke-width: 1.5" marker-end="url(#arr-s4)"/>
+              <path d="M 240 69 Q 280 69 330 88" style="fill:none; stroke: var(--mauve); stroke-width: 1.5" marker-end="url(#arr-s4)"/>
+
+              <rect x="330" y="32" width="140" height="74" rx="6" class="peach-bg" style="stroke: var(--peach); stroke-width: 1.5"/>
+              <text x="400" y="80" text-anchor="middle" class="label-mono t-peach" font-size="36" font-weight="700">👨‍💻</text>
+              <text x="400" y="100" text-anchor="middle" class="label-mono t-overlay" font-size="10">composite glyph</text>
+
+              <text x="245" y="140" text-anchor="middle" class="label-mono t-mauve" font-size="12" font-weight="600">grapheme cluster</text>
+              <text x="245" y="158" text-anchor="middle" class="label-sans t-overlay" font-size="10">3 codepoints joined by U+200D</text>
+            </svg>
+            <p>
+              <code>U+200D</code> ZERO WIDTH JOINER stitches base emoji into a
+              single grapheme. Fonts with the matching <code>emoji_zwj</code>
+              entry render one composite glyph; fonts without fall back to the
+              component sequence (man + laptop side by side).
+            </p>
+          </div>
+        </div>
+
+        <p style="margin-top: 24px">
+          séance plumbs all four through cosmic-text's
+          <code>Shaping::Advanced</code>. Inside <code>cell_builder</code>, a
+          sorted <code>Vec&lt;CellSlot&gt;</code> maps each glyph cluster's
+          byte offset back to the source grid column. That mapping is what
+          lets a ligature like <code>=&gt;</code> (one glyph, two cells)
+          anchor at the leftmost cell, the cursor land on the second cell
+          when navigating, selection span the right column count, and a
+          backspace remove the trailing codepoint without breaking the rest
+          of the cluster. Without it, ligatures would either misalign or have
+          to be suppressed entirely.
+        </p>
+      </section>
+
+      <section>
+        <h2>What rasterization actually does</h2>
+        <p>
+          Shaping picked the glyphs. Rasterization turns each one into actual
+          pixels. <code>swash</code> reads the glyph's vector outline (Bezier
+          curves stored in the font's TTF/OTF/CFF tables), scales it to the
+          target em-size, and scan-converts it onto a pixel grid. The output
+          is an <code>Image</code>: a contiguous byte buffer plus a
+          <code>Placement</code> describing the bitmap's width, height, and
+          baseline offset.
+        </p>
+        <p>
+          Four ideas the rasterizer hides behind one method call:
+        </p>
+
+        <div class="grid">
+          <div class="card">
+            <h3>1. Outline to pixel grid</h3>
+            <span class="feat">scan-convert</span>
+            <svg class="diagram shape-svg" viewBox="0 0 480 200" role="img" aria-label="vector outline rasterized to a pixel bitmap">
+              <defs>
+                <marker id="arr-r1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M0,0 L10,5 L0,10 Z" style="fill: var(--mauve)"/>
+                </marker>
+              </defs>
+              <text x="100" y="22" text-anchor="middle" class="label-sans t-overlay" font-size="11">vector outline</text>
+              <text x="380" y="22" text-anchor="middle" class="label-sans t-overlay" font-size="11">pixel bitmap</text>
+
+              <rect x="20" y="32" width="160" height="140" rx="6" class="node-fill-2" style="stroke: var(--blue); stroke-width: 1"/>
+              <text x="100" y="138" text-anchor="middle" font-size="120" font-weight="700"
+                    fill="none" stroke="var(--peach)" stroke-width="2" class="label-sans">A</text>
+              <circle cx="100" cy="56"  r="3" style="fill: var(--mauve)"/>
+              <circle cx="68"  cy="138" r="3" style="fill: var(--mauve)"/>
+              <circle cx="132" cy="138" r="3" style="fill: var(--mauve)"/>
+              <circle cx="80"  cy="115" r="2" style="fill: var(--mauve)"/>
+              <circle cx="120" cy="115" r="2" style="fill: var(--mauve)"/>
+              <text x="100" y="188" text-anchor="middle" class="label-mono t-overlay" font-size="10">curves + control points</text>
+
+              <line x1="190" y1="100" x2="290" y2="100" style="fill: none; stroke: var(--mauve); stroke-width: 2" marker-end="url(#arr-r1)"/>
+              <text x="240" y="92" text-anchor="middle" class="label-mono t-mauve" font-size="11" font-weight="600">scan + AA</text>
+              <text x="240" y="116" text-anchor="middle" class="label-sans t-overlay" font-size="10">at em-size</text>
+
+              <rect x="300" y="32" width="160" height="140" rx="6" class="node-fill-2" style="stroke: var(--peach); stroke-width: 1"/>
+              <g transform="translate(322, 50)">
+                <rect x="42" y="0"   width="14" height="14" style="fill: var(--peach); opacity: 0.5"/>
+                <rect x="56" y="0"   width="14" height="14" style="fill: var(--peach); opacity: 0.5"/>
+                <rect x="28" y="14"  width="14" height="14" style="fill: var(--peach); opacity: 0.25"/>
+                <rect x="42" y="14"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="56" y="14"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="70" y="14"  width="14" height="14" style="fill: var(--peach); opacity: 0.25"/>
+                <rect x="28" y="28"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="42" y="28"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="56" y="28"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="70" y="28"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="14" y="42"  width="14" height="14" style="fill: var(--peach); opacity: 0.5"/>
+                <rect x="28" y="42"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="70" y="42"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="84" y="42"  width="14" height="14" style="fill: var(--peach); opacity: 0.5"/>
+                <rect x="14" y="56"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="28" y="56"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="70" y="56"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="84" y="56"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="0"  y="70"  width="14" height="14" style="fill: var(--peach); opacity: 0.5"/>
+                <rect x="14" y="70"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="28" y="70"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="42" y="70"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="56" y="70"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="70" y="70"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="84" y="70"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="98" y="70"  width="14" height="14" style="fill: var(--peach); opacity: 0.5"/>
+                <rect x="0"  y="84"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="14" y="84"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="84" y="84"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="98" y="84"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="0"  y="98"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="14" y="98"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="84" y="98"  width="14" height="14" style="fill: var(--peach)"/>
+                <rect x="98" y="98"  width="14" height="14" style="fill: var(--peach)"/>
+              </g>
+              <text x="380" y="188" text-anchor="middle" class="label-mono t-overlay" font-size="10">u8 alpha values per cell</text>
+            </svg>
+            <p>
+              Curves get sampled at the target size. Each pixel records how
+              much of the cell the glyph touched (the alpha coverage).
+              Output: a flat byte buffer plus
+              <code>Placement&nbsp;{ width, height, top, left }</code>.
+            </p>
+          </div>
+
+          <div class="card">
+            <h3>2. Anti-aliasing</h3>
+            <span class="feat">u8 coverage per pixel</span>
+            <svg class="diagram shape-svg" viewBox="0 0 480 200" role="img" aria-label="zoomed pixel grid showing per-cell alpha coverage along an edge">
+              <defs>
+                <marker id="arr-r2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M0,0 L10,5 L0,10 Z" style="fill: var(--mauve)"/>
+                </marker>
+              </defs>
+              <text x="240" y="22" text-anchor="middle" class="label-sans t-overlay" font-size="11">5 × 5 zoom along a curved edge</text>
+
+              <g transform="translate(115, 36)">
+                <rect x="0"   y="0"   width="50" height="36" style="fill: var(--peach); opacity: 1"/>
+                <rect x="50"  y="0"   width="50" height="36" style="fill: var(--peach); opacity: 1"/>
+                <rect x="100" y="0"   width="50" height="36" style="fill: var(--peach); opacity: 0.78"/>
+                <rect x="150" y="0"   width="50" height="36" style="fill: var(--peach); opacity: 0.25"/>
+                <rect x="200" y="0"   width="50" height="36" style="fill: var(--peach); opacity: 0"/>
+
+                <rect x="0"   y="36"  width="50" height="36" style="fill: var(--peach); opacity: 1"/>
+                <rect x="50"  y="36"  width="50" height="36" style="fill: var(--peach); opacity: 1"/>
+                <rect x="100" y="36"  width="50" height="36" style="fill: var(--peach); opacity: 0.94"/>
+                <rect x="150" y="36"  width="50" height="36" style="fill: var(--peach); opacity: 0.39"/>
+                <rect x="200" y="36"  width="50" height="36" style="fill: var(--peach); opacity: 0"/>
+
+                <rect x="0"   y="72"  width="50" height="36" style="fill: var(--peach); opacity: 1"/>
+                <rect x="50"  y="72"  width="50" height="36" style="fill: var(--peach); opacity: 1"/>
+                <rect x="100" y="72"  width="50" height="36" style="fill: var(--peach); opacity: 1"/>
+                <rect x="150" y="72"  width="50" height="36" style="fill: var(--peach); opacity: 0.71"/>
+                <rect x="200" y="72"  width="50" height="36" style="fill: var(--peach); opacity: 0.12"/>
+
+                <rect x="0"   y="108" width="50" height="36" style="fill: var(--peach); opacity: 1"/>
+                <rect x="50"  y="108" width="50" height="36" style="fill: var(--peach); opacity: 1"/>
+                <rect x="100" y="108" width="50" height="36" style="fill: var(--peach); opacity: 1"/>
+                <rect x="150" y="108" width="50" height="36" style="fill: var(--peach); opacity: 0.94"/>
+                <rect x="200" y="108" width="50" height="36" style="fill: var(--peach); opacity: 0.31"/>
+
+                <!-- ideal curve -->
+                <path d="M 0 28 Q 80 36 130 80 Q 180 130 250 144" style="fill: none; stroke: var(--mauve); stroke-width: 2; stroke-dasharray: 4 3"/>
+
+                <!-- alpha labels -->
+                <g class="label-mono" font-size="11" font-weight="600" style="fill: var(--crust)">
+                  <text x="25"  y="22"  text-anchor="middle">255</text>
+                  <text x="75"  y="22"  text-anchor="middle">255</text>
+                  <text x="125" y="22"  text-anchor="middle">200</text>
+                  <text x="175" y="22"  text-anchor="middle">64</text>
+                  <text x="225" y="22"  text-anchor="middle" style="fill: var(--overlay)">0</text>
+
+                  <text x="25"  y="58"  text-anchor="middle">255</text>
+                  <text x="75"  y="58"  text-anchor="middle">255</text>
+                  <text x="125" y="58"  text-anchor="middle">240</text>
+                  <text x="175" y="58"  text-anchor="middle">100</text>
+                  <text x="225" y="58"  text-anchor="middle" style="fill: var(--overlay)">0</text>
+
+                  <text x="25"  y="94"  text-anchor="middle">255</text>
+                  <text x="75"  y="94"  text-anchor="middle">255</text>
+                  <text x="125" y="94"  text-anchor="middle">255</text>
+                  <text x="175" y="94"  text-anchor="middle">180</text>
+                  <text x="225" y="94"  text-anchor="middle">30</text>
+
+                  <text x="25"  y="130" text-anchor="middle">255</text>
+                  <text x="75"  y="130" text-anchor="middle">255</text>
+                  <text x="125" y="130" text-anchor="middle">255</text>
+                  <text x="175" y="130" text-anchor="middle">240</text>
+                  <text x="225" y="130" text-anchor="middle">80</text>
+                </g>
+
+                <!-- grid -->
+                <g style="fill: none; stroke: var(--mantle); stroke-width: 0.5; opacity: 0.35">
+                  <line x1="50"  y1="0" x2="50"  y2="144"/>
+                  <line x1="100" y1="0" x2="100" y2="144"/>
+                  <line x1="150" y1="0" x2="150" y2="144"/>
+                  <line x1="200" y1="0" x2="200" y2="144"/>
+                  <line x1="0"   y1="36"  x2="250" y2="36"/>
+                  <line x1="0"   y1="72"  x2="250" y2="72"/>
+                  <line x1="0"   y1="108" x2="250" y2="108"/>
+                </g>
+              </g>
+            </svg>
+            <p>
+              Cells under the curve (dashed) get partial alpha based on what
+              fraction of the cell the glyph fills. <code>255</code> is fully
+              inside, <code>0</code> outside, in-between values render the
+              soft edge.
+            </p>
+          </div>
+
+          <div class="card">
+            <h3>3. Mono vs colour planes</h3>
+            <span class="feat">R8 vs RGBA</span>
+            <svg class="diagram shape-svg" viewBox="0 0 480 200" role="img" aria-label="mono glyph stored as 1 byte per pixel; colour glyph stored as 4 bytes per pixel">
+              <text x="100" y="22" text-anchor="middle" class="label-sans t-blue" font-size="11" font-weight="600">R8 mono · 1 byte/pixel</text>
+              <text x="380" y="22" text-anchor="middle" class="label-sans t-pink" font-size="11" font-weight="600">RGBA · 4 bytes/pixel</text>
+
+              <rect x="20" y="32" width="160" height="140" rx="6" class="node-fill-2" style="stroke: var(--blue); stroke-width: 1.5"/>
+              <text x="100" y="128" text-anchor="middle" font-size="100" font-weight="700" class="label-sans t-text">A</text>
+              <text x="100" y="158" text-anchor="middle" class="label-mono t-overlay" font-size="10">[u8; w·h]</text>
+              <text x="100" y="188" text-anchor="middle" class="label-sans t-overlay" font-size="11">2048 × 2048 atlas plane</text>
+
+              <rect x="300" y="32" width="160" height="140" rx="6" class="node-fill-2" style="stroke: var(--pink); stroke-width: 1.5"/>
+              <text x="380" y="120" text-anchor="middle" font-size="64">⌘</text>
+              <text x="380" y="158" text-anchor="middle" class="label-mono t-overlay" font-size="10">[u8; w·h·4]</text>
+              <text x="380" y="188" text-anchor="middle" class="label-sans t-overlay" font-size="11">1024 × 1024 atlas plane</text>
+
+              <text x="240" y="100" text-anchor="middle" class="label-mono t-mauve" font-size="13" font-weight="700">vs</text>
+              <text x="240" y="124" text-anchor="middle" class="label-sans t-overlay" font-size="10">4× memory,</text>
+              <text x="240" y="138" text-anchor="middle" class="label-sans t-overlay" font-size="10">different shader path</text>
+            </svg>
+            <p>
+              Plain glyphs need only an alpha channel: one byte per pixel,
+              tinted by the cell foreground. COLR / SVG / bitmap fonts (most
+              emoji, Apple Color, Microsoft Segoe) carry their own colour and
+              need RGBA: four bytes per pixel, sampled directly without
+              tinting. Two atlas planes, two fragment-shader branches.
+            </p>
+          </div>
+
+          <div class="card">
+            <h3>4. Cache key (per-rasterization memo)</h3>
+            <span class="feat">SwashCache</span>
+            <svg class="diagram shape-svg" viewBox="0 0 480 200" role="img" aria-label="rasterization is cached by font, glyph id, size, weight, flags">
+              <defs>
+                <marker id="arr-r4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M0,0 L10,5 L0,10 Z" style="fill: var(--mauve)"/>
+                </marker>
+              </defs>
+              <rect x="20" y="32" width="200" height="140" rx="6" class="node-fill-2" style="stroke: var(--blue); stroke-width: 1.5"/>
+              <text x="120" y="22" text-anchor="middle" class="label-sans t-overlay" font-size="11">CacheKey</text>
+              <g class="label-mono" font-size="13">
+                <text x="40" y="60" class="t-mauve">font_id</text>
+                <text x="200" y="60" text-anchor="end" class="t-text">12</text>
+                <text x="40" y="82" class="t-mauve">glyph_id</text>
+                <text x="200" y="82" text-anchor="end" class="t-text">137</text>
+                <text x="40" y="104" class="t-mauve">font_size</text>
+                <text x="200" y="104" text-anchor="end" class="t-text">14.0</text>
+                <text x="40" y="126" class="t-mauve">weight</text>
+                <text x="200" y="126" text-anchor="end" class="t-text">400</text>
+                <text x="40" y="148" class="t-mauve">flags</text>
+                <text x="200" y="148" text-anchor="end" class="t-text">0x00</text>
+              </g>
+
+              <line x1="230" y1="100" x2="280" y2="100" style="fill: none; stroke: var(--mauve); stroke-width: 2" marker-end="url(#arr-r4)"/>
+              <text x="255" y="92" text-anchor="middle" class="label-mono t-mauve" font-size="11" font-weight="600">hash</text>
+
+              <rect x="290" y="32" width="170" height="140" rx="6" class="node-fill-2" style="stroke: var(--peach); stroke-width: 1.5"/>
+              <text x="375" y="22" text-anchor="middle" class="label-sans t-overlay" font-size="11">cached Image</text>
+              <g class="label-mono" font-size="13">
+                <text x="305" y="60" class="t-mauve">data</text>
+                <text x="445" y="60" text-anchor="end" class="t-text">Vec&lt;u8&gt;</text>
+                <text x="305" y="82" class="t-mauve">placement.w</text>
+                <text x="445" y="82" text-anchor="end" class="t-text">8</text>
+                <text x="305" y="104" class="t-mauve">placement.h</text>
+                <text x="445" y="104" text-anchor="end" class="t-text">10</text>
+                <text x="305" y="126" class="t-mauve">top</text>
+                <text x="445" y="126" text-anchor="end" class="t-text">8</text>
+                <text x="305" y="148" class="t-mauve">left</text>
+                <text x="445" y="148" text-anchor="end" class="t-text">0</text>
+              </g>
+            </svg>
+            <p>
+              Rasterization is expensive but deterministic. The same glyph at
+              the same size, weight, and flags always yields the same bitmap,
+              so swash memoizes <code>CacheKey → Image</code>. Hits skip the
+              scan-converter entirely; misses populate the cache and forward
+              to the atlas allocator.
+            </p>
+          </div>
+        </div>
+
+        <p style="margin-top: 24px">
+          From séance's perspective, all four steps collapse into one call:
+          <code>swash.get_image(&amp;mut fs, key)</code>. The returned
+          <code>Image</code> goes to <code>etagere</code>, which finds a free
+          rectangle in the right atlas plane (mono or colour). The atlas
+          coordinates ride along with the glyph ID in the cell record, ready
+          for the GPU to sample.
+        </p>
+      </section>
+
+      <section>
+        <h2>Atlas, up close</h2>
+        <p>
+          Two textures live on the GPU. Each glyph rasterized so far occupies
+          a sub-rectangle. Cells in the grid reference the atlas by
+          <code>(u, v, w, h)</code>; the fragment shader samples the right
+          plane based on whether the glyph is mono or colour.
+        </p>
+
+        <svg class="diagram" viewBox="0 0 1100 360" role="img" aria-label="Two-plane atlas: 2048x2048 R8 monochrome plus 1024x1024 RGBA colour">
+          <!-- mono plane -->
+          <g>
+            <text x="60" y="40" class="label-sans t-blue" font-size="14" font-weight="600">R8 mono · 2048 × 2048</text>
+            <rect x="40" y="56" width="500" height="280" rx="6" class="node-fill-2" style="stroke: var(--blue); stroke-width: 1.5"/>
+            <!-- packed glyph rects with letters -->
+            <g transform="translate(40, 56)" class="label-mono" font-size="20" font-weight="700">
+              <rect x="8"   y="8"   width="60" height="60" class="blue-bg"/>
+              <text x="38"  y="50"  text-anchor="middle" class="t-text">A</text>
+              <rect x="72"  y="8"   width="60" height="60" class="blue-bg"/>
+              <text x="102" y="50"  text-anchor="middle" class="t-text">B</text>
+              <rect x="136" y="8"   width="60" height="60" class="blue-bg"/>
+              <text x="166" y="50"  text-anchor="middle" class="t-text">C</text>
+              <rect x="200" y="8"   width="92" height="60" class="peach-bg" style="stroke: var(--peach); stroke-width: 1.5"/>
+              <text x="246" y="50"  text-anchor="middle" font-size="22" class="t-peach">fi</text>
+              <rect x="296" y="8"   width="60" height="60" class="blue-bg"/>
+              <text x="326" y="50"  text-anchor="middle" class="t-text">X</text>
+              <rect x="360" y="8"   width="60" height="60" class="blue-bg"/>
+              <text x="390" y="50"  text-anchor="middle" class="t-text">Y</text>
+              <rect x="424" y="8"   width="60" height="60" class="blue-bg"/>
+              <text x="454" y="50"  text-anchor="middle" class="t-text">Z</text>
+
+              <rect x="8"   y="72"  width="44" height="44" class="blue-bg"/>
+              <text x="30"  y="102" text-anchor="middle" font-size="14" class="t-text">i</text>
+              <rect x="56"  y="72"  width="44" height="44" class="blue-bg"/>
+              <text x="78"  y="102" text-anchor="middle" font-size="14" class="t-text">l</text>
+              <rect x="104" y="72"  width="80" height="44" class="peach-bg" style="stroke: var(--peach); stroke-width: 1.5"/>
+              <text x="144" y="102" text-anchor="middle" font-size="18" class="t-peach">=&gt;</text>
+              <rect x="188" y="72"  width="80" height="44" class="blue-bg"/>
+              <text x="228" y="102" text-anchor="middle" font-size="16" class="t-text">!=</text>
+              <rect x="272" y="72"  width="80" height="44" class="blue-bg"/>
+              <text x="312" y="102" text-anchor="middle" font-size="16" class="t-text">-&gt;</text>
+              <rect x="356" y="72"  width="80" height="44" class="blue-bg"/>
+              <text x="396" y="102" text-anchor="middle" font-size="16" class="t-text">|&gt;</text>
+              <rect x="440" y="72"  width="44" height="44" class="blue-bg"/>
+              <text x="462" y="102" text-anchor="middle" font-size="14" class="t-text">─</text>
+
+              <rect x="8"   y="120" width="120" height="80" class="blue-bg"/>
+              <text x="68"  y="166" text-anchor="middle" font-size="14" class="t-sub">etagere shelf</text>
+              <rect x="132" y="120" width="80" height="80" class="blue-bg"/>
+              <text x="172" y="166" text-anchor="middle" font-size="14" class="t-sub">─ │ ┌</text>
+              <rect x="216" y="120" width="160" height="80" style="fill: var(--surface); opacity: 0.5"/>
+              <text x="296" y="166" text-anchor="middle" font-size="13" class="t-overlay">free</text>
+              <rect x="380" y="120" width="104" height="80" style="fill: var(--surface); opacity: 0.5"/>
+              <text x="432" y="166" text-anchor="middle" font-size="13" class="t-overlay">free</text>
+
+              <rect x="8"   y="204" width="476" height="64" style="fill: var(--surface); opacity: 0.5"/>
+              <text x="246" y="240" text-anchor="middle" font-size="13" class="t-overlay">free shelf · LRU evicts when full</text>
+            </g>
+          </g>
+
+          <!-- color plane -->
+          <g>
+            <text x="600" y="40" class="label-sans t-pink" font-size="14" font-weight="600">RGBA colour · 1024 × 1024</text>
+            <rect x="580" y="56" width="480" height="280" rx="6" class="node-fill-2" style="stroke: var(--pink); stroke-width: 1.5"/>
+
+            <g transform="translate(580, 56)" class="label-mono">
+              <rect x="8"  y="8"  width="80" height="80" style="fill: var(--peach); opacity: 0.55"/>
+              <text x="48" y="56" text-anchor="middle" font-size="36">⌘</text>
+              <rect x="92" y="8"  width="80" height="80" style="fill: var(--yellow); opacity: 0.55"/>
+              <text x="132" y="56" text-anchor="middle" font-size="32">★</text>
+              <rect x="176" y="8" width="80" height="80" style="fill: var(--green); opacity: 0.45"/>
+              <text x="216" y="56" text-anchor="middle" font-size="32">●</text>
+              <rect x="260" y="8" width="80" height="80" style="fill: var(--mauve); opacity: 0.55"/>
+              <text x="300" y="56" text-anchor="middle" font-size="32">◆</text>
+              <rect x="344" y="8" width="120" height="80" style="fill: var(--pink); opacity: 0.45"/>
+              <text x="404" y="56" text-anchor="middle" font-size="14" class="t-text">COLR / SVG</text>
+
+              <rect x="8"   y="92" width="200" height="100" style="fill: var(--mauve); opacity: 0.35"/>
+              <text x="108" y="148" text-anchor="middle" font-size="14" class="t-text">colour glyph block</text>
+              <rect x="212" y="92" width="252" height="100" style="fill: var(--surface); opacity: 0.5"/>
+              <text x="338" y="148" text-anchor="middle" font-size="13" class="t-overlay">free</text>
+
+              <rect x="8"   y="196" width="456" height="72" style="fill: var(--surface); opacity: 0.5"/>
+              <text x="236" y="236" text-anchor="middle" font-size="13" class="t-overlay">free shelf</text>
+            </g>
+          </g>
+
+          <!-- caption -->
+          <text x="40" y="354" class="label-sans t-overlay" font-size="12">etagere allocates rectangles · LRU evicts on miss · clear_dirty per frame</text>
+        </svg>
+      </section>
+
+      <section>
+        <h2>How the GPU samples the atlas</h2>
+        <p>
+          The atlas is a <code>wgpu::Texture</code>: a region of GPU memory
+          formatted as a 2D image, addressable by texture coordinates
+          <code>(u, v) ∈ [0, 1]</code>. To draw a cell with glyph 142, the
+          renderer needs to know <em>which sub-rectangle</em> of that texture
+          holds the glyph's bitmap. That mapping is not on the GPU. It lives
+          in a CPU-side hash table populated when the glyph was first
+          rasterized and packed.
+        </p>
+        <p>
+          Two phases per frame: CPU translates the cell's glyph ID into atlas
+          coordinates and packs them into an instance buffer. GPU draws one
+          instanced quad per visible glyph, sampling the texture at those
+          coordinates.
+        </p>
+
+        <svg class="diagram" viewBox="0 0 1100 360" role="img" aria-label="Atlas lookup: CPU translates glyph_id to atlas rect, GPU samples the wgpu texture">
+          <defs>
+            <marker id="arr-l1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+              <path d="M0,0 L10,5 L0,10 Z" style="fill: var(--blue)"/>
+            </marker>
+            <marker id="arr-l2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+              <path d="M0,0 L10,5 L0,10 Z" style="fill: var(--peach)"/>
+            </marker>
+          </defs>
+
+          <!-- CPU / GPU brackets -->
+          <text x="310" y="22" text-anchor="middle" class="label-sans t-blue" font-size="13" font-weight="700">CPU side</text>
+          <line x1="20" y1="32" x2="610" y2="32" style="stroke: var(--blue); stroke-width: 1.5; opacity: 0.5"/>
+          <text x="830" y="22" text-anchor="middle" class="label-sans t-peach" font-size="13" font-weight="700">GPU side</text>
+          <line x1="630" y1="32" x2="1080" y2="32" style="stroke: var(--peach); stroke-width: 1.5; opacity: 0.5"/>
+
+          <!-- Stage 1: grid cell -->
+          <rect x="20" y="50" width="140" height="130" rx="8" class="node-fill" style="stroke: var(--blue); stroke-width: 1.5"/>
+          <text x="90" y="74" text-anchor="middle" class="label-sans t-blue" font-size="11" font-weight="600">grid cell</text>
+          <rect x="50" y="86" width="80" height="56" rx="3" style="fill: var(--red); opacity: 0.85"/>
+          <text x="90" y="126" text-anchor="middle" class="label-mono t-text" font-size="26" font-weight="700">=&gt;</text>
+          <text x="90" y="160" text-anchor="middle" class="label-mono t-overlay" font-size="10">glyph_id 142</text>
+          <text x="90" y="174" text-anchor="middle" class="label-mono t-overlay" font-size="10">fg red, col 12, row 4</text>
+
+          <line x1="160" y1="115" x2="195" y2="115" style="fill: none; stroke: var(--blue); stroke-width: 2" marker-end="url(#arr-l1)"/>
+
+          <!-- Stage 2: HashMap -->
+          <rect x="200" y="50" width="200" height="130" rx="8" class="node-fill" style="stroke: var(--blue); stroke-width: 1.5"/>
+          <text x="300" y="74" text-anchor="middle" class="label-sans t-blue" font-size="11" font-weight="600">atlas index (HashMap)</text>
+          <g class="label-mono" font-size="11">
+            <text x="220" y="100" class="t-mauve">137</text>
+            <text x="246" y="100" class="t-overlay">→</text>
+            <text x="266" y="100" class="t-text">[10, 56, 80, 60]</text>
+            <text x="220" y="120" class="t-mauve">142</text>
+            <text x="246" y="120" class="t-overlay">→</text>
+            <text x="266" y="120" class="t-peach" font-weight="700">[320, 8, 80, 60]</text>
+            <text x="220" y="140" class="t-mauve">67</text>
+            <text x="246" y="140" class="t-overlay">→</text>
+            <text x="266" y="140" class="t-text">[200, 8, 92, 60]</text>
+          </g>
+          <text x="300" y="170" text-anchor="middle" class="label-mono t-overlay" font-size="10">x, y, w, h in atlas pixels</text>
+
+          <line x1="400" y1="115" x2="435" y2="115" style="fill: none; stroke: var(--blue); stroke-width: 2" marker-end="url(#arr-l1)"/>
+
+          <!-- Stage 3: instance buf -->
+          <rect x="440" y="50" width="170" height="130" rx="8" class="node-fill" style="stroke: var(--blue); stroke-width: 1.5"/>
+          <text x="525" y="74" text-anchor="middle" class="label-sans t-blue" font-size="11" font-weight="600">instance buffer</text>
+          <g class="label-mono" font-size="10">
+            <text x="455" y="96" class="t-mauve">cell_xy</text>
+            <text x="600" y="96" text-anchor="end" class="t-text">[120, 240]</text>
+            <text x="455" y="114" class="t-mauve">atlas_uv</text>
+            <text x="600" y="114" text-anchor="end" class="t-peach" font-weight="700">[0.156, 0.004]</text>
+            <text x="455" y="132" class="t-mauve">atlas_wh</text>
+            <text x="600" y="132" text-anchor="end" class="t-peach" font-weight="700">[0.039, 0.029]</text>
+            <text x="455" y="150" class="t-mauve">fg_color</text>
+            <text x="600" y="150" text-anchor="end" class="t-text">[0.91, …]</text>
+          </g>
+          <text x="525" y="172" text-anchor="middle" class="label-mono t-overlay" font-size="10">queue.write_buffer →</text>
+
+          <line x1="610" y1="115" x2="645" y2="115" style="fill: none; stroke: var(--peach); stroke-width: 2" marker-end="url(#arr-l2)"/>
+
+          <!-- Stage 4: shaders -->
+          <rect x="650" y="50" width="220" height="130" rx="8" class="node-fill" style="stroke: var(--peach); stroke-width: 1.5"/>
+          <text x="760" y="74" text-anchor="middle" class="label-sans t-peach" font-size="11" font-weight="600">vertex / fragment shaders</text>
+          <text x="760" y="98" text-anchor="middle" class="label-mono t-text" font-size="11"><tspan class="t-mauve">vs:</tspan> place quad at cell_xy</text>
+          <text x="760" y="116" text-anchor="middle" class="label-mono t-text" font-size="11"><tspan class="t-mauve">vs:</tspan> pass uv to fragment</text>
+          <text x="760" y="138" text-anchor="middle" class="label-mono t-text" font-size="11"><tspan class="t-mauve">fs:</tspan> textureSample(atlas, uv)</text>
+          <text x="760" y="156" text-anchor="middle" class="label-mono t-text" font-size="11"><tspan class="t-mauve">fs:</tspan> rgba × fg_color</text>
+          <text x="760" y="174" text-anchor="middle" class="label-mono t-overlay" font-size="10">one instance per visible glyph</text>
+
+          <line x1="870" y1="115" x2="905" y2="115" style="fill: none; stroke: var(--peach); stroke-width: 2" marker-end="url(#arr-l2)"/>
+
+          <!-- Stage 5: pixel -->
+          <rect x="910" y="50" width="140" height="130" rx="8" class="node-fill" style="stroke: var(--green); stroke-width: 1.5"/>
+          <text x="980" y="74" text-anchor="middle" class="label-sans t-green" font-size="11" font-weight="600">framebuffer</text>
+          <rect x="935" y="86" width="90" height="56" rx="3" style="fill: var(--crust); stroke: var(--surface); stroke-width: 1"/>
+          <text x="980" y="126" text-anchor="middle" class="label-mono t-red" font-size="26" font-weight="700">=&gt;</text>
+          <text x="980" y="174" text-anchor="middle" class="label-mono t-overlay" font-size="10">on screen</text>
+
+          <!-- Atlas texture below shaders -->
+          <rect x="650" y="220" width="220" height="110" rx="8" class="node-fill-2" style="stroke: var(--mauve); stroke-width: 1.5"/>
+          <text x="760" y="244" text-anchor="middle" class="label-sans t-mauve" font-size="11" font-weight="600">wgpu::Texture (atlas)</text>
+          <text x="760" y="262" text-anchor="middle" class="label-mono t-overlay" font-size="10">2048 × 2048 · R8Unorm</text>
+
+          <g transform="translate(670, 272)">
+            <rect x="0"  y="0" width="180" height="40" rx="3" style="fill: var(--crust); stroke: var(--surface); stroke-width: 0.5"/>
+            <rect x="6"  y="6" width="20" height="28" class="blue-bg"/>
+            <rect x="30" y="6" width="20" height="28" class="blue-bg"/>
+            <rect x="54" y="6" width="34" height="28" style="fill: var(--peach); opacity: 0.95; stroke: var(--peach); stroke-width: 1.5"/>
+            <text x="71" y="26" text-anchor="middle" class="label-mono" font-size="13" font-weight="700" style="fill: var(--crust)">=&gt;</text>
+            <rect x="92"  y="6" width="20" height="28" class="blue-bg"/>
+            <rect x="116" y="6" width="22" height="28" class="blue-bg"/>
+            <rect x="142" y="6" width="32" height="28" class="green-bg"/>
+          </g>
+
+          <line x1="760" y1="220" x2="760" y2="184" style="fill: none; stroke: var(--mauve); stroke-width: 2; stroke-dasharray: 5 3"/>
+          <text x="800" y="206" class="label-mono t-mauve" font-size="11" font-weight="700">sample</text>
+
+          <!-- footer caption -->
+          <text x="20" y="354" class="label-sans t-overlay" font-size="11">CPU does the indirection (glyph_id → atlas rect). The GPU samples a known sub-rectangle of a texture; it never sees the HashMap.</text>
+        </svg>
+
+        <div class="grid">
+          <div class="card">
+            <h3>CPU: look up, pack, upload</h3>
+            <p>
+              The renderer keeps a hash map of every glyph that has ever been
+              rasterized this session. Per visible cell it does one lookup,
+              normalizes the atlas pixels into texture coordinates, and
+              appends a struct to the per-frame instance buffer.
+            </p>
+<pre><code><span class="kw">let</span> entry = atlas_index.<span class="fn">get</span>(&amp;glyph_id)?;
+<span class="cmt">// AtlasEntry { pos: [u32; 2], size: [u32; 2], is_color }</span>
+
+<span class="kw">let</span> uv = [
+    entry.pos[<span class="num">0</span>] <span class="kw">as f32</span> / ATLAS_SIZE,
+    entry.pos[<span class="num">1</span>] <span class="kw">as f32</span> / ATLAS_SIZE,
+];
+<span class="kw">let</span> wh = [
+    entry.size[<span class="num">0</span>] <span class="kw">as f32</span> / ATLAS_SIZE,
+    entry.size[<span class="num">1</span>] <span class="kw">as f32</span> / ATLAS_SIZE,
+];
+
+instances.<span class="fn">push</span>(<span class="ty">GlyphInstance</span> {
+    cell_xy: [col * cell_w, row * cell_h],
+    atlas_uv: uv,
+    atlas_wh: wh,
+    fg_color: cell.<span class="fn">fg_rgba</span>(),
+});
+
+queue.<span class="fn">write_buffer</span>(&amp;inst_buf, <span class="num">0</span>, cast(&amp;instances));
+<span class="cmt">// one DMA per frame, all glyphs in one buffer</span></code></pre>
+          </div>
+
+          <div class="card">
+            <h3>GPU: sample the atlas</h3>
+            <p>
+              The vertex shader spreads each instance into a four-vertex quad
+              at the cell's pixel position and forwards the matching atlas
+              <code>uv</code>. The fragment shader reads the texture once at
+              that <code>uv</code>: a coverage byte for mono glyphs, a full
+              RGBA for colour ones.
+            </p>
+<pre><code><span class="cmt">// vertex shader (WGSL)</span>
+<span class="kw">@vertex</span> <span class="kw">fn</span> <span class="fn">vs</span>(
+    <span class="kw">@builtin</span>(vertex_index) vid: <span class="ty">u32</span>,
+    instance: <span class="ty">GlyphInstance</span>,
+) -&gt; <span class="ty">VsOut</span> {
+    <span class="kw">let</span> corner = QUAD[vid];        <span class="cmt">// 0..3</span>
+    out.pos = instance.cell_xy
+            + corner * cell_size;
+    out.uv  = instance.atlas_uv
+            + corner * instance.atlas_wh;
+    <span class="kw">return</span> out;
+}
+
+<span class="cmt">// fragment shader (WGSL)</span>
+<span class="kw">@fragment</span> <span class="kw">fn</span> <span class="fn">fs</span>(in: <span class="ty">VsOut</span>) -&gt; <span class="kw">@location</span>(<span class="num">0</span>) <span class="ty">vec4&lt;f32&gt;</span> {
+    <span class="kw">let</span> cov = <span class="fn">textureSample</span>(atlas, samp, in.uv).r;
+    <span class="kw">return</span> <span class="ty">vec4</span>(in.fg.rgb, in.fg.a * cov);
+}</code></pre>
+          </div>
+        </div>
+
+        <p style="margin-top: 24px">
+          The split keeps the GPU's job small: it never decides which glyph
+          to sample, only how to sample a region the CPU has already named.
+          This is the whole point of an atlas. The lookup is constant-time
+          HashMap on CPU, the upload is one buffer write per frame, the draw
+          is one instanced quad per visible cell. Add or remove a glyph from
+          the cache: only the HashMap and the relevant atlas sub-rect
+          change. Texture stays put. No GPU-side branching on glyph identity.
+        </p>
+      </section>
+
+      <section>
+        <h2>Kitty graphics rendering</h2>
+        <p>
+          The Kitty graphics protocol carries actual bitmaps inside the
+          terminal byte stream: PNG images, video frames, plot output,
+          file-manager previews. séance handles it as a separate render
+          pipeline that runs alongside the text pipeline, sharing the same
+          render pass but with its own shader, bind group, and instance
+          buffer.
+        </p>
+        <p>
+          Two halves: getting the bytes in (libghostty-vt parses and stores)
+          and getting the pixels out (séance walks placements, uploads
+          textures, draws quads).
+        </p>
+
+        <svg class="diagram" viewBox="0 0 1100 340" role="img" aria-label="Kitty protocol flow: shell sends APC bytes; libghostty-vt parses and stores; séance walks placements and draws">
+          <defs>
+            <marker id="arr-k1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+              <path d="M0,0 L10,5 L0,10 Z" style="fill: var(--blue)"/>
+            </marker>
+            <marker id="arr-k2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+              <path d="M0,0 L10,5 L0,10 Z" style="fill: var(--peach)"/>
+            </marker>
+          </defs>
+
+          <text x="180" y="22" text-anchor="middle" class="label-sans t-blue" font-size="13" font-weight="700">transmission (CPU)</text>
+          <line x1="20" y1="32" x2="660" y2="32" style="stroke: var(--blue); stroke-width: 1.5; opacity: 0.5"/>
+          <text x="860" y="22" text-anchor="middle" class="label-sans t-peach" font-size="13" font-weight="700">rendering (per frame)</text>
+          <line x1="680" y1="32" x2="1080" y2="32" style="stroke: var(--peach); stroke-width: 1.5; opacity: 0.5"/>
+
+          <!-- shell -->
+          <rect x="20" y="60" width="160" height="240" rx="8" class="node-fill" style="stroke: var(--blue); stroke-width: 1.5"/>
+          <text x="100" y="84" text-anchor="middle" class="label-sans t-blue" font-size="11" font-weight="600">shell tool</text>
+          <text x="100" y="108" text-anchor="middle" class="label-mono t-text" font-size="13" font-weight="600">yazi · presenterm</text>
+          <text x="100" y="124" text-anchor="middle" class="label-mono t-text" font-size="13" font-weight="600">jp · timg · ranger</text>
+          <g class="label-mono" font-size="11">
+            <text x="100" y="160" text-anchor="middle" class="t-overlay">writes APC:</text>
+          </g>
+          <rect x="32" y="174" width="136" height="40" rx="4" style="fill: var(--red); opacity: 0.75"/>
+          <text x="100" y="190" text-anchor="middle" class="label-mono t-text" font-size="10" font-weight="700">\x1b_Gf=100,a=T;</text>
+          <text x="100" y="204" text-anchor="middle" class="label-mono t-text" font-size="10" font-weight="700">&lt;base64 PNG&gt;\x1b\\</text>
+          <text x="100" y="232" text-anchor="middle" class="label-sans t-overlay" font-size="10">f=100  PNG payload</text>
+          <text x="100" y="248" text-anchor="middle" class="label-sans t-overlay" font-size="10">f=24/32  raw RGB/A</text>
+          <text x="100" y="264" text-anchor="middle" class="label-sans t-overlay" font-size="10">t=t  via temp file</text>
+          <text x="100" y="280" text-anchor="middle" class="label-sans t-overlay" font-size="10">t=s  via shared mem</text>
+
+          <line x1="180" y1="180" x2="215" y2="180" style="fill: none; stroke: var(--blue); stroke-width: 2" marker-end="url(#arr-k1)"/>
+
+          <!-- libghostty-vt -->
+          <rect x="220" y="60" width="220" height="240" rx="8" class="node-fill" style="stroke: var(--blue); stroke-width: 1.5"/>
+          <text x="330" y="84" text-anchor="middle" class="label-sans t-blue" font-size="11" font-weight="600">libghostty-vt</text>
+          <text x="330" y="108" text-anchor="middle" class="label-mono t-mauve" font-size="11" font-weight="600">parse APC</text>
+          <text x="330" y="126" text-anchor="middle" class="label-mono t-mauve" font-size="11" font-weight="600">base64 decode</text>
+          <text x="330" y="144" text-anchor="middle" class="label-mono t-mauve" font-size="11" font-weight="600">PNG decoder</text>
+          <text x="330" y="162" text-anchor="middle" class="label-sans t-overlay" font-size="10">(callback into image-rs)</text>
+
+          <rect x="240" y="180" width="180" height="50" rx="6" class="node-fill-2" style="stroke: var(--mauve); stroke-width: 1"/>
+          <text x="330" y="200" text-anchor="middle" class="label-sans t-mauve" font-size="11" font-weight="600">image storage</text>
+          <text x="330" y="218" text-anchor="middle" class="label-mono t-overlay" font-size="10">image_id → bytes + dims</text>
+
+          <rect x="240" y="240" width="180" height="50" rx="6" class="node-fill-2" style="stroke: var(--mauve); stroke-width: 1"/>
+          <text x="330" y="260" text-anchor="middle" class="label-sans t-mauve" font-size="11" font-weight="600">placement registry</text>
+          <text x="330" y="278" text-anchor="middle" class="label-mono t-overlay" font-size="10">(image_id, row, col, z, w, h)</text>
+
+          <line x1="440" y1="180" x2="475" y2="180" style="fill: none; stroke: var(--peach); stroke-width: 2" marker-end="url(#arr-k2)"/>
+
+          <!-- séance: image cache -->
+          <rect x="480" y="60" width="200" height="240" rx="8" class="node-fill" style="stroke: var(--peach); stroke-width: 1.5"/>
+          <text x="580" y="84" text-anchor="middle" class="label-sans t-peach" font-size="11" font-weight="600">image cache</text>
+          <text x="580" y="106" text-anchor="middle" class="label-sans t-overlay" font-size="10">one wgpu::Texture per image_id</text>
+          <g class="label-mono" font-size="11">
+            <text x="500" y="138" class="t-mauve">id 1</text>
+            <text x="540" y="138" class="t-overlay">→</text>
+            <text x="560" y="138" class="t-text">RGBA 480×320</text>
+            <text x="500" y="158" class="t-mauve">id 2</text>
+            <text x="540" y="158" class="t-overlay">→</text>
+            <text x="560" y="158" class="t-text">RGBA 800×600</text>
+            <text x="500" y="178" class="t-mauve">id 3</text>
+            <text x="540" y="178" class="t-overlay">→</text>
+            <text x="560" y="178" class="t-text">RGB  256×256</text>
+          </g>
+
+          <rect x="500" y="200" width="160" height="84" rx="4" style="fill: var(--mantle); stroke: var(--surface); stroke-width: 1"/>
+          <text x="580" y="220" text-anchor="middle" class="label-sans t-overlay" font-size="10">(thumbnail of bound image)</text>
+          <rect x="510" y="228" width="140" height="48" rx="3" style="fill: var(--peach); opacity: 0.4"/>
+          <rect x="520" y="236" width="60" height="32" rx="2" style="fill: var(--green); opacity: 0.7"/>
+          <rect x="588" y="236" width="55" height="32" rx="2" style="fill: var(--blue); opacity: 0.7"/>
+
+          <line x1="680" y1="180" x2="715" y2="180" style="fill: none; stroke: var(--peach); stroke-width: 2" marker-end="url(#arr-k2)"/>
+
+          <!-- séance: image pipeline -->
+          <rect x="720" y="60" width="200" height="240" rx="8" class="node-fill" style="stroke: var(--peach); stroke-width: 1.5"/>
+          <text x="820" y="84" text-anchor="middle" class="label-sans t-peach" font-size="11" font-weight="600">image pipeline</text>
+          <text x="820" y="106" text-anchor="middle" class="label-mono t-mauve" font-size="11" font-weight="600">walk placements per layer</text>
+
+          <rect x="740" y="120" width="160" height="36" rx="6" style="fill: var(--mauve); opacity: 0.25; stroke: var(--mauve); stroke-width: 1"/>
+          <text x="820" y="142" text-anchor="middle" class="label-mono t-mauve" font-size="11" font-weight="700">BelowBg</text>
+
+          <rect x="740" y="166" width="160" height="36" rx="6" style="fill: var(--blue); opacity: 0.25; stroke: var(--blue); stroke-width: 1"/>
+          <text x="820" y="188" text-anchor="middle" class="label-mono t-blue" font-size="11" font-weight="700">BelowText</text>
+
+          <rect x="740" y="212" width="160" height="36" rx="6" style="fill: var(--peach); opacity: 0.30; stroke: var(--peach); stroke-width: 1"/>
+          <text x="820" y="234" text-anchor="middle" class="label-mono t-peach" font-size="11" font-weight="700">AboveText</text>
+
+          <text x="820" y="270" text-anchor="middle" class="label-sans t-overlay" font-size="10">ImageInstance {</text>
+          <text x="820" y="284" text-anchor="middle" class="label-mono t-overlay" font-size="10">dest_rect, source_uv</text>
+          <text x="820" y="298" text-anchor="middle" class="label-sans t-overlay" font-size="10">}</text>
+
+          <line x1="920" y1="180" x2="955" y2="180" style="fill: none; stroke: var(--peach); stroke-width: 2" marker-end="url(#arr-k2)"/>
+
+          <!-- framebuffer -->
+          <rect x="960" y="60" width="120" height="240" rx="8" class="node-fill" style="stroke: var(--green); stroke-width: 1.5"/>
+          <text x="1020" y="84" text-anchor="middle" class="label-sans t-green" font-size="11" font-weight="600">framebuffer</text>
+          <rect x="975" y="100" width="90" height="180" rx="3" style="fill: var(--crust); stroke: var(--surface); stroke-width: 1"/>
+          <rect x="983" y="112" width="74" height="42" rx="2" style="fill: var(--peach); opacity: 0.5"/>
+          <text x="1020" y="180" text-anchor="middle" class="label-mono t-text" font-size="10">image</text>
+          <text x="1020" y="200" text-anchor="middle" class="label-mono t-text" font-size="10">over text</text>
+          <text x="1020" y="252" text-anchor="middle" class="label-sans t-overlay" font-size="9">composited</text>
+          <text x="1020" y="266" text-anchor="middle" class="label-sans t-overlay" font-size="9">in render pass</text>
+        </svg>
+
+        <h3 style="margin-top: 32px">Two ways to place an image</h3>
+        <p>
+          The protocol carries the bitmap once, then asks the terminal to
+          place it at one or more grid positions. Two encodings, very
+          different ergonomics.
+        </p>
+
+        <div class="grid">
+          <div class="card">
+            <h3>Direct placement</h3>
+            <span class="feat">a=p · explicit row/col</span>
+            <p>
+              Another APC sequence references the stored
+              <code>image_id</code> and names the target row, column, source
+              sub-rect, and z-layer:
+            </p>
+<pre><code><span class="esc">\x1b_Ga=p,i=1,p=42,c=10,r=3,x=0,y=0\x1b\\</span>
+<span class="cmt">// place image 1, placement_id 42,
+//   anchor at row 3, col 10, source (0, 0)</span></code></pre>
+            <p>
+              Tied to a fixed grid coord. Simple to render: one entry in the
+              placement registry, one quad on screen. The shell tool owns the
+              positioning logic and has to track scrolling itself.
+            </p>
+          </div>
+
+          <div class="card">
+            <h3>Virtual placement (Unicode placeholder)</h3>
+            <span class="feat">U+10EEEE + 297 diacritics</span>
+            <p>
+              The shell prints regular cells. Each cell carries the base
+              codepoint <code>U+10EEEE</code> plus up to three combining
+              diacritics from a sorted 297-entry alphabet. The diacritics
+              encode <code>(row, col, image_id_high)</code>. The cell's
+              foreground colour carries the low 24 bits of
+              <code>image_id</code>.
+            </p>
+            <svg class="diagram shape-svg" viewBox="0 0 480 200" role="img" aria-label="virtual placement decode example">
+              <defs>
+                <marker id="arr-k3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M0,0 L10,5 L0,10 Z" style="fill: var(--mauve)"/>
+                </marker>
+              </defs>
+              <text x="100" y="22" text-anchor="middle" class="label-sans t-overlay" font-size="11">cell content</text>
+              <text x="380" y="22" text-anchor="middle" class="label-sans t-overlay" font-size="11">decoded placement</text>
+
+              <rect x="20" y="34" width="160" height="140" rx="6" class="node-fill-2" style="stroke: var(--blue); stroke-width: 1"/>
+              <g class="label-mono" font-size="11">
+                <text x="36" y="58" class="t-mauve">grapheme</text>
+                <text x="100" y="80" text-anchor="middle" class="t-text" font-size="11">U+10EEEE</text>
+                <text x="100" y="96" text-anchor="middle" class="t-text" font-size="11">+ U+0305</text>
+                <text x="100" y="112" text-anchor="middle" class="t-text" font-size="11">+ U+035F</text>
+
+                <text x="36" y="138" class="t-mauve">fg color</text>
+                <text x="100" y="158" text-anchor="middle" class="t-peach" font-weight="700">#0001A4</text>
+              </g>
+
+              <line x1="190" y1="100" x2="270" y2="100" style="fill: none; stroke: var(--mauve); stroke-width: 2" marker-end="url(#arr-k3)"/>
+              <text x="230" y="92" text-anchor="middle" class="label-mono t-mauve" font-size="10" font-weight="600">decode</text>
+
+              <rect x="280" y="34" width="180" height="140" rx="6" class="node-fill-2" style="stroke: var(--peach); stroke-width: 1.5"/>
+              <g class="label-mono" font-size="11">
+                <text x="296" y="58" class="t-mauve">U+0305 idx</text>
+                <text x="445" y="58" text-anchor="end" class="t-text">0  → row 0</text>
+                <text x="296" y="78" class="t-mauve">U+035F idx</text>
+                <text x="445" y="78" text-anchor="end" class="t-text">15 → col 15</text>
+                <text x="296" y="98" class="t-mauve">no 3rd diac</text>
+                <text x="445" y="98" text-anchor="end" class="t-text">id_hi = 0</text>
+                <text x="296" y="120" class="t-mauve">fg low 24</text>
+                <text x="445" y="120" text-anchor="end" class="t-text">0x0001A4</text>
+
+                <text x="296" y="150" class="t-peach" font-weight="700">image_id</text>
+                <text x="445" y="150" text-anchor="end" class="t-peach" font-weight="700">420</text>
+                <text x="296" y="166" class="t-peach" font-weight="700">at (row 0, col 15)</text>
+              </g>
+            </svg>
+            <p>
+              The image scrolls with the text because the cells <em>are</em>
+              the text. No placement IDs to track. Each diacritic's index in
+              the 297-entry alphabet is the encoded value (0..296), so a 297×297
+              grid of cells suffices for any reasonable image.
+            </p>
+          </div>
+        </div>
+
+        <h3 style="margin-top: 32px">Per-frame: walk, instance, draw</h3>
+        <p>
+          séance does not own the image storage. <code>libghostty-vt</code>
+          does. Each frame, <code>FrameSource</code> calls into the placement
+          iterator three times, once per z-layer
+          (<code>BelowBg</code>, <code>BelowText</code>,
+          <code>AboveText</code>), and accumulates one
+          <code>ImageInstance</code> per visible placement:
+        </p>
+
+<pre><code><span class="kw">struct</span> <span class="ty">ImageInstance</span> {
+    dest_rect: [<span class="ty">f32</span>; <span class="num">4</span>],   <span class="cmt">// pixel x, y, w, h on screen</span>
+    source_uv: [<span class="ty">f32</span>; <span class="num">4</span>],   <span class="cmt">// u, v, w, h in image texture</span>
+}
+
+<span class="cmt">// vertex shader expands a triangle-strip quad at dest_rect
+// fragment shader samples image_tex at source_uv, premultiplies
+//   alpha, returns rgba</span></code></pre>
+
+        <p>
+          Each layer becomes its own draw call list, because adjacent
+          placements may reference different <code>image_id</code>s and need
+          a bind-group rebind. The render pass slots them between the text
+          pipelines:
+        </p>
+
+        <svg class="diagram" viewBox="0 0 1100 150" role="img" aria-label="render pass order: bg color, kitty BelowBg, cell bg, kitty BelowText, cell text, kitty AboveText">
+          <text x="20" y="22" class="label-sans t-overlay" font-size="11">render pass: back to front</text>
+
+          <g>
+            <rect x="20"  y="40" width="155" height="60" rx="6" class="node-fill" style="stroke: var(--surface); stroke-width: 1.5"/>
+            <text x="97"  y="62" text-anchor="middle" class="label-mono t-text" font-size="11" font-weight="600">bg_color</text>
+            <text x="97"  y="80" text-anchor="middle" class="label-sans t-overlay" font-size="10">terminal default</text>
+
+            <rect x="185" y="40" width="155" height="60" rx="6" style="fill: var(--mauve); opacity: 0.25; stroke: var(--mauve); stroke-width: 1.5"/>
+            <text x="262" y="62" text-anchor="middle" class="label-mono t-mauve" font-size="11" font-weight="600">kitty BelowBg</text>
+            <text x="262" y="80" text-anchor="middle" class="label-sans t-overlay" font-size="10">behind everything</text>
+
+            <rect x="350" y="40" width="155" height="60" rx="6" class="node-fill" style="stroke: var(--surface); stroke-width: 1.5"/>
+            <text x="427" y="62" text-anchor="middle" class="label-mono t-text" font-size="11" font-weight="600">cell_bg</text>
+            <text x="427" y="80" text-anchor="middle" class="label-sans t-overlay" font-size="10">ANSI bg, selection</text>
+
+            <rect x="515" y="40" width="155" height="60" rx="6" style="fill: var(--blue); opacity: 0.25; stroke: var(--blue); stroke-width: 1.5"/>
+            <text x="592" y="62" text-anchor="middle" class="label-mono t-blue" font-size="11" font-weight="600">kitty BelowText</text>
+            <text x="592" y="80" text-anchor="middle" class="label-sans t-overlay" font-size="10">behind glyphs</text>
+
+            <rect x="680" y="40" width="155" height="60" rx="6" class="node-fill" style="stroke: var(--surface); stroke-width: 1.5"/>
+            <text x="757" y="62" text-anchor="middle" class="label-mono t-text" font-size="11" font-weight="600">cell_text</text>
+            <text x="757" y="80" text-anchor="middle" class="label-sans t-overlay" font-size="10">glyph atlas sample</text>
+
+            <rect x="845" y="40" width="155" height="60" rx="6" style="fill: var(--peach); opacity: 0.30; stroke: var(--peach); stroke-width: 1.5"/>
+            <text x="922" y="62" text-anchor="middle" class="label-mono t-peach" font-size="11" font-weight="600">kitty AboveText</text>
+            <text x="922" y="80" text-anchor="middle" class="label-sans t-overlay" font-size="10">overlay everything</text>
+          </g>
+
+          <text x="20" y="130" class="label-sans t-overlay" font-size="11">All six pipelines run inside a single render pass. Bind groups switch per draw; depth comes from draw order.</text>
+        </svg>
+
+        <p style="margin-top: 16px">
+          Cleanup falls out of the iterator: a placement that no longer
+          appears in any layer simply produces no instance. If the image
+          itself goes unreferenced for several frames, the image cache
+          evicts the texture. New images upload lazily on first use, sharing
+          the same render pass and shader as the previous frame.
+        </p>
+      </section>
+
+      <section>
+        <h2>What shaping makes possible</h2>
+        <p>
+          The shape stage handles long-tail Unicode that breaks naive
+          per-codepoint terminals. Multi-cell ligatures, box-drawing,
+          symbolic icons.
+        </p>
+<pre><code>ligatures   ==   =&gt;   !=   &gt;=   &lt;=   -&gt;   |&gt;
+boxes       ─ │ ┌ ┐ └ ┘ ├ ┤ ┬ ┴ ┼ ╭ ╮ ╰ ╯ ╳
+icons       ⌘   ✨   ⚙   ◆   ●   ▲   ★</code></pre>
+      </section>
+
+      <section>
+        <h2>Why FFI Ghostty's parser</h2>
+        <p>
+          A VT parser is not a weekend project. The state machine has to
+          handle CSI, OSC, DCS, APC, the alt screen, scrollback, mouse
+          encodings, Kitty keyboard, DEC modes, and a long tail of
+          terminal-specific quirks accumulated since the VT100. Ghostty has
+          shipped a battle-tested parser; <code>libghostty-vt</code> exposes
+          it via FFI. Writing a second one would mean rebuilding that quirk
+          history, then drifting from upstream as Ghostty fixes new bugs.
+          Same parser, no double-render, no second source of truth.
+        </p>
+      </section>
+
+      <footer>
+        séance · talk overview · slides at <a href="codecamp-spring-2026.md">codecamp-spring-2026.md</a>
+      </footer>
+    </main>
+  </body>
+</html>
