@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use seance_frame::SnapshotFrameSource;
 use seance_protocol::{
-    CursorShape, DirtySnapshot, FrameDelta, GridPos, PaneRef, PaneUpdate, Selection, TerminalModes,
-    VtSnapshot, apply_frame_delta,
+    CursorShape, DirtySnapshot, FrameDelta, GridPos, HyperlinkRun, PaneRef, PaneUpdate, Selection,
+    TerminalModes, VtSnapshot, apply_frame_delta,
 };
 
 use crate::PaneError;
@@ -121,6 +121,13 @@ impl PaneView {
         let selection = self.selection.as_ref()?;
         let snapshot = self.latest_snapshot.as_ref()?;
         snapshot.selection_text(selection)
+    }
+
+    /// Resolve the contiguous OSC 8 hyperlink run at `(col, row)`, if any.
+    pub fn hyperlink_run_at(&self, col: u16, row: u16) -> Option<HyperlinkRun<'_>> {
+        self.latest_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.hyperlink_run_at(col, row))
     }
 
     fn ensure_pane(&self, pane: PaneRef) -> Result<(), PaneError> {

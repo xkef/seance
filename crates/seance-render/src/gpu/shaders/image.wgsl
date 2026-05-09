@@ -22,6 +22,11 @@ struct Uniforms {
     selection_color: vec4<f32>,
     selection_active: u32,
     baseline: f32,
+    hovered_link_active: u32,
+    _pad_link: u32,
+    hovered_link_start: vec2<u32>,
+    hovered_link_end: vec2<u32>,
+    hovered_link_color: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;

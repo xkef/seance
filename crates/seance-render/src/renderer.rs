@@ -35,12 +35,23 @@ pub struct RendererConfig {
     pub theme: Theme,
 }
 
+/// Inclusive grid range on a single row that should be drawn with a
+/// hovered-link underline. Set by the app whenever the cursor is over an
+/// OSC 8 hyperlink and the activation modifier is held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HoveredLinkRange {
+    pub row: u16,
+    pub start_col: u16,
+    pub end_col: u16,
+}
+
 /// Per-frame dynamic state the app supplies to the renderer.
 #[derive(Debug, Clone)]
 pub struct RenderInputs {
     pub vt_cursor_visible: bool,
     pub cursor_shape: CursorShape,
     pub selection: Option<(GridPos, GridPos)>,
+    pub hovered_link: Option<HoveredLinkRange>,
 }
 
 impl Default for RenderInputs {
@@ -49,6 +60,7 @@ impl Default for RenderInputs {
             vt_cursor_visible: true,
             cursor_shape: CursorShape::Bar,
             selection: None,
+            hovered_link: None,
         }
     }
 }

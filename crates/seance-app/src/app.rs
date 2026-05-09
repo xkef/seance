@@ -291,6 +291,7 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::ModifiersChanged(mods) => {
                 if let Some(surface) = self.surface_mut() {
                     surface.modifiers = mods;
+                    surface.refresh_hovered_link();
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => self.on_keyboard_input(event_loop, &event),

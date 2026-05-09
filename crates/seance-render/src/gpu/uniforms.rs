@@ -57,7 +57,16 @@ pub(crate) struct Uniforms {
     pub selection_color: [f32; 4],
     pub selection_active: u32,
     pub baseline: f32,
-    pub _pad: [u32; 10],
+    pub hovered_link_active: u32,
+    /// Padding to satisfy WGSL `vec2<u32>` 8-byte alignment for the
+    /// hovered_link range below.
+    pub _pad_link: u32,
+    /// Inclusive grid range on a single row that should render with a
+    /// hovered-link underline. `start.x = end.x.0` and `start.y = end.y`
+    /// when the link spans one row.
+    pub hovered_link_start: [u32; 2],
+    pub hovered_link_end: [u32; 2],
+    pub hovered_link_color: [f32; 4],
 }
 
 impl Uniforms {
@@ -75,6 +84,15 @@ impl Uniforms {
                 1u32,
             ),
             None => ([0u32; 2], [0u32; 2], 0u32),
+        };
+
+        let (link_start, link_end, link_active) = match &inputs.hovered_link {
+            Some(range) if range.start_col <= range.end_col => (
+                [u32::from(range.start_col), u32::from(range.row)],
+                [u32::from(range.end_col), u32::from(range.row)],
+                1u32,
+            ),
+            _ => ([0u32; 2], [0u32; 2], 0u32),
         };
 
         Self {
@@ -100,7 +118,16 @@ impl Uniforms {
             selection_color: theme.selection_bg,
             selection_active: sel_active,
             baseline: fi.baseline,
-            _pad: [0; 10],
+            hovered_link_active: link_active,
+            _pad_link: 0,
+            hovered_link_start: link_start,
+            hovered_link_end: link_end,
+            hovered_link_color: [
+                f32::from(theme.fg[0]) / 255.0,
+                f32::from(theme.fg[1]) / 255.0,
+                f32::from(theme.fg[2]) / 255.0,
+                1.0,
+            ],
         }
     }
 

@@ -274,6 +274,7 @@ fn frame_history_replays_retained_updates() {
             dirty_rows: vec![
                 seance_protocol::RowDelta::from_snapshot_row(&snapshot(2, "b"), 0).unwrap(),
             ],
+            hyperlinks: Vec::new(),
         }),
     });
 

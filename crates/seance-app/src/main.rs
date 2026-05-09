@@ -12,6 +12,7 @@ mod mouse;
 mod platform;
 mod reload;
 mod surface_state;
+mod url_open;
 mod watcher;
 
 use app::App;

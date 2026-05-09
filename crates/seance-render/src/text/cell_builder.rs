@@ -545,6 +545,7 @@ mod tests {
                         fg: *fg,
                         bg: *bg,
                         attrs: *attrs,
+                        hyperlink: None,
                     },
                 );
             }

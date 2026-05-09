@@ -16,6 +16,8 @@ pub struct CellView<'a> {
     pub fg: CellColor,
     pub bg: CellColor,
     pub attrs: CellAttrs,
+    /// Resolved OSC 8 hyperlink URL, if the cell carries one.
+    pub hyperlink: Option<&'a str>,
 }
 
 pub trait FrameSource {

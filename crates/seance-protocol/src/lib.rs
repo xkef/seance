@@ -14,6 +14,10 @@ pub const MAX_IMAGE_CHUNK_BYTES: usize = 1024 * 1024;
 pub const MAX_PENDING_OUTBOUND_BYTES_PER_CLIENT: usize = 32 * 1024 * 1024;
 pub const MAX_RETAINED_PANE_UPDATES: usize = 512;
 
+/// Sentinel for [`SnapshotCell::hyperlink_idx`] meaning "this cell has no
+/// OSC 8 hyperlink." Real indices reference [`VtSnapshot::hyperlinks`].
+pub const NO_HYPERLINK: u16 = u16::MAX;
+
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
@@ -288,6 +292,10 @@ pub struct VtSnapshot {
     pub dirty: DirtySnapshot,
     pub placements: Vec<PlacementSnapshot>,
     pub images: Vec<SnapshotImage>,
+    /// OSC 8 hyperlink URL table. Cells reference entries by index via
+    /// [`SnapshotCell::hyperlink_idx`]; [`NO_HYPERLINK`] means the cell
+    /// has no hyperlink.
+    pub hyperlinks: Vec<String>,
 }
 
 impl VtSnapshot {
@@ -303,6 +311,7 @@ impl VtSnapshot {
             dirty: DirtySnapshot::Full,
             placements: Vec::new(),
             images: Vec::new(),
+            hyperlinks: Vec::new(),
         }
     }
 
@@ -369,6 +378,7 @@ impl VtSnapshot {
             fg,
             bg,
             attrs,
+            hyperlink_idx: NO_HYPERLINK,
         });
     }
 
@@ -379,6 +389,82 @@ impl VtSnapshot {
     pub fn cell_at(&self, row: u16, col: u16) -> Option<&SnapshotCell> {
         let idx = usize::from(row) * usize::from(self.cols) + usize::from(col);
         self.cells.get(idx)
+    }
+
+    /// Resolve a cell's OSC 8 URL. Returns `None` when the cell carries
+    /// no hyperlink or the index is out of range.
+    pub fn cell_hyperlink(&self, cell: &SnapshotCell) -> Option<&str> {
+        if cell.hyperlink_idx == NO_HYPERLINK {
+            return None;
+        }
+        self.hyperlinks
+            .get(usize::from(cell.hyperlink_idx))
+            .map(String::as_str)
+    }
+
+    /// If the cell at `(col, row)` carries an OSC 8 hyperlink, return the
+    /// contiguous run of cells on the same row that share its index along
+    /// with the resolved URL. Used by the renderer to draw a hovered-link
+    /// underline and by the input layer to resolve click targets.
+    pub fn hyperlink_run_at(&self, col: u16, row: u16) -> Option<HyperlinkRun<'_>> {
+        let cell = self.cell_at(row, col)?;
+        if cell.hyperlink_idx == NO_HYPERLINK {
+            return None;
+        }
+        let url = self.cell_hyperlink(cell)?;
+        let target = cell.hyperlink_idx;
+
+        let mut start = col;
+        while start > 0 {
+            let next = start - 1;
+            match self.cell_at(row, next) {
+                Some(c) if c.hyperlink_idx == target => start = next,
+                _ => break,
+            }
+        }
+
+        let mut end = col;
+        while end + 1 < self.cols {
+            let next = end + 1;
+            match self.cell_at(row, next) {
+                Some(c) if c.hyperlink_idx == target => end = next,
+                _ => break,
+            }
+        }
+
+        Some(HyperlinkRun {
+            row,
+            start_col: start,
+            end_col: end,
+            url,
+        })
+    }
+
+    /// Append `url` to the hyperlink table if missing and return its index.
+    /// The returned index never equals [`NO_HYPERLINK`]; if the table is
+    /// already at capacity (`u16::MAX - 1` entries) this returns
+    /// [`NO_HYPERLINK`] and the cell should be left unlinked.
+    pub fn intern_hyperlink(&mut self, url: &str) -> u16 {
+        if let Some(idx) = self.hyperlinks.iter().position(|existing| existing == url) {
+            return u16::try_from(idx).unwrap_or(NO_HYPERLINK);
+        }
+        let idx = self.hyperlinks.len();
+        if idx >= usize::from(NO_HYPERLINK) {
+            return NO_HYPERLINK;
+        }
+        self.hyperlinks.push(url.to_owned());
+        u16::try_from(idx).unwrap_or(NO_HYPERLINK)
+    }
+
+    /// Attach a hyperlink index to the most recently pushed cell. No-op if
+    /// `idx == NO_HYPERLINK` or no cells have been pushed yet.
+    pub fn set_last_cell_hyperlink(&mut self, idx: u16) {
+        if idx == NO_HYPERLINK {
+            return;
+        }
+        if let Some(cell) = self.cells.last_mut() {
+            cell.hyperlink_idx = idx;
+        }
     }
 
     pub fn validate_dimensions(&self) -> Result<(), FrameValidationError> {
@@ -396,6 +482,16 @@ impl VtSnapshot {
     }
 }
 
+/// Contiguous run of hyperlinked cells on a single row, along with the
+/// resolved URL. Returned by [`VtSnapshot::hyperlink_run_at`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HyperlinkRun<'a> {
+    pub row: u16,
+    pub start_col: u16,
+    pub end_col: u16,
+    pub url: &'a str,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnapshotCell {
     pub text_start: u32,
@@ -403,6 +499,9 @@ pub struct SnapshotCell {
     pub fg: CellColor,
     pub bg: CellColor,
     pub attrs: CellAttrs,
+    /// Index into [`VtSnapshot::hyperlinks`], or [`NO_HYPERLINK`] when
+    /// the cell has no OSC 8 hyperlink.
+    pub hyperlink_idx: u16,
 }
 
 impl SnapshotCell {
@@ -413,6 +512,7 @@ impl SnapshotCell {
             fg: CellColor::Default,
             bg: CellColor::Default,
             attrs: CellAttrs::default(),
+            hyperlink_idx: NO_HYPERLINK,
         }
     }
 }
@@ -458,6 +558,10 @@ pub enum FrameDelta {
         modes: TerminalModes,
         placements: Vec<PlacementSnapshot>,
         dirty_rows: Vec<RowDelta>,
+        /// Replacement OSC 8 URL table for the resulting snapshot. Always
+        /// shipped in full because partial-row cells reference it by
+        /// index, so the previous table cannot be reused safely.
+        hyperlinks: Vec<String>,
     },
 }
 
@@ -505,6 +609,7 @@ impl FrameDelta {
             modes: snapshot.modes,
             placements: snapshot.placements.clone(),
             dirty_rows,
+            hyperlinks: snapshot.hyperlinks.clone(),
         }
     }
 
@@ -542,6 +647,7 @@ impl RowDelta {
                 fg: source.fg,
                 bg: source.bg,
                 attrs: source.attrs,
+                hyperlink_idx: source.hyperlink_idx,
             });
         }
         Some(Self { row, cells, text })
@@ -643,6 +749,7 @@ pub fn apply_frame_delta(
             modes,
             placements,
             dirty_rows,
+            hyperlinks,
         } => {
             let base = previous.ok_or(FrameApplyError::NeedFull)?;
             if base.generation != *base_generation {
@@ -675,6 +782,7 @@ pub fn apply_frame_delta(
                 },
                 placements: placements.clone(),
                 images: base.images.clone(),
+                hyperlinks: hyperlinks.clone(),
             };
 
             for row in 0..*rows {
@@ -703,6 +811,7 @@ pub fn apply_frame_delta(
                         fg: source.fg,
                         bg: source.bg,
                         attrs: source.attrs,
+                        hyperlink_idx: source.hyperlink_idx,
                     });
                 }
             }
@@ -1814,6 +1923,7 @@ mod tests {
                     text: String::new(),
                 },
             ],
+            hyperlinks: Vec::new(),
         };
         assert_eq!(
             apply_frame_delta(Some(&base), &bad_rows).unwrap_err(),
@@ -1840,6 +1950,7 @@ mod tests {
                 ],
                 text: "é".into(),
             }],
+            hyperlinks: Vec::new(),
         };
         assert_eq!(
             apply_frame_delta(Some(&base), &bad_offset).unwrap_err(),
@@ -1881,6 +1992,7 @@ mod tests {
                 z: 0,
             }],
             dirty_rows: Vec::new(),
+            hyperlinks: Vec::new(),
         };
         let applied = apply_frame_delta(Some(&base), &delta).unwrap();
         assert_eq!(applied.cell_text(&applied.cells[0]), "x");
@@ -1945,5 +2057,113 @@ mod tests {
             decode_envelope(&corrupt, MAX_DECODED_MESSAGE_BYTES).unwrap_err(),
             CodecError::CorruptPayload(_)
         ));
+    }
+
+    #[test]
+    fn hyperlink_intern_dedupes_and_resolves_via_cell_lookup() {
+        let mut snap = VtSnapshot::empty(2, 1);
+        snap.push_cell(
+            "a",
+            CellColor::Default,
+            CellColor::Default,
+            CellAttrs::default(),
+        );
+        let idx = snap.intern_hyperlink("https://example.com");
+        snap.set_last_cell_hyperlink(idx);
+        snap.push_cell(
+            "b",
+            CellColor::Default,
+            CellColor::Default,
+            CellAttrs::default(),
+        );
+        let idx2 = snap.intern_hyperlink("https://example.com");
+        assert_eq!(idx, idx2);
+        snap.set_last_cell_hyperlink(idx2);
+
+        let cell0 = snap.cell_at(0, 0).unwrap();
+        let cell1 = snap.cell_at(0, 1).unwrap();
+        assert_eq!(snap.cell_hyperlink(cell0), Some("https://example.com"));
+        assert_eq!(snap.cell_hyperlink(cell1), Some("https://example.com"));
+        assert_eq!(snap.hyperlinks.len(), 1);
+
+        // Empty cells default to NO_HYPERLINK and resolve to None.
+        let mut bare = VtSnapshot::empty(1, 1);
+        bare.push_empty_cell();
+        let cell = bare.cell_at(0, 0).unwrap();
+        assert_eq!(cell.hyperlink_idx, NO_HYPERLINK);
+        assert_eq!(bare.cell_hyperlink(cell), None);
+    }
+
+    #[test]
+    fn hyperlink_run_at_walks_contiguous_same_index_cells() {
+        // Layout: row 0 = [link_a link_a link_b link_a empty]
+        // row 1   = [empty empty empty empty empty]
+        let mut snap = VtSnapshot::empty(5, 2);
+        let url_a = "https://example.com/a";
+        let url_b = "https://example.com/b";
+        let idx_a = snap.intern_hyperlink(url_a);
+        let idx_b = snap.intern_hyperlink(url_b);
+        let mut push = |idx: u16| {
+            snap.push_cell(
+                "x",
+                CellColor::Default,
+                CellColor::Default,
+                CellAttrs::default(),
+            );
+            if idx != NO_HYPERLINK {
+                snap.set_last_cell_hyperlink(idx);
+            }
+        };
+        push(idx_a);
+        push(idx_a);
+        push(idx_b);
+        push(idx_a);
+        push(NO_HYPERLINK);
+        for _ in 0..5 {
+            snap.push_empty_cell();
+        }
+
+        // Hover on col 0: run spans 0..=1 (the b at col 2 breaks it).
+        let run = snap.hyperlink_run_at(0, 0).unwrap();
+        assert_eq!((run.start_col, run.end_col, run.url), (0, 1, url_a));
+
+        // Hover on col 1: same run, found by walking left.
+        let run = snap.hyperlink_run_at(1, 0).unwrap();
+        assert_eq!((run.start_col, run.end_col, run.url), (0, 1, url_a));
+
+        // Hover on col 2 (different URL): single-cell run with url_b.
+        let run = snap.hyperlink_run_at(2, 0).unwrap();
+        assert_eq!((run.start_col, run.end_col, run.url), (2, 2, url_b));
+
+        // Hover on col 3 (url_a again): single-cell run; the run does not
+        // bridge across the url_b cell.
+        let run = snap.hyperlink_run_at(3, 0).unwrap();
+        assert_eq!((run.start_col, run.end_col, run.url), (3, 3, url_a));
+
+        // No hyperlink at col 4 or anywhere on row 1.
+        assert!(snap.hyperlink_run_at(4, 0).is_none());
+        assert!(snap.hyperlink_run_at(0, 1).is_none());
+    }
+
+    #[test]
+    fn frame_delta_partial_round_trips_hyperlink_table() {
+        let mut base = snapshot(1, 2, 1, &["a", "b"]);
+        let mut next = base.clone();
+        next.generation = 2;
+        next.dirty = DirtySnapshot::Partial(vec![0]);
+        let url_idx = next.intern_hyperlink("https://example.com/x");
+        // Replace cell 0 with a hyperlinked variant.
+        next.cells[0].hyperlink_idx = url_idx;
+        base.dirty = DirtySnapshot::Clean;
+
+        let delta = FrameDelta::from_snapshot(Some(&base), &next);
+        assert!(matches!(delta, FrameDelta::Partial { .. }));
+
+        let applied = apply_frame_delta(Some(&base), &delta).unwrap();
+        assert_eq!(applied.hyperlinks, vec!["https://example.com/x".to_owned()]);
+        let cell = applied.cell_at(0, 0).unwrap();
+        assert_eq!(applied.cell_hyperlink(cell), Some("https://example.com/x"));
+        let other = applied.cell_at(0, 1).unwrap();
+        assert_eq!(applied.cell_hyperlink(other), None);
     }
 }

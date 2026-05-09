@@ -11,13 +11,13 @@ use std::time::Instant;
 use bytes::{Bytes, BytesMut};
 use winit::dpi::PhysicalSize;
 use winit::event::Modifiers;
-use winit::window::Window;
+use winit::window::{CursorIcon, Window};
 
 use seance_mux::{
     ClientRefresh, CursorShape as MuxCursorShape, GridPos, LocalDomain, MuxClient, PaneRef, Resize,
     TerminalModes, ThemeColors,
 };
-use seance_render::{RenderInputs, TerminalRenderer};
+use seance_render::{HoveredLinkRange, RenderInputs, TerminalRenderer};
 
 use crate::mouse::MouseState;
 
@@ -198,6 +198,49 @@ impl SurfaceState {
         if let Ok(mut cb) = arboard::Clipboard::new() {
             let _ = cb.set_text(text);
         }
+    }
+
+    /// Recompute the hovered-link state from the current modifier set and
+    /// last known hover cell, then push it to the renderer and the OS
+    /// cursor icon. Idempotent: silent when nothing changes.
+    pub(crate) fn refresh_hovered_link(&mut self) {
+        let mod_state = self.modifiers.state();
+        let mod_held = mod_state.super_key() && mod_state.shift_key();
+        let new_link = if mod_held {
+            self.mouse.hover_cell.and_then(|(col, row)| {
+                self.mux
+                    .pane_view(self.active_pane)
+                    .and_then(|view| view.hyperlink_run_at(col, row))
+                    .map(|run| HoveredLinkRange {
+                        row: run.row,
+                        start_col: run.start_col,
+                        end_col: run.end_col,
+                    })
+            })
+        } else {
+            None
+        };
+        if self.render_inputs.hovered_link == new_link {
+            return;
+        }
+        let now_active = new_link.is_some();
+        self.render_inputs.hovered_link = new_link;
+        self.window.set_cursor(if now_active {
+            CursorIcon::Pointer
+        } else {
+            CursorIcon::Default
+        });
+        self.mark_dirty();
+    }
+
+    /// Resolve the URL for the currently-hovered hyperlink, if any. Used
+    /// by the click handler to decide whether Cmd+Shift+click should open
+    /// a link.
+    pub(crate) fn hovered_hyperlink_url(&self) -> Option<String> {
+        let (col, row) = self.mouse.hover_cell?;
+        let view = self.mux.pane_view(self.active_pane)?;
+        view.hyperlink_run_at(col, row)
+            .map(|run| run.url.to_owned())
     }
 
     pub(crate) fn paste_from_clipboard(&mut self) {
