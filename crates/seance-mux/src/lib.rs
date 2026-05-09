@@ -6,9 +6,9 @@ use std::sync::{Arc, Mutex, mpsc};
 use bytes::Bytes;
 use seance_protocol::{
     ClientMessage, CodecError, DirtySnapshot, DomainId as ProtocolDomainId, FrameDelta,
-    ImageCacheEvent, PaneEpoch, PaneId, PaneUpdate, ProtocolErrorPayload, RequestId, ServerMessage,
-    ServerSeq, Transport, TransportError, VtSnapshot, apply_frame_delta, decode_server_frame,
-    encode_client_frame,
+    ImageCacheEvent, ImageFormat, ImagePayload, PaneEpoch, PaneId, PaneUpdate,
+    ProtocolErrorPayload, RequestId, ServerMessage, ServerSeq, SnapshotImage, Transport,
+    TransportError, VtSnapshot, apply_frame_delta, decode_server_frame, encode_client_frame,
 };
 use seance_vt::{VtEvent, VtSessionHandle, spawn_vt_session};
 
@@ -25,15 +25,7 @@ type EventSink = Arc<Mutex<Box<dyn Fn(MuxEvent) + Send>>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MuxEvent {
-    Pane { pane: PaneRef, event: PaneEvent },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PaneEvent {
-    FrameDirty,
-    ImageCache(ImageCacheEvent),
-    Exited,
-    Error(String),
+    Wake,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -438,7 +430,7 @@ impl PaneView {
     pub fn frame_source(&self) -> Option<PaneFrame<'_>> {
         self.latest_snapshot
             .as_ref()
-            .map(|snapshot| SnapshotFrameSource::new(snapshot))
+            .map(|snapshot| SnapshotFrameSource::for_pane(snapshot, self.pane))
     }
 
     pub fn generation(&self) -> Option<u64> {
@@ -561,24 +553,12 @@ impl Domain for LocalDomain {
         let pending_tx = self.pending_tx.clone();
         let event_sink = Arc::clone(&self.event_sink);
         let vt = spawn_vt_session(options.into(), move |event| {
-            let (local_event, pane_event) = match event {
-                VtEvent::ContentDirty => (
-                    LocalDomainEvent::ContentDirty { pane: pane_ref },
-                    PaneEvent::FrameDirty,
-                ),
-                VtEvent::Exited => (
-                    LocalDomainEvent::Exited { pane: pane_ref },
-                    PaneEvent::Exited,
-                ),
+            let local_event = match event {
+                VtEvent::ContentDirty => LocalDomainEvent::ContentDirty { pane: pane_ref },
+                VtEvent::Exited => LocalDomainEvent::Exited { pane: pane_ref },
             };
             let _ = pending_tx.send(local_event);
-            emit_mux_event(
-                &event_sink,
-                MuxEvent::Pane {
-                    pane: pane_ref,
-                    event: pane_event,
-                },
-            );
+            emit_mux_event(&event_sink, MuxEvent::Wake);
         })?;
 
         self.panes.insert(pane_ref, LocalPane::new(pane_ref, vt));
@@ -618,15 +598,18 @@ impl Domain for LocalDomain {
                 continue;
             }
 
-            let delta = FrameDelta::from_snapshot(local.server_snapshot.as_deref(), &snapshot);
+            let image_events = snapshot_image_events(pane_ref, &snapshot.images);
+            let frame_snapshot = Arc::new(snapshot_without_image_payloads(&snapshot));
+            let delta =
+                FrameDelta::from_snapshot(local.server_snapshot.as_deref(), &frame_snapshot);
             let update = PaneUpdate {
                 pane: pane_ref,
                 seq: local.alloc_seq(),
-                image_events: Vec::new(),
+                image_events,
                 frame: Some(delta),
             };
             local.history.push(update.clone());
-            local.server_snapshot = Some(snapshot);
+            local.server_snapshot = Some(frame_snapshot);
             sink(DomainEvent::PaneUpdate(update));
         }
         Ok(())
@@ -673,6 +656,47 @@ fn emit_mux_event(sink: &EventSink, event: MuxEvent) {
     if let Ok(sink) = sink.lock() {
         sink(event);
     }
+}
+
+fn snapshot_without_image_payloads(snapshot: &VtSnapshot) -> VtSnapshot {
+    let mut snapshot = snapshot.clone();
+    snapshot.images.clear();
+    snapshot
+}
+
+fn snapshot_image_events(pane: PaneRef, images: &[SnapshotImage]) -> Vec<ImageCacheEvent> {
+    images
+        .iter()
+        .map(|image| {
+            ImageCacheEvent::Put(ImagePayload {
+                key: ImageKey {
+                    pane,
+                    image_id: image.image_id,
+                },
+                width: image.width,
+                height: image.height,
+                byte_len: image.rgba.len() as u64,
+                format: ImageFormat::Rgba8,
+                digest: image_digest(image.width, image.height, &image.rgba),
+                rgba: image.rgba.clone(),
+            })
+        })
+        .collect()
+}
+
+fn image_digest(width: u32, height: u32, rgba: &[u8]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    let width = width.to_le_bytes();
+    let height = height.to_le_bytes();
+    for lane in 0..4u64 {
+        let mut hash = 0xcbf2_9ce4_8422_2325u64 ^ lane;
+        for byte in width.iter().chain(height.iter()).chain(rgba.iter()) {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        out[(lane as usize * 8)..][..8].copy_from_slice(&hash.to_le_bytes());
+    }
+    out
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -896,8 +920,9 @@ impl PaneFrameHistory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use seance_frame::FrameSource;
     use seance_protocol::{
-        CellAttrs, CellColor, CursorInfo, MessageKind, ServerMessage, TerminalModes,
+        CellAttrs, CellColor, CursorInfo, MessageKind, ServerMessage, SnapshotImage, TerminalModes,
         decode_client_frame, encode_server_frame,
     };
 
@@ -918,6 +943,55 @@ mod tests {
             CellAttrs::default(),
         );
         snapshot
+    }
+
+    #[test]
+    fn snapshot_image_events_scope_payloads_to_pane() {
+        let pane = pane_ref();
+        let image = SnapshotImage {
+            image_id: ImageId(9),
+            width: 1,
+            height: 1,
+            rgba: vec![1, 2, 3, 4],
+        };
+
+        let events = snapshot_image_events(pane, std::slice::from_ref(&image));
+
+        assert_eq!(events.len(), 1);
+        let ImageCacheEvent::Put(payload) = &events[0] else {
+            panic!("expected image put event");
+        };
+        assert_eq!(
+            payload.key,
+            ImageKey {
+                pane,
+                image_id: image.image_id,
+            }
+        );
+        assert_eq!(payload.width, image.width);
+        assert_eq!(payload.height, image.height);
+        assert_eq!(payload.byte_len, 4);
+        assert_eq!(payload.format, ImageFormat::Rgba8);
+        assert_ne!(payload.digest, [0; 32]);
+        assert_eq!(payload.rgba, image.rgba);
+    }
+
+    #[test]
+    fn snapshot_without_image_payloads_preserves_frame_state() {
+        let mut snapshot = snapshot(3, "x");
+        snapshot.images.push(SnapshotImage {
+            image_id: ImageId(1),
+            width: 1,
+            height: 1,
+            rgba: vec![0, 0, 0, 0],
+        });
+
+        let stripped = snapshot_without_image_payloads(&snapshot);
+
+        assert!(stripped.images.is_empty());
+        assert_eq!(stripped.generation, snapshot.generation);
+        assert_eq!(stripped.cells, snapshot.cells);
+        assert_eq!(stripped.text, snapshot.text);
     }
 
     #[test]
@@ -952,6 +1026,26 @@ mod tests {
         let snapshot = view.latest_snapshot.as_ref().unwrap();
         assert_eq!(snapshot.cell_text(&snapshot.cells[0]), "b");
         assert_eq!(view.last_applied_seq(), Some(ServerSeq(2)));
+    }
+
+    #[test]
+    fn pane_view_frame_source_carries_pane_ref() {
+        let pane = pane_ref();
+        let mut view = PaneView::new(pane);
+        let update = PaneUpdate {
+            pane,
+            seq: ServerSeq(1),
+            image_events: Vec::new(),
+            frame: Some(FrameDelta::Full {
+                generation: 1,
+                snapshot: snapshot(1, "x"),
+            }),
+        };
+        view.apply_update(&update).unwrap();
+
+        let mut source = view.frame_source().unwrap();
+
+        assert_eq!(source.pane_ref(), pane);
     }
 
     #[derive(Default)]
@@ -1027,6 +1121,45 @@ mod tests {
 
         let refresh = client.refresh_updates().unwrap();
 
+        assert!(refresh.frame_dirty);
+        assert_eq!(client.pane_view(pane).unwrap().generation(), Some(1));
+    }
+
+    #[test]
+    fn mux_client_refresh_collects_image_events() {
+        let pane = pane_ref();
+        let key = ImageKey {
+            pane,
+            image_id: ImageId(3),
+        };
+        let event = ImageCacheEvent::Put(ImagePayload {
+            key,
+            width: 1,
+            height: 1,
+            byte_len: 4,
+            format: ImageFormat::Rgba8,
+            digest: [3; 32],
+            rgba: vec![9, 8, 7, 6],
+        });
+        let update = PaneUpdate {
+            pane,
+            seq: ServerSeq(1),
+            image_events: vec![event.clone()],
+            frame: Some(FrameDelta::Full {
+                generation: 1,
+                snapshot: snapshot(1, "x"),
+            }),
+        };
+        let mut client = MuxClient::new(ScriptedDomain {
+            events: VecDeque::from([DomainEvent::PaneUpdate(update)]),
+            ..ScriptedDomain::default()
+        });
+        client.views.insert(pane, PaneView::new(pane));
+        client.active = Some(pane);
+
+        let refresh = client.refresh_updates().unwrap();
+
+        assert_eq!(refresh.image_events, vec![event]);
         assert!(refresh.frame_dirty);
         assert_eq!(client.pane_view(pane).unwrap().generation(), Some(1));
     }

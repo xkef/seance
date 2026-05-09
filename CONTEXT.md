@@ -37,6 +37,10 @@ _Avoid_: pane service, terminal backend
 `ServerSeq`, zero or more image cache events, and an optional frame delta.
 _Avoid_: VT event, dirty wake
 
+**Mux Wake**: A wake-only notification that the UI should ask the Mux Client to
+drain Domain events. It is not a Pane Update and carries no frame, image, exit,
+or error semantics. _Avoid_: pane event, frame dirty event
+
 **Frame Delta**: A full snapshot or a base-explicit partial frame that can be
 materialized into a VT Snapshot. _Avoid_: latest snapshot diff without base
 
@@ -69,6 +73,7 @@ adapter
 - A **Mux Client** owns one or more **Pane Views**.
 - A **Mux Client** creates one or more **Pane Handles**.
 - A **Mux Client** sends commands through exactly one **Domain**.
+- A **Mux Client** drains **Pane Updates** after a **Mux Wake**.
 - A **Mux Client** applies **Pane Updates** to **Pane Views**.
 - A **Pane Handle** sends commands through its **Mux Client**.
 - A **Pane Handle** exposes render/copy state from one **Pane View**.

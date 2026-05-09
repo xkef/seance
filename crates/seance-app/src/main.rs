@@ -27,7 +27,7 @@ pub enum UserEvent {
     ConfigFileChanged,
     /// A file under `$XDG_CONFIG_HOME/seance/themes/` changed.
     ThemeFileChanged(PathBuf),
-    /// The mux layer published a pane wake or reported child exit.
+    /// The mux layer has updates ready to drain.
     Mux(MuxEvent),
 }
 

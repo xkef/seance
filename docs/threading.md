@@ -652,7 +652,7 @@ state-sharing choices differ.
 | Dedicated renderer   | yes                                    | no                          | no                        | no                                    |
 | VT parse location    | reader thread                          | reader thread               | parser thread             | VT Actor                              |
 | Live VT shared w/UI  | renderer-state mutex + copied snapshot | `FairMutex` around terminal | `Mutex` around terminal   | no; owned `VtSnapshot` only           |
-| Wake mechanism       | `xev.Async`                            | `EventLoopProxy` equivalent | mux notification fan-out  | `MuxEvent::Pane(FrameDirty)`          |
+| Wake mechanism       | `xev.Async`                            | `EventLoopProxy` equivalent | mux notification fan-out  | `MuxEvent::Wake`                      |
 | Write path           | mailbox to writer thread               | mpsc to IO thread           | locked master writer      | `VtCommand::Write(Bytes)` to VT Actor |
 
 Reference source locations from the previous survey remain useful for context:

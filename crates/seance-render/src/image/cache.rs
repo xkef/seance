@@ -7,7 +7,7 @@
 
 use rustc_hash::FxHashMap;
 use seance_frame::{ImageInfo, ImageVisitor};
-use seance_protocol::{ImageCacheEvent, ImageKey, ImagePayload};
+use seance_protocol::{ImageCacheEvent, ImageKey, ImagePayload, PaneRef};
 use wgpu::*;
 
 /// Frames of grace before an unreferenced image is dropped. At ~240Hz
@@ -73,7 +73,7 @@ impl ImageCache {
             height: payload.height,
             rgba: &payload.rgba,
         };
-        self.upload(device, queue, &info);
+        self.upload_keyed(device, queue, payload.key, &info);
     }
 
     pub(crate) fn evict(&mut self, image_key: ImageKey) {
@@ -86,7 +86,31 @@ impl ImageCache {
         }
     }
 
-    pub(crate) fn upload(&mut self, device: &Device, queue: &Queue, info: &ImageInfo<'_>) {
+    pub(crate) fn upload(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        pane: PaneRef,
+        info: &ImageInfo<'_>,
+    ) {
+        self.upload_keyed(
+            device,
+            queue,
+            ImageKey {
+                pane,
+                image_id: info.image_id,
+            },
+            info,
+        );
+    }
+
+    pub(crate) fn upload_keyed(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        key: ImageKey,
+        info: &ImageInfo<'_>,
+    ) {
         if info.width == 0 || info.height == 0 {
             return;
         }
@@ -97,7 +121,7 @@ impl ImageCache {
             return;
         }
 
-        let entry = self.entries.entry(ImageKey::local(info.image_id));
+        let entry = self.entries.entry(key);
         match entry {
             std::collections::hash_map::Entry::Occupied(mut slot) => {
                 let existing = slot.get_mut();
@@ -204,10 +228,11 @@ pub(crate) struct ImageUploader<'a> {
     pub(crate) cache: &'a mut ImageCache,
     pub(crate) device: &'a Device,
     pub(crate) queue: &'a Queue,
+    pub(crate) pane: PaneRef,
 }
 
 impl ImageVisitor for ImageUploader<'_> {
     fn image(&mut self, info: &ImageInfo<'_>) {
-        self.cache.upload(self.device, self.queue, info);
+        self.cache.upload(self.device, self.queue, self.pane, info);
     }
 }

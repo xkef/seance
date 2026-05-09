@@ -1,5 +1,5 @@
 use seance_protocol::{
-    CellAttrs, CellColor, CursorInfo, DirtySnapshot, GridPos, ImageId, PlacementSnapshot,
+    CellAttrs, CellColor, CursorInfo, DirtySnapshot, GridPos, ImageId, PaneRef, PlacementSnapshot,
     VtSnapshot,
 };
 
@@ -35,6 +35,10 @@ pub struct CellView<'a> {
 }
 
 pub trait FrameSource {
+    fn pane_ref(&mut self) -> PaneRef {
+        PaneRef::LOCAL
+    }
+
     fn grid_size(&mut self) -> (u16, u16);
 
     fn cursor(&mut self) -> CursorInfo;
@@ -68,15 +72,24 @@ pub trait ImageVisitor {
 
 pub struct SnapshotFrameSource<'a> {
     snapshot: &'a VtSnapshot,
+    pane: PaneRef,
 }
 
 impl<'a> SnapshotFrameSource<'a> {
     pub fn new(snapshot: &'a VtSnapshot) -> Self {
-        Self { snapshot }
+        Self::for_pane(snapshot, PaneRef::LOCAL)
+    }
+
+    pub fn for_pane(snapshot: &'a VtSnapshot, pane: PaneRef) -> Self {
+        Self { snapshot, pane }
     }
 }
 
 impl FrameSource for SnapshotFrameSource<'_> {
+    fn pane_ref(&mut self) -> PaneRef {
+        self.pane
+    }
+
     fn grid_size(&mut self) -> (u16, u16) {
         (self.snapshot.cols, self.snapshot.rows)
     }
@@ -139,7 +152,7 @@ impl FrameSource for SnapshotFrameSource<'_> {
 mod tests {
     use super::*;
     use seance_protocol::{
-        CellAttrs, CellColor, CursorShape, DirtySnapshot, GridPos, SnapshotImage,
+        CellAttrs, CellColor, CursorShape, DirtySnapshot, GridPos, PaneEpoch, PaneId, SnapshotImage,
     };
 
     fn snapshot_with_cells(cols: u16, rows: u16, texts: &[&str]) -> VtSnapshot {
@@ -234,6 +247,20 @@ mod tests {
         assert_eq!(cells.0.len(), 4);
         assert_eq!(cells.0[0].2, "A");
         assert_eq!(cells.0[2].2, "β");
+    }
+
+    #[test]
+    fn snapshot_frame_source_defaults_and_overrides_pane_ref() {
+        let snapshot = snapshot_with_cells(1, 1, &["x"]);
+        let mut source = SnapshotFrameSource::new(&snapshot);
+        assert_eq!(source.pane_ref(), PaneRef::LOCAL);
+
+        let pane = PaneRef {
+            pane_id: PaneId(7),
+            epoch: PaneEpoch(3),
+        };
+        let mut source = SnapshotFrameSource::for_pane(&snapshot, pane);
+        assert_eq!(source.pane_ref(), pane);
     }
 
     #[test]

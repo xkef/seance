@@ -7,7 +7,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use seance_frame::{PlacementLayer, PlacementVisitor};
-use seance_protocol::{ImageKey, PlacementSnapshot};
+use seance_protocol::{ImageKey, PaneRef, PlacementSnapshot};
 
 use crate::text::FrameInfo;
 
@@ -110,6 +110,7 @@ fn drain_bucket(
 pub(crate) struct PlacementCollector<'a> {
     pub(crate) frame: &'a mut ImageFrame,
     pub(crate) layer: PlacementLayer,
+    pub(crate) pane: PaneRef,
     pub(crate) fi: &'a FrameInfo,
 }
 
@@ -143,7 +144,79 @@ impl PlacementVisitor for PlacementCollector<'_> {
                 dest_rect,
                 source_uv,
             },
-            ImageKey::local(p.image_id),
+            ImageKey {
+                pane: self.pane,
+                image_id: p.image_id,
+            },
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use seance_protocol::{ImageId, PaneEpoch, PaneId};
+
+    fn frame_info() -> FrameInfo {
+        FrameInfo {
+            cell_width: 10.0,
+            cell_height: 20.0,
+            baseline: 16.0,
+            grid_cols: 80,
+            grid_rows: 24,
+            grid_padding: [0.0; 4],
+            bg_color: [0; 4],
+            min_contrast: 1.0,
+            cursor_pos: [0; 2],
+            cursor_visible: true,
+            cursor_color: [0; 4],
+            cursor_wide: false,
+        }
+    }
+
+    fn placement(image_id: ImageId, z: i32) -> PlacementSnapshot {
+        PlacementSnapshot {
+            image_id,
+            placement_id: 1,
+            viewport_col: 0,
+            viewport_row: 0,
+            pixel_width: 10,
+            pixel_height: 10,
+            source_x: 0,
+            source_y: 0,
+            source_width: 10,
+            source_height: 10,
+            image_width: 10,
+            image_height: 10,
+            z,
+        }
+    }
+
+    #[test]
+    fn placement_collector_uses_pane_scoped_image_keys() {
+        let pane = PaneRef {
+            pane_id: PaneId(2),
+            epoch: PaneEpoch(1),
+        };
+        let mut frame = ImageFrame::default();
+        let fi = frame_info();
+        let mut collector = PlacementCollector {
+            frame: &mut frame,
+            layer: PlacementLayer::BelowText,
+            pane,
+            fi: &fi,
+        };
+
+        collector.placement(&placement(ImageId(7), -1));
+        frame.finalize();
+
+        assert_eq!(frame.draws_for(PlacementLayer::BelowText).len(), 1);
+        assert_eq!(
+            frame.draws_for(PlacementLayer::BelowText)[0].image_key,
+            ImageKey {
+                pane,
+                image_id: ImageId(7),
+            }
+        );
     }
 }

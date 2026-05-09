@@ -22,7 +22,7 @@ use winit::window::{Window, WindowId};
 use seance_config::Config;
 use seance_input::InputHandler;
 use seance_mux::{
-    CursorShape as MuxCursorShape, LocalDomain, MuxClient, MuxEvent, PaneEvent, PaneSpawnOptions,
+    CursorShape as MuxCursorShape, LocalDomain, MuxClient, MuxEvent, PaneSpawnOptions,
 };
 use seance_render::{RenderInputs, RendererConfig, TerminalRenderer};
 
@@ -239,7 +239,7 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             UserEvent::ConfigFileChanged => self.reload_config(),
             UserEvent::ThemeFileChanged(path) => self.on_theme_file_changed(&path),
-            UserEvent::Mux(MuxEvent::Pane { pane, event }) => {
+            UserEvent::Mux(MuxEvent::Wake) => {
                 let mut should_exit = false;
                 if let Some(surface) = self.surface_mut() {
                     match surface.refresh_updates() {
@@ -256,19 +256,9 @@ impl ApplicationHandler<UserEvent> for App {
                             if frame_dirty || !image_events.is_empty() {
                                 surface.mark_dirty();
                             }
-                            should_exit |= exited.contains(&surface.active_pane);
-                            should_exit |=
-                                matches!(event, PaneEvent::Exited) && pane == surface.active_pane;
+                            should_exit = exited.contains(&surface.active_pane);
                         }
                         Err(err) => log::warn!("mux refresh failed: {err}"),
-                    }
-                    match event {
-                        PaneEvent::ImageCache(event) => {
-                            surface.renderer.apply_image_cache_event(&event);
-                            surface.mark_dirty();
-                        }
-                        PaneEvent::Error(err) => log::warn!("pane error: {err}"),
-                        PaneEvent::FrameDirty | PaneEvent::Exited => {}
                     }
                 }
                 if should_exit {

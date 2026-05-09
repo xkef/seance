@@ -65,13 +65,14 @@ impl ImageRenderer {
         self.cache.begin_frame();
         self.frame.clear();
 
+        let pane = source.pane_ref();
         let mut uploader = ImageUploader {
             cache: &mut self.cache,
             device,
             queue,
+            pane,
         };
         source.visit_images(&mut uploader);
-
         for layer in [
             PlacementLayer::BelowBg,
             PlacementLayer::BelowText,
@@ -80,6 +81,7 @@ impl ImageRenderer {
             let mut collector = PlacementCollector {
                 frame: &mut self.frame,
                 layer,
+                pane,
                 fi,
             };
             source.visit_placements(layer, &mut collector);
