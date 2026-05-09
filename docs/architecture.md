@@ -41,8 +41,8 @@ Epic index:
 │ winit event loop → seance-input                                      │
 │   key: KeyboardEvent → libghostty-vt key encoder → bytes             │
 │   mouse: wheel/click → SGR 1006 encoding or ScrollLines              │
-│ UI sends VtCommand::Write/Resize/ScrollLines                         │
-│ VT Actor owns the PTY writer ──────────────── write ─────▶ shell     │
+│ UI sends mux PaneInput/ResizePane/ScrollLines                        │
+│ Local mux forwards to VT Actor, which writes PTY ─────────▶ shell    │
 └──────────────────────────────────────────────────────────────────────┘
 
 ┌─ VT/PTY actor ───────────────────────────────────────────────────────┐
@@ -50,9 +50,9 @@ Epic index:
 │   VT Core owns libghostty Terminal/RenderState + Kitty setup         │
 │   nonblocking poll → read PTY → VT Core vt_write()                   │
 │   DEC 2026 gate controls snapshot publication                        │
-│   publish owned Arc<VtSnapshot> → deduped ContentDirty wake          │
-│ UI renders SnapshotFrameSource; it never reads live libghostty state │
-│ UI acks rendered VT Snapshot generations after successful present    │
+│   publish owned Arc<VtSnapshot> → LocalDomain → MuxClient/PaneView   │
+│ UI renders PaneView/FrameSource; it never reads live libghostty state│
+│ UI acks presented VT Snapshot generations after successful present   │
 └──────────────────────────────────────────────────────────────────────┘
 
 ┌─ render pass (wakes on dirty + animation deadline) ──────────────────┐
@@ -76,16 +76,29 @@ Epic index:
 
 ## Crate structure
 
-| Crate                | Owns                                                  | Status              |
-| -------------------- | ----------------------------------------------------- | ------------------- |
-| `seance-app`         | winit event loop, `App`, renderer/redraw driver       | [IMPLEMENTED]       |
-| `seance-input`       | winit → VT key/mouse encoding (via libghostty-vt)     | [IMPLEMENTED]       |
-| `seance-render`      | font pipeline, GPU pipelines, GlyphAtlas, image cache | [IMPLEMENTED]       |
-| `seance-vt`          | VT Core, PTY actor, snapshot/command API              | [IMPLEMENTED/M2]    |
-| `seance-config`      | TOML config + theme files, hot-reload, diffing        | [IMPLEMENTED]       |
-| `seance-bench`       | criterion benches for hot paths                       | [IMPLEMENTED]       |
-| `seance-render-test` | render-harness fixtures (L1 logic, L4 frame snapshot) | [IMPLEMENTED]       |
-| `seance-mux`         | Domain → Window → Tab → SplitTree → Pane              | [PLANNED: [M6][m6]] |
+| Crate                | Owns                                                   | Status           |
+| -------------------- | ------------------------------------------------------ | ---------------- |
+| `seance-app`         | winit event loop, `App`, renderer/redraw driver        | [IMPLEMENTED]    |
+| `seance-protocol`    | owned protocol/frame data, transport frame codec       | [IMPLEMENTED/M6] |
+| `seance-frame`       | render-facing frame traits and borrowed adapters       | [IMPLEMENTED/M6] |
+| `seance-input`       | winit → VT key/mouse encoding (via libghostty-vt)      | [IMPLEMENTED]    |
+| `seance-render`      | font pipeline, GPU pipelines, GlyphAtlas, image cache  | [IMPLEMENTED]    |
+| `seance-vt`          | VT Core, PTY actor, snapshot/command API               | [IMPLEMENTED/M2] |
+| `seance-config`      | TOML config + theme files, hot-reload, diffing         | [IMPLEMENTED]    |
+| `seance-mux`         | Mux Client, Domain adapters, Pane View materialization | [IMPLEMENTED/M6] |
+| `seance-bench`       | criterion benches for hot paths                        | [IMPLEMENTED]    |
+| `seance-render-test` | render-harness fixtures (L1 logic, L4 frame snapshot)  | [IMPLEMENTED]    |
+
+Current dependency direction:
+
+```text
+seance-app -> seance-mux, seance-render, seance-input, seance-config
+seance-mux -> seance-vt, seance-protocol, seance-frame
+seance-vt -> seance-protocol, seance-frame
+seance-render -> seance-protocol, seance-frame
+seance-input -> seance-protocol
+seance-render-test -> seance-vt, seance-protocol, seance-frame
+```
 
 ---
 
@@ -98,10 +111,12 @@ Epic index:
 - **VT Core** [IMPLEMENTED] — owns live libghostty `Terminal`, persistent
   `RenderState`, Kitty setup, cursor/theme seeding, snapshot extraction, and
   dirty-row generation tracking. VT Actor and Headless VT both wrap this Module.
-- **FrameSource** trait [IMPLEMENTED] — exposes `visit_cells()` to the renderer.
-- **Owned snapshots** [IMPLEMENTED] — `VtSnapshot` is built by VT Core and read
-  by the UI through `SnapshotFrameSource`; live libghostty state is never shared
-  with the UI and there is no public live-terminal `FrameSource` adapter.
+- **FrameSource** trait [IMPLEMENTED] — lives in `seance-frame` and exposes
+  `visit_cells()` to the renderer without depending on `seance-vt`.
+- **Owned snapshots** [IMPLEMENTED] — `VtSnapshot` lives in `seance-protocol`,
+  is built by VT Core, and is read through `SnapshotFrameSource`; live
+  libghostty state is never shared with the UI and there is no public
+  live-terminal `FrameSource` adapter.
 - **Row-dirty flags** [IMPLEMENTED] — `VtSnapshot::dirty` reports rows changed
   since the last successfully rendered generation acknowledged by the Pane
   Session. The renderer uses it for partial `bg_cells` upload (#196); text-cell
@@ -215,16 +230,18 @@ Deadline-scheduled (`cf4a1b1`, #24): `ControlFlow::WaitUntil(next_due)` across
 all animation sources — cursor blink, SGR blink, bell, Kitty GIF frames,
 custom-shader animation. Idle terminal = 0 fps. Modelled on WezTerm's
 `has_animation` pattern. PTY wakes are out-of-band via `EventLoopProxy`, fed by
-`VtEvent::ContentDirty` from the VT Actor after snapshot publication.
+pane-scoped `MuxEvent` values from `seance-mux`; the UI then asks the Mux Client
+to drain ordered Domain events into Pane Views.
 
 ### Threading model
 
 VT parsing and all libghostty state live inside VT Core on a Unix VT Actor. The
-actor owns PTY reads/writes, publishes owned `Arc<VtSnapshot>` values through a
-`SnapshotSlot`, and sends deduped `VtEvent::ContentDirty` wakes. The UI keeps
-the latest snapshot in `PaneSession`, renders via `SnapshotFrameSource`, sends
-mutations through `VtSessionHandle` commands, and acknowledges the rendered VT
-Snapshot generation after successful present.
+actor owns PTY reads/writes and publishes owned `Arc<VtSnapshot>` values through
+its local session API. `LocalDomain` wraps that API, stamps pane identity onto
+local events, and publishes ordered Pane Updates. `MuxClient` applies those
+updates into Pane Views and exposes app-facing Pane Handles. The UI renders a
+Pane View via `seance-frame` and acknowledges the presented VT Snapshot
+generation after a successful present.
 
 Resize follows the same rule: the UI computes the new grid size, sends a resize
 command, and redraws after the actor publishes the resized snapshot rather than
@@ -236,9 +253,14 @@ and the renderer-thread revisit metric: see
 
 ---
 
-## Multiplexing model [PLANNED: [M6][m6]]
+## Multiplexing model [IMPLEMENTED/M6 + PLANNED: [M6][m6]]
 
-New `seance-mux` crate:
+Phase 1 `seance-mux` is implemented as `MuxClient` over one implicit local pane.
+`LocalDomain` owns the VT Actor and server-side Pane Update history; `PaneView`
+materializes ordered Frame Deltas and owns selection/view state. This keeps
+`seance-app` from depending on `seance-vt`.
+
+Full #45 mux topology remains planned:
 
 ```
 Domain (trait)                       ← LocalDomain wraps portable-pty
@@ -261,13 +283,15 @@ into one framebuffer** — no render-target-per-pane.
 - IME preedit: winit `Ime::Preedit` → shape inline at cursor column,
   `RenderLayer::ImePreedit`.
 
-The `Domain` trait is the seam future remote transports
-([#221](https://github.com/xkef/seance/issues/221)) attach to. Phase 2-5 (Unix
-socket / SSH / TLS / multi-client) build on it without reshaping the API. The
-renderer-facing accessor is `Pane::frame_source(&self) -> &dyn FrameSource`, not
-`Pane::vt()`, so remote panes (where the VT lives on the other end) satisfy the
-same interface as `LocalDomain` panes. The in-process wire-protocol shape
-closing Phase 1 is tracked in [#222](https://github.com/xkef/seance/issues/222).
+The `Domain` trait is the seam remote transports
+([#221](https://github.com/xkef/seance/issues/221)) attach to. `LocalDomain` is
+the production adapter today; `ProtocolDomain` is a client-side Mux Protocol
+adapter over a `Transport`. Unix socket, SSH, TLS, multi-client attach, full
+tabs, splits, and multi-window UX remain planned. The renderer-facing accessor
+is a Pane View `FrameSource`, not `Pane::vt()`, so remote panes (where the VT
+lives on the other end) satisfy the same interface as local panes. The protocol
+shape for that future work is canonicalized in
+[`docs/protocol.md`](./protocol.md).
 
 ---
 

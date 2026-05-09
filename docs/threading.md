@@ -24,10 +24,10 @@ around it.
 | PTY blocking `read`    | one Unix VT Actor owns PTY read/write/readiness polling   |
 | VT parser (`vt_write`) | VT Core on the actor thread only                          |
 | libghostty ownership   | VT Core owns `Terminal`, `RenderState`, and Kitty setup   |
-| UI read path           | UI reads immutable `Arc<VtSnapshot>` only                 |
-| UI write path          | `VtSessionHandle` commands                                |
+| UI read path           | UI reads mux materialized pane snapshots only             |
+| UI write path          | `seance-mux::Pane` commands over local VT session         |
 | Dirty reset            | render-generation acknowledgement after successful render |
-| Wake from IO           | deduped `VtEvent::ContentDirty` after snapshot publish    |
+| Wake from IO           | pane-scoped mux event after snapshot publish              |
 | DEC 2026 sync output   | VT Actor suppresses publishes while sync mode is active   |
 | Renderer thread        | none; revisit only after profiling                        |
 | Platform scope         | actor v1 is Unix-only while raw-fd polling is used        |
@@ -52,19 +52,21 @@ The UI thread never owns, locks, borrows, moves, or references:
 - libghostty iterators or snapshots
 - raw references into libghostty state
 
-The only shared VT data is séance-owned, immutable snapshot data.
+The only shared VT data is séance-owned, immutable snapshot data. Phase 1 adds
+`seance-mux` between the app and `seance-vt`; the mux materializes ordered pane
+updates but does not share live VT state.
 
 ```
 ┌─ UI thread (winit + wgpu) ───────────────┐   ┌─ VT Actor thread ───────────────┐
 │ owns App, SurfaceState, renderer         │   │ owns VT Core                    │
-│ owns PaneSession + selection             │   │   owns libghostty Terminal      │
-│ reads Arc<VtSnapshot>                    │   │   owns persistent RenderState    │
+│ owns PaneView + selection                │   │   owns libghostty Terminal      │
+│ reads materialized VtSnapshot            │   │   owns persistent RenderState    │
 │ renders SnapshotFrameSource              │   │   extracts owned VtSnapshots     │
-│ acks rendered snapshot generation        │   │ owns PTY master/reader/writer    │
+│ acks presented snapshot generation       │   │ owns PTY master/reader/writer    │
 │ encodes input using snapshot modes       │   │ nonblocking poll loop            │
 │                                          │   │ handles VtCommand                │
-│ VtSessionHandle ───── VtCommand ────────▶│   │ publishes to SnapshotSlot        │
-│ EventLoopProxy ◀──── VtEvent ────────────│   │ dedupes ContentDirty wakes       │
+│ seance-mux::Pane ─── VtCommand ─────────▶│   │ publishes to SnapshotSlot        │
+│ EventLoopProxy ◀──── MuxEvent ───────────│   │ dedupes ContentDirty wakes       │
 └──────────────────────────────────────────┘   └────────────────────────────────┘
 ```
 
@@ -102,7 +104,7 @@ pub struct SnapshotCell {
 }
 
 pub struct SnapshotImage {
-    pub image_id: u32,
+    pub image_id: ImageId,
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
@@ -115,7 +117,7 @@ VT Snapshots carry row-dirty information by render generation:
 - `dirty` is `DirtySnapshot::Full` initially.
 - VT Core records dirty deltas per generation and publishes the union of
   unacknowledged deltas in each VT Snapshot.
-- A Pane Session acknowledges the generation after the renderer successfully
+- A pane view acknowledges the generation after the renderer successfully
   presents the VT Snapshot it used.
 - Stale acknowledgements never clear newer dirty rows. Over-upload is
   acceptable; under-upload is not.
@@ -177,13 +179,17 @@ Preserve the existing behavior exactly:
 
 ### Kitty graphics
 
-Kitty graphics are part of the v1 snapshot for correctness.
+Kitty graphics are part of the v1 snapshot for correctness. The protocol seam
+also defines ordered image cache events for remote transports.
 
-- `VtSnapshot::visit_images()` yields borrowed image info from `SnapshotImage`.
+- `VtSnapshot::visit_images()` yields borrowed image info from `SnapshotImage`
+  on the current in-process compatibility path.
 - `VtSnapshot::visit_placements(layer)` filters placement snapshots by layer.
-- v1 may copy image payloads more often than ideal.
-- Later optimizations can add image payload hashes or incremental image payload
-  delivery.
+- `PaneUpdate.image_events` apply before the frame in the same ordered update.
+- Remote image payloads use `ImageCacheEvent` puts/chunks/evicts keyed by
+  `ImageKey { pane, image_id }`.
+- Renderer LRU eviction is local. A missing referenced image becomes
+  `ImageCacheMiss`, not a panic or server eviction.
 
 ---
 
@@ -237,8 +243,9 @@ Wake ordering:
 1. VT Actor builds an owned `VtSnapshot`.
 2. VT Actor publishes it to `SnapshotSlot`.
 3. VT Actor sends/dedupes `VtEvent::ContentDirty`.
-4. UI handles `ContentDirty`, clears the pending flag before cloning the latest
-   snapshot, stores it in `PaneSession`, and marks the surface dirty.
+4. `LocalDomain` handles `ContentDirty`, clears the pending flag before cloning
+   the latest snapshot, materializes a Pane Update, and forwards a pane-scoped
+   dirty wake to the app.
 
 Clearing before the clone prevents a publish that races with UI handling from
 being lost behind an already-set pending flag. Extra wakes are acceptable;
@@ -247,13 +254,50 @@ missed wakes are not.
 Acknowledgement ordering:
 
 1. The renderer builds and presents a frame from a VT Snapshot.
-2. If present succeeds, the Pane Session sends `AckRendered(generation)` for
-   that VT Snapshot.
+2. If present succeeds, the Pane Handle sends `AckRendered(generation)` through
+   `MuxClient` and `LocalDomain` for that VT Snapshot.
 3. VT Core drops dirty deltas for generations `<= generation`.
 4. VT Actor does not publish solely because of an acknowledgement.
 
 Dirty rows are never cleared when `ContentDirty` is handled and are never
 cleared on snapshot publication.
+
+---
+
+## Mux protocol seam
+
+`seance-mux` is the app-facing mux layer. `LocalDomain` owns the
+`VtSessionHandle`, stamps a `PaneRef` onto local events, and produces ordered
+Pane Updates. `MuxClient` materializes `FrameDelta` values into client-side Pane
+Views and exposes app-facing Pane Handles. `seance-app` no longer imports
+`seance-vt` directly.
+
+The production single-process local path uses `LocalDomain` directly instead of
+serializing local commands as a ritual. The Mux Protocol path lives in
+`ProtocolDomain`, which implements the same Domain seam over a `Transport` using
+length-prefixed postcard envelopes. Client commands encode as `ClientMessage`
+values, and server pane updates encode as `ServerMessage::PaneUpdate` before a
+Pane View materializes them. This keeps future UDS/SSH/TLS transports on the
+same Domain Interface without making the local path pay for transport framing.
+
+The local materializer distinguishes three counters:
+
+- VT extraction `generation`, assigned by VT Core snapshots.
+- Server-side `ServerSeq`, assigned by the mux to ordered pane updates.
+- Renderer-presented generation, acknowledged after a successful present.
+
+`FrameDelta::Full` carries a full `VtSnapshot`. `FrameDelta::Partial` carries
+`base_generation`, new `generation`, dimensions, cursor, modes, placements, and
+row-local `RowDelta` values. Applying a partial rewrites the materialized text
+arena so all `SnapshotCell.text_start` offsets remain valid. If the base
+generation or dimensions do not match, the client returns `NeedFull` and uses a
+full reset.
+
+The per-pane history ring retains ordered `PaneUpdate`s plus the latest full
+update for first attach and resume. Reconnects replay retained updates when the
+client's `last_seen_seq` is available; otherwise the mux sends a resync/full
+reset. See [`docs/protocol.md`](./protocol.md) for handshake, envelope, image
+cache, flow-control, and error taxonomy details.
 
 ---
 
@@ -493,35 +537,26 @@ renderer-side theme reload can repaint from the same snapshot.
 The app-side OS-window bundle is `SurfaceState`. The name `Window` is reserved
 for the future mux domain (`Window -> Tab -> SplitTree -> Pane`).
 
-`SurfaceState` contains a pane wrapper even while v1 has one pane per surface:
-
-```rust
-pub(crate) struct PaneSession {
-    pub(crate) vt: VtSessionHandle,
-    pub(crate) latest_snapshot: Option<Arc<VtSnapshot>>,
-    pub(crate) selection: Option<Selection>,
-}
-```
-
-For v1, `SurfaceState` holds a single `pane: PaneSession`; `VtSessionHandle` is
-not baked directly into the surface as the long-term model.
+`SurfaceState` contains a `seance_mux::Pane` even while v1 has one pane per
+surface. The pane owns the local VT handle internally, the latest materialized
+snapshot, pane-update history, and selection/view state.
 
 ### Reads vs commands
 
-UI reads only from `PaneSession::latest_snapshot`:
+UI reads only through pane-view accessors:
 
 - modes for keyboard and mouse encoding
 - selection text for copy
 - frame source for rendering
 
-UI mutates VT only through `VtSessionHandle` commands:
+UI mutates the terminal only through `seance_mux::Pane` commands:
 
 - write
 - resize
 - scroll lines
 - set theme colors
 - set cursor shape
-- acknowledge rendered VT Snapshot generations
+- acknowledge presented VT Snapshot generations
 
 ### Resize flow
 
@@ -531,20 +566,21 @@ metrics, scale factor, and padding.
 1. winit resize, scale, font, or padding changes
 2. UI updates renderer surface/metrics/padding
 3. UI computes `(cols, rows)` through `renderer.grid_size()`
-4. UI sends `VtCommand::Resize`
-5. VT Actor resizes VT Core and PTY, then publishes a snapshot
-6. UI redraws on `ContentDirty`
+4. UI sends `Pane::resize`
+5. Local mux forwards the VT resize command
+6. VT Actor resizes VT Core and PTY, then publishes a snapshot
+7. UI redraws on pane-scoped frame dirty
 
 On `WindowEvent::Resized`, do not force an immediate draw with a stale snapshot.
 Wait for the VT Actor's resized snapshot.
 
 ### Render acknowledgement
 
-`App::draw()` records the generation of the Pane Session's latest VT Snapshot,
-renders through `SnapshotFrameSource`, and sends `ack_rendered(generation)` only
-when `TerminalRenderer::render()` returns `true`. It does not acknowledge while
-the surface is occluded and repeated acknowledgements of the same generation are
-safe.
+`App::draw()` records the generation of the pane view's latest materialized VT
+Snapshot, renders through `SnapshotFrameSource`, and sends
+`ack_presented(generation)` only when `TerminalRenderer::render()` returns
+`true`. It does not acknowledge while the surface is occluded and repeated
+acknowledgements of the same generation are safe.
 
 `ContentDirty` wake dedupe only controls event-loop wakeups. It is not a dirty
 acknowledgement mechanism.
@@ -610,14 +646,14 @@ background shaping task over moving the surface itself.
 All surveyed terminals keep VT parsing off the windowing thread, but their exact
 state-sharing choices differ.
 
-| Aspect               | Ghostty                                | Alacritty                   | WezTerm                   | séance v1 target                        |
-| -------------------- | -------------------------------------- | --------------------------- | ------------------------- | --------------------------------------- |
-| Threads per terminal | 4 (UI / renderer / IO-write / read)    | 2 (UI / reader+parser)      | 3+ (UI / reader / parser) | 2 (UI / VT Actor)                       |
-| Dedicated renderer   | yes                                    | no                          | no                        | no                                      |
-| VT parse location    | reader thread                          | reader thread               | parser thread             | VT Actor                                |
-| Live VT shared w/UI  | renderer-state mutex + copied snapshot | `FairMutex` around terminal | `Mutex` around terminal   | no; owned `VtSnapshot` only             |
-| Wake mechanism       | `xev.Async`                            | `EventLoopProxy` equivalent | mux notification fan-out  | `VtEvent::ContentDirty` via app adapter |
-| Write path           | mailbox to writer thread               | mpsc to IO thread           | locked master writer      | `VtCommand::Write(Bytes)` to VT Actor   |
+| Aspect               | Ghostty                                | Alacritty                   | WezTerm                   | séance v1 target                      |
+| -------------------- | -------------------------------------- | --------------------------- | ------------------------- | ------------------------------------- |
+| Threads per terminal | 4 (UI / renderer / IO-write / read)    | 2 (UI / reader+parser)      | 3+ (UI / reader / parser) | 2 (UI / VT Actor)                     |
+| Dedicated renderer   | yes                                    | no                          | no                        | no                                    |
+| VT parse location    | reader thread                          | reader thread               | parser thread             | VT Actor                              |
+| Live VT shared w/UI  | renderer-state mutex + copied snapshot | `FairMutex` around terminal | `Mutex` around terminal   | no; owned `VtSnapshot` only           |
+| Wake mechanism       | `xev.Async`                            | `EventLoopProxy` equivalent | mux notification fan-out  | `MuxEvent::Wake`                      |
+| Write path           | mailbox to writer thread               | mpsc to IO thread           | locked master writer      | `VtCommand::Write(Bytes)` to VT Actor |
 
 Reference source locations from the previous survey remain useful for context:
 
@@ -668,7 +704,7 @@ shipped under the actor model or was superseded by it.
 - Do not make or assert `libghostty_vt::Terminal: Send`.
 - Do not depend on a forked `libghostty-rs` for thread-safety.
 - Do not share libghostty state behind a mutex.
-- Do not add mux `PaneId` routing in v1.
+- Do not implement full Domain/tabs/splits/multi-client transport in v1.
 - Do not add bell/title/clipboard event expansion in this migration.
 - Do not render a stale snapshot immediately after resize unless a later
   measured requirement proves it necessary.

@@ -1,20 +1,25 @@
 [package]
 name = "seance-render"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "GPU-accelerated text rendering for seance (cosmic-text + wgpu)"
 
 [dependencies]
-bytemuck = { version = "1", features = ["derive"] }
-cosmic-text = "0.18"
-etagere = "0.3"
+# internal
+seance-config.workspace = true
+seance-frame.workspace = true
+seance-protocol.workspace = true
+
+# external
+bytemuck.workspace = true
+cosmic-text.workspace = true
+etagere.workspace = true
 log.workspace = true
-rustc-hash = "2"
-seance-config = { path = "../seance-config" }
-seance-vt = { path = "../seance-vt" }
-wgpu = "29"
-winit = "0.30"
+rustc-hash.workspace = true
+wgpu.workspace = true
+winit.workspace = true
 
 [lints]
 workspace = true

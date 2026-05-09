@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use seance_vt::VtEvent;
+use seance_mux::MuxEvent;
 use winit::event_loop::EventLoop;
 
 mod app;
@@ -18,7 +18,7 @@ use app::App;
 
 /// Events forwarded from background threads into the winit event loop.
 /// Using `EventLoopProxy` keeps every off-thread signal — config reloads,
-/// VT snapshot publication, child exit — funnelled onto the single UI thread
+/// pane frame publication, child exit — funnelled onto the single UI thread
 /// that owns the renderer, so there are no torn reads of `Config` or races
 /// against frame state.
 #[derive(Debug, Clone)]
@@ -27,8 +27,8 @@ pub enum UserEvent {
     ConfigFileChanged,
     /// A file under `$XDG_CONFIG_HOME/seance/themes/` changed.
     ThemeFileChanged(PathBuf),
-    /// The VT actor published a snapshot or reported child exit.
-    Vt(VtEvent),
+    /// The mux layer has updates ready to drain.
+    Mux(MuxEvent),
 }
 
 fn main() {

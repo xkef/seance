@@ -1,6 +1,7 @@
 use crate::renderer::RenderInputs;
 use crate::text::FrameInfo;
 use seance_config::{CursorStyle, Theme};
+use seance_protocol::CursorShape as ProtocolCursorShape;
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -22,12 +23,12 @@ impl From<CursorStyle> for CursorShape {
     }
 }
 
-impl From<seance_vt::CursorShape> for CursorShape {
-    fn from(s: seance_vt::CursorShape) -> Self {
+impl From<ProtocolCursorShape> for CursorShape {
+    fn from(s: ProtocolCursorShape) -> Self {
         match s {
-            seance_vt::CursorShape::Block => Self::Block,
-            seance_vt::CursorShape::Bar => Self::Bar,
-            seance_vt::CursorShape::Underline => Self::Underline,
+            ProtocolCursorShape::Block => Self::Block,
+            ProtocolCursorShape::Bar => Self::Bar,
+            ProtocolCursorShape::Underline => Self::Underline,
         }
     }
 }
@@ -135,11 +136,8 @@ mod tests {
 
     #[test]
     fn vt_cursor_shape_maps_to_overlay_shape() {
-        assert_eq!(CursorShape::from(seance_vt::CursorShape::Block) as u32, 1);
-        assert_eq!(
-            CursorShape::from(seance_vt::CursorShape::Underline) as u32,
-            2
-        );
-        assert_eq!(CursorShape::from(seance_vt::CursorShape::Bar) as u32, 3);
+        assert_eq!(CursorShape::from(ProtocolCursorShape::Block) as u32, 1);
+        assert_eq!(CursorShape::from(ProtocolCursorShape::Underline) as u32, 2);
+        assert_eq!(CursorShape::from(ProtocolCursorShape::Bar) as u32, 3);
     }
 }

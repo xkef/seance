@@ -4,7 +4,7 @@
 //! phases add a lazy headless wgpu instance for L5 render-to-texture;
 //! Phase A keeps GPU state out of scope.
 
-use seance_vt::SnapshotFrameSource;
+use seance_frame::SnapshotFrameSource;
 use seance_vt::test_support::HeadlessTerminal;
 
 use crate::clock::TestClock;

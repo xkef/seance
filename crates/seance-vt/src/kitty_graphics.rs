@@ -4,7 +4,9 @@ use libghostty_vt::kitty::graphics as kg;
 use libghostty_vt::render::{CellIteration, CellIterator, RowIterator};
 use libghostty_vt::style::{self, PaletteIndex};
 
-use crate::frame::{ImageInfo, ImageVisitor, PlacementLayer, PlacementSnapshot, PlacementVisitor};
+use crate::frame::{
+    ImageId, ImageInfo, ImageVisitor, PlacementLayer, PlacementSnapshot, PlacementVisitor,
+};
 use crate::snapshot::SnapshotImage;
 
 #[derive(Default)]
@@ -171,7 +173,7 @@ fn walk_placements(
             continue;
         };
         visitor.placement(&PlacementSnapshot {
-            image_id,
+            image_id: ImageId::from(image_id),
             placement_id,
             viewport_col: vpos.col,
             viewport_row: vpos.row,
@@ -232,7 +234,7 @@ fn walk_images(vt: &VtTerminal<'static, 'static>, visitor: &mut dyn ImageVisitor
             rgba.len()
         );
         visitor.image(&ImageInfo {
-            image_id,
+            image_id: ImageId::from(image_id),
             width,
             height,
             rgba,
@@ -516,7 +518,7 @@ fn emit_virtual_run(
     let source_h = px_per_row.round() as u32;
 
     visitor.placement(&PlacementSnapshot {
-        image_id: run.image_id,
+        image_id: ImageId::from(run.image_id),
         placement_id: run.placement_id,
         viewport_col: run.screen_col_start as i32,
         viewport_row: run.screen_row as i32,
