@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use seance_frame::SnapshotFrameSource;
-use seance_links::{DetectedLink, LinkDetector, LinkModifiers};
 use seance_protocol::{
     CursorShape, DirtySnapshot, FrameDelta, GridPos, HyperlinkRun, PaneRef, PaneUpdate, Selection,
     TerminalModes, VtSnapshot, apply_frame_delta,
 };
 
 use crate::PaneError;
+use crate::links::{DetectedLink, LinkDetector, LinkModifiers};
 
 pub type PaneFrame<'a> = SnapshotFrameSource<'a>;
 

@@ -13,10 +13,9 @@ use winit::dpi::PhysicalSize;
 use winit::event::Modifiers;
 use winit::window::{CursorIcon, Window};
 
-use seance_links::{DetectedLink, LinkDetector, LinkModifiers, LinkTarget};
 use seance_mux::{
-    ClientRefresh, CursorShape as MuxCursorShape, GridPos, LocalDomain, MuxClient, PaneRef, Resize,
-    TerminalModes, ThemeColors,
+    ClientRefresh, CursorShape as MuxCursorShape, DetectedLink, GridPos, LinkDetector,
+    LinkModifiers, LinkTarget, LocalDomain, MuxClient, PaneRef, Resize, TerminalModes, ThemeColors,
 };
 use seance_render::{HoveredLinkRange, RenderInputs, TerminalRenderer};
 

@@ -6,7 +6,6 @@ members = [
     "crates/seance-config",
     "crates/seance-frame",
     "crates/seance-input",
-    "crates/seance-links",
     "crates/seance-mux",
     "crates/seance-protocol",
     "crates/seance-render",
@@ -25,7 +24,6 @@ license = "MIT OR Apache-2.0"
 seance-config = { path = "crates/seance-config" }
 seance-frame = { path = "crates/seance-frame" }
 seance-input = { path = "crates/seance-input" }
-seance-links = { path = "crates/seance-links" }
 seance-mux = { path = "crates/seance-mux" }
 seance-protocol = { path = "crates/seance-protocol" }
 seance-render = { path = "crates/seance-render" }

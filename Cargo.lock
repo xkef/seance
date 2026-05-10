@@ -2439,7 +2439,6 @@ dependencies = [
  "raw-window-handle",
  "seance-config",
  "seance-input",
- "seance-links",
  "seance-mux",
  "seance-render",
  "winit",
@@ -2481,22 +2480,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "seance-links"
-version = "0.1.0"
-dependencies = [
- "fancy-regex",
- "pretty_assertions",
- "seance-protocol",
-]
-
-[[package]]
 name = "seance-mux"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "fancy-regex",
  "log",
+ "pretty_assertions",
  "seance-frame",
- "seance-links",
  "seance-protocol",
  "seance-vt",
 ]
@@ -2536,7 +2527,7 @@ dependencies = [
  "rand_core",
  "rand_pcg",
  "seance-frame",
- "seance-links",
+ "seance-mux",
  "seance-protocol",
  "seance-vt",
  "unicode-width",

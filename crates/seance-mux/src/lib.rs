@@ -3,6 +3,7 @@ mod domain;
 mod error;
 mod events;
 mod history;
+pub mod links;
 mod local;
 mod pane_view;
 mod protocol_domain;
@@ -12,6 +13,10 @@ pub use domain::{Domain, PaneSpawnOptions};
 pub use error::{PaneError, SpawnError};
 pub use events::{ClientRefresh, DomainEvent, MuxEvent};
 pub use history::{PaneFrameHistory, ReplayBatch};
+pub use links::{
+    DetectedLink, GridRange, LinkAction, LinkDetector, LinkHighlight, LinkModifiers, LinkRule,
+    LinkSource, LinkTarget,
+};
 pub use local::LocalDomain;
 pub use pane_view::{PaneFrame, PaneView};
 pub use protocol_domain::ProtocolDomain;

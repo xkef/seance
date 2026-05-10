@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use seance_links::LinkTarget;
+use seance_mux::LinkTarget;
 
 const ALLOWED_SCHEMES: &[&str] = &["http", "https", "ftp", "ftps", "file", "mailto"];
 

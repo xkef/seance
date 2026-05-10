@@ -1869,7 +1869,8 @@ mod tests {
             shape: Some(CursorShape::Underline),
         };
         snap.modes.bracketed_paste = true;
-        snap.pwd = Some("/Users/kk/code/seance".to_string());
+        let pwd = std::env::temp_dir().join("seance-protocol-test-pwd");
+        snap.pwd = Some(pwd.to_string_lossy().into_owned());
         snap.rows_meta[0] = RowMeta {
             wrap: true,
             wrap_continuation: false,

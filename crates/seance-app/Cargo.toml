@@ -14,7 +14,6 @@ path = "src/main.rs"
 # internal
 seance-config.workspace = true
 seance-input.workspace = true
-seance-links.workspace = true
 seance-mux.workspace = true
 seance-render.workspace = true
 

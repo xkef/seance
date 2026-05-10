@@ -4,7 +4,7 @@
 //! no fonts, no snapshots. Each test names one observable VT
 //! behavior; a failure points at the specific invariant that regressed.
 
-use seance_links::{LinkDetector, LinkModifiers, LinkSource, LinkTarget};
+use seance_mux::{LinkDetector, LinkModifiers, LinkSource, LinkTarget};
 use seance_protocol::GridPos;
 use seance_vt::test_support::HeadlessTerminal;
 
@@ -151,9 +151,11 @@ fn eza_symlink_output_uses_osc8_for_name_and_path_rule_for_target() {
 #[test]
 fn osc7_pwd_survives_snapshot_extraction() {
     let mut term = HeadlessTerminal::new(20, 4).expect("construct");
-    term.feed(b"\x1b]7;file://localhost/Users/kk/code/seance\x1b\\");
+    let pwd = std::env::temp_dir().join("seance-osc7-pwd");
+    let payload = format!("\x1b]7;file://localhost{}\x1b\\", pwd.display());
+    term.feed(payload.as_bytes());
 
     let snapshot = term.snapshot().expect("snapshot");
 
-    assert_eq!(snapshot.pwd.as_deref(), Some("/Users/kk/code/seance"));
+    assert_eq!(snapshot.pwd.as_deref(), pwd.to_str());
 }

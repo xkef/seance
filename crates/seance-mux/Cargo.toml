@@ -9,13 +9,17 @@ description = "Local mux facade and pane materialization for seance"
 [dependencies]
 # internal
 seance-frame.workspace = true
-seance-links.workspace = true
 seance-protocol.workspace = true
 seance-vt.workspace = true
 
 # external
 bytes.workspace = true
+fancy-regex.workspace = true
 log.workspace = true
+
+[dev-dependencies]
+# external
+pretty_assertions.workspace = true
 
 [lints]
 workspace = true

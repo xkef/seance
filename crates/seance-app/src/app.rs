@@ -21,9 +21,9 @@ use winit::window::{Window, WindowId};
 
 use seance_config::Config;
 use seance_input::InputHandler;
-use seance_links::{LinkDetector, LinkModifiers};
 use seance_mux::{
-    CursorShape as MuxCursorShape, LocalDomain, MuxClient, MuxEvent, PaneSpawnOptions,
+    CursorShape as MuxCursorShape, LinkDetector, LinkModifiers, LocalDomain, MuxClient, MuxEvent,
+    PaneSpawnOptions,
 };
 use seance_render::{RenderInputs, RendererConfig, TerminalRenderer};
 
