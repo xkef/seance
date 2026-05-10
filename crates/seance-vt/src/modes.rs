@@ -1,1 +1,1 @@
-pub use seance_protocol::{MouseTracking, TerminalModes};
+pub use seance_protocol::TerminalModes;
