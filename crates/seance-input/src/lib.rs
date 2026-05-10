@@ -100,16 +100,16 @@ fn mouse_action_to_libghostty(a: MouseAction) -> mouse::Action {
     }
 }
 
-fn map_mouse_button(button: MouseButton) -> Option<mouse::Button> {
+fn map_mouse_button(button: MouseButton) -> mouse::Button {
     match button {
-        MouseButton::Left => Some(mouse::Button::Left),
-        MouseButton::Right => Some(mouse::Button::Right),
-        MouseButton::Middle => Some(mouse::Button::Middle),
+        MouseButton::Left => mouse::Button::Left,
+        MouseButton::Right => mouse::Button::Right,
+        MouseButton::Middle => mouse::Button::Middle,
         // winit "Back"/"Forward" are the side buttons; xterm conventionally
         // assigns them as buttons 8 and 9.
-        MouseButton::Back => Some(mouse::Button::Eight),
-        MouseButton::Forward => Some(mouse::Button::Nine),
-        MouseButton::Other(_) => Some(mouse::Button::Unknown),
+        MouseButton::Back => mouse::Button::Eight,
+        MouseButton::Forward => mouse::Button::Nine,
+        MouseButton::Other(_) => mouse::Button::Unknown,
     }
 }
 
@@ -245,7 +245,7 @@ impl InputHandler {
         let mut event = mouse::Event::new().ok()?;
         event
             .set_action(mouse_action_to_libghostty(input.action))
-            .set_button(input.button.and_then(map_mouse_button))
+            .set_button(input.button.map(map_mouse_button))
             .set_mods(keymap::map_mods(&input.mods))
             .set_position(mouse::Position {
                 x: input.position_px.0,
