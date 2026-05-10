@@ -8,11 +8,11 @@ mod apply;
 mod command;
 mod events;
 mod keybinds;
+mod link_open;
 mod mouse;
 mod platform;
 mod reload;
 mod surface_state;
-mod url_open;
 mod watcher;
 
 use app::App;

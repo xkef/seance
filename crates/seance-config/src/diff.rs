@@ -47,6 +47,8 @@ pub struct ConfigDiff {
     /// `[input]` section changed — caller must push the new settings to
     /// `InputHandler` (e.g. `macos_option_as_alt`).
     pub input_changed: bool,
+    /// `[links]` section changed — caller must rebuild link detection state.
+    pub links_changed: bool,
 }
 
 impl ConfigDiff {
@@ -75,6 +77,7 @@ impl ConfigDiff {
             || old.mouse.hide_while_typing != new.mouse.hide_while_typing;
 
         let input_changed = old.input.macos_option_as_alt != new.input.macos_option_as_alt;
+        let links_changed = old.links != new.links;
 
         Self {
             theme_changed,
@@ -87,6 +90,7 @@ impl ConfigDiff {
             window_padding_changed,
             repaint_only,
             input_changed,
+            links_changed,
         }
     }
 
@@ -101,7 +105,8 @@ impl ConfigDiff {
             || self.font_fallback_changed
             || self.window_padding_changed
             || self.repaint_only
-            || self.input_changed)
+            || self.input_changed
+            || self.links_changed)
     }
 }
 
@@ -231,6 +236,17 @@ mod tests {
         b.input.macos_option_as_alt = MacosOptionAsAlt::Left;
         let d = ConfigDiff::between(&a, &b);
         assert!(d.input_changed);
+        assert!(!d.repaint_only);
+        assert!(!d.theme_changed);
+    }
+
+    #[test]
+    fn links_change_is_detected_separately() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.links.paths = false;
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.links_changed);
         assert!(!d.repaint_only);
         assert!(!d.theme_changed);
     }

@@ -6,6 +6,7 @@ use libghostty_vt::error::Error as LibghosttyError;
 use libghostty_vt::render::{CellIteration, CellIterator, CursorVisualStyle, Dirty, RowIterator};
 use libghostty_vt::style::{self, PaletteIndex, RgbColor};
 use libghostty_vt::terminal::{Mode, Point, PointCoordinate};
+use seance_protocol::RowMeta;
 
 use crate::core::VtCoreError;
 use crate::frame::{CellAttrs, CellColor, CursorInfo, CursorShape, DirtySnapshot};
@@ -42,6 +43,11 @@ pub(crate) fn extract_snapshot(
 
     let mut out = VtSnapshot::empty(cols, rows);
     out.modes = modes;
+    out.pwd = vt
+        .pwd()
+        .ok()
+        .filter(|pwd| !pwd.is_empty())
+        .map(str::to_owned);
 
     let dirty_delta;
     // Cells whose URL we still need to query, deferred until the
@@ -100,12 +106,19 @@ pub(crate) fn extract_snapshot(
             let mut cell_iter = cells_iter
                 .update(row)
                 .map_err(|_| VtCoreError::libghostty("cell iterator update"))?;
+            let raw_row = row.raw_row().ok();
+            if let Some(raw) = raw_row
+                && let Some(meta) = out.rows_meta.get_mut(usize::from(row_idx))
+            {
+                *meta = RowMeta {
+                    wrap: raw.is_wrapped().unwrap_or(false),
+                    wrap_continuation: raw.is_wrap_continuation().unwrap_or(false),
+                };
+            }
             // Skip the per-cell hyperlink probe entirely when the row
             // has no OSC 8 cells. libghostty's flag may have false
             // positives so the per-cell check still gates URL lookup.
-            let row_has_links = row
-                .raw_row()
-                .ok()
+            let row_has_links = raw_row
                 .and_then(|r| r.has_hyperlink().ok())
                 .unwrap_or(false);
             for col in 0..cols {

@@ -1,0 +1,21 @@
+[package]
+name = "seance-links"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "OSC 8 and text link detection for seance"
+
+[dependencies]
+# internal
+seance-protocol.workspace = true
+
+# external
+fancy-regex.workspace = true
+
+[dev-dependencies]
+# external
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true

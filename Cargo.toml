@@ -6,6 +6,7 @@ members = [
     "crates/seance-config",
     "crates/seance-frame",
     "crates/seance-input",
+    "crates/seance-links",
     "crates/seance-mux",
     "crates/seance-protocol",
     "crates/seance-render",
@@ -24,6 +25,7 @@ license = "MIT OR Apache-2.0"
 seance-config = { path = "crates/seance-config" }
 seance-frame = { path = "crates/seance-frame" }
 seance-input = { path = "crates/seance-input" }
+seance-links = { path = "crates/seance-links" }
 seance-mux = { path = "crates/seance-mux" }
 seance-protocol = { path = "crates/seance-protocol" }
 seance-render = { path = "crates/seance-render" }
@@ -36,6 +38,7 @@ bytemuck = { version = "1", features = ["derive"] }
 cosmic-text = "0.18"
 env_logger = "0.11"
 etagere = "0.3"
+fancy-regex = "0.11"
 include_dir = "0.7"
 insta = { version = "1", features = ["glob", "yaml"] }
 libc = "0.2"

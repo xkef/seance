@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use seance_frame::SnapshotFrameSource;
+use seance_links::{DetectedLink, LinkDetector, LinkModifiers};
 use seance_protocol::{
     CursorShape, DirtySnapshot, FrameDelta, GridPos, HyperlinkRun, PaneRef, PaneUpdate, Selection,
     TerminalModes, VtSnapshot, apply_frame_delta,
@@ -78,6 +79,12 @@ impl PaneView {
             .map_or(TerminalModes::default(), |snapshot| snapshot.modes)
     }
 
+    pub fn pwd(&self) -> Option<&str> {
+        self.latest_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.pwd.as_deref())
+    }
+
     pub fn has_selection(&self) -> bool {
         self.selection.is_some()
     }
@@ -123,11 +130,21 @@ impl PaneView {
         snapshot.selection_text(selection)
     }
 
-    /// Resolve the contiguous OSC 8 hyperlink run at `(col, row)`, if any.
-    pub fn hyperlink_run_at(&self, col: u16, row: u16) -> Option<HyperlinkRun<'_>> {
+    pub fn osc8_run_at(&self, col: u16, row: u16) -> Option<HyperlinkRun<'_>> {
         self.latest_snapshot
             .as_ref()
-            .and_then(|snapshot| snapshot.hyperlink_run_at(col, row))
+            .and_then(|snapshot| snapshot.osc8_run_at(col, row))
+    }
+
+    pub fn link_at(
+        &self,
+        pos: GridPos,
+        detector: &LinkDetector,
+        modifiers: LinkModifiers,
+    ) -> Option<DetectedLink> {
+        self.latest_snapshot
+            .as_ref()
+            .and_then(|snapshot| detector.link_at(snapshot, pos, modifiers))
     }
 
     fn ensure_pane(&self, pane: PaneRef) -> Result<(), PaneError> {

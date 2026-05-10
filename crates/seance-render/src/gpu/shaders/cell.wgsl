@@ -113,10 +113,20 @@ fn is_in_hovered_link(col: u32, row: u32) -> bool {
     }
     let s = uniforms.hovered_link_start;
     let e = uniforms.hovered_link_end;
-    if row != s.y {
+
+    if row < s.y || row > e.y {
         return false;
     }
-    return col >= s.x && col <= e.x;
+    if s.y == e.y {
+        return col >= s.x && col <= e.x;
+    }
+    if row == s.y {
+        return col >= s.x;
+    }
+    if row == e.y {
+        return col <= e.x;
+    }
+    return true;
 }
 
 // ================================================================

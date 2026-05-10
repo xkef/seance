@@ -7,9 +7,6 @@ const MULTI_CLICK_WINDOW: Duration = Duration::from_millis(500);
 pub(crate) struct MouseState {
     pub(crate) cursor_pos: PhysicalPosition<f64>,
     pub(crate) is_down: bool,
-    /// Grid cell currently under the cursor; `None` until the first
-    /// cursor-moved event lands.
-    pub(crate) hover_cell: Option<(u16, u16)>,
     click_count: u8,
     last_click_time: Instant,
     last_click_pos: (u16, u16),
@@ -20,7 +17,6 @@ impl Default for MouseState {
         Self {
             cursor_pos: PhysicalPosition::new(0.0, 0.0),
             is_down: false,
-            hover_cell: None,
             click_count: 0,
             last_click_time: Instant::now(),
             last_click_pos: (0, 0),

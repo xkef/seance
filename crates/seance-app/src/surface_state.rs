@@ -13,6 +13,7 @@ use winit::dpi::PhysicalSize;
 use winit::event::Modifiers;
 use winit::window::{CursorIcon, Window};
 
+use seance_links::{DetectedLink, LinkDetector, LinkModifiers, LinkTarget};
 use seance_mux::{
     ClientRefresh, CursorShape as MuxCursorShape, GridPos, LocalDomain, MuxClient, PaneRef, Resize,
     TerminalModes, ThemeColors,
@@ -27,6 +28,7 @@ pub(crate) struct SurfaceState {
     pub(crate) mux: MuxClient<LocalDomain>,
     pub(crate) active_pane: PaneRef,
     pub(crate) render_inputs: RenderInputs,
+    pub(crate) link_detector: LinkDetector,
     pub(crate) modifiers: Modifiers,
     pub(crate) cell_size: [f32; 2],
     pub(crate) content_dirty: bool,
@@ -44,6 +46,7 @@ impl SurfaceState {
         mux: MuxClient<LocalDomain>,
         active_pane: PaneRef,
         render_inputs: RenderInputs,
+        link_detector: LinkDetector,
     ) -> Self {
         let cell_size = renderer.cell_size();
         Self {
@@ -52,6 +55,7 @@ impl SurfaceState {
             mux,
             active_pane,
             render_inputs,
+            link_detector,
             modifiers: Modifiers::default(),
             cell_size,
             content_dirty: true,
@@ -200,26 +204,11 @@ impl SurfaceState {
         }
     }
 
-    /// Recompute the hovered-link state from the current modifier set and
-    /// last known hover cell, then push it to the renderer and the OS
-    /// cursor icon. Idempotent: silent when nothing changes.
     pub(crate) fn refresh_hovered_link(&mut self) {
-        let mod_state = self.modifiers.state();
-        let mod_held = mod_state.super_key() && mod_state.shift_key();
-        let new_link = if mod_held {
-            self.mouse.hover_cell.and_then(|(col, row)| {
-                self.mux
-                    .pane_view(self.active_pane)
-                    .and_then(|view| view.hyperlink_run_at(col, row))
-                    .map(|run| HoveredLinkRange {
-                        row: run.row,
-                        start_col: run.start_col,
-                        end_col: run.end_col,
-                    })
-            })
-        } else {
-            None
-        };
+        let new_link = self.current_link_at_cursor().map(|link| HoveredLinkRange {
+            start: link.range.start,
+            end: link.range.end,
+        });
         if self.render_inputs.hovered_link == new_link {
             return;
         }
@@ -233,14 +222,38 @@ impl SurfaceState {
         self.mark_dirty();
     }
 
-    /// Resolve the URL for the currently-hovered hyperlink, if any. Used
-    /// by the click handler to decide whether Cmd+Shift+click should open
-    /// a link.
-    pub(crate) fn hovered_hyperlink_url(&self) -> Option<String> {
-        let (col, row) = self.mouse.hover_cell?;
-        let view = self.mux.pane_view(self.active_pane)?;
-        view.hyperlink_run_at(col, row)
-            .map(|run| run.url.to_owned())
+    pub(crate) fn current_link_at_cursor(&self) -> Option<DetectedLink> {
+        let pos = self.current_hover_cell();
+        let modifiers = self.link_modifiers();
+        self.mux
+            .pane_view(self.active_pane)?
+            .link_at(pos, &self.link_detector, modifiers)
+    }
+
+    pub(crate) fn current_link_target(&self) -> Option<(LinkTarget, Option<String>)> {
+        let link = self.current_link_at_cursor()?;
+        let pwd = self
+            .mux
+            .pane_view(self.active_pane)
+            .and_then(|view| view.pwd().map(str::to_owned));
+        Some((link.target, pwd))
+    }
+
+    fn current_hover_cell(&self) -> GridPos {
+        let (col, row) = self
+            .renderer
+            .pixel_to_grid(self.mouse.cursor_pos.x, self.mouse.cursor_pos.y);
+        GridPos { col, row }
+    }
+
+    fn link_modifiers(&self) -> LinkModifiers {
+        let state = self.modifiers.state();
+        LinkModifiers {
+            super_key: state.super_key(),
+            ctrl: state.control_key(),
+            alt: state.alt_key(),
+            shift: state.shift_key(),
+        }
     }
 
     pub(crate) fn paste_from_clipboard(&mut self) {

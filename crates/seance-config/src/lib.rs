@@ -13,8 +13,9 @@ pub mod theme;
 
 pub use diff::ConfigDiff;
 pub use schema::{
-    ClipboardConfig, Config, CursorConfig, CursorStyle, FontConfig, InputConfig, MacosOptionAsAlt,
-    MouseConfig, ScrollbackConfig, WindowConfig,
+    ClipboardConfig, Config, CursorConfig, CursorStyle, FontConfig, InputConfig,
+    LinkModifiersConfig, LinksConfig, MacosOptionAsAlt, MouseConfig, ScrollbackConfig,
+    WindowConfig,
 };
 pub use theme::{Theme, load as load_theme};
 
@@ -182,6 +183,27 @@ mod tests {
     fn input_section_defaults_to_none() {
         let cfg = Config::default();
         assert_eq!(cfg.input.macos_option_as_alt, MacosOptionAsAlt::None);
+    }
+
+    #[test]
+    fn links_defaults_enable_url_and_path_detection() {
+        let cfg = Config::default();
+        assert!(cfg.links.url);
+        assert!(cfg.links.paths);
+    }
+
+    #[test]
+    fn links_modifiers_parse_supported_values() {
+        for raw in ["super+shift", "ctrl+shift", "super", "ctrl"] {
+            let src = format!(
+                r#"
+                [links]
+                modifiers = "{raw}"
+                "#
+            );
+            let cfg: Config = toml::from_str(&src).unwrap();
+            assert!(cfg.links.url);
+        }
     }
 
     #[test]

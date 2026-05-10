@@ -10,8 +10,8 @@ use seance_input::VtInput;
 
 use crate::app::App;
 use crate::command::AppCommand;
+use crate::link_open;
 use crate::surface_state::SurfaceState;
-use crate::url_open;
 
 const FONT_SIZE_MIN: f32 = 6.0;
 const FONT_SIZE_MAX: f32 = 72.0;
@@ -131,7 +131,6 @@ impl App {
         };
         surface.mouse.cursor_pos = position;
         let (col, row) = surface.renderer.pixel_to_grid(position.x, position.y);
-        surface.mouse.hover_cell = Some((col, row));
         if surface.mouse.is_down {
             surface.update_selection(col, row);
             surface.sync_selection_to_overlay();
@@ -159,14 +158,8 @@ impl App {
 
 fn handle_mouse_press(surface: &mut SurfaceState) {
     let mod_state = surface.modifiers.state();
-    // Cmd+Shift+click opens a hovered OSC 8 hyperlink. Checked before
-    // bare Cmd+click (window-drag) so the gesture wins when modifiers
-    // overlap.
-    if mod_state.super_key()
-        && mod_state.shift_key()
-        && let Some(url) = surface.hovered_hyperlink_url()
-    {
-        url_open::open_hyperlink(&url);
+    if let Some((target, pwd)) = surface.current_link_target() {
+        link_open::open_link(&target, pwd.as_deref());
         return;
     }
     if mod_state.super_key() {

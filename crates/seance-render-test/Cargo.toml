@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 # internal
 seance-frame.workspace = true
+seance-links.workspace = true
 seance-protocol.workspace = true
 seance-vt.workspace = true
 

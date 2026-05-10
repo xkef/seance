@@ -263,6 +263,12 @@ pub enum DirtySnapshot {
     Full,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RowMeta {
+    pub wrap: bool,
+    pub wrap_continuation: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlacementSnapshot {
     pub image_id: ImageId,
@@ -287,6 +293,8 @@ pub struct VtSnapshot {
     pub rows: u16,
     pub cells: Vec<SnapshotCell>,
     pub text: String,
+    pub rows_meta: Vec<RowMeta>,
+    pub pwd: Option<String>,
     pub cursor: CursorInfo,
     pub modes: TerminalModes,
     pub dirty: DirtySnapshot,
@@ -306,6 +314,8 @@ impl VtSnapshot {
             rows,
             cells: Vec::with_capacity(usize::from(cols) * usize::from(rows)),
             text: String::new(),
+            rows_meta: vec![RowMeta::default(); usize::from(rows)],
+            pwd: None,
             cursor: CursorInfo::default(),
             modes: TerminalModes::default(),
             dirty: DirtySnapshot::Full,
@@ -404,9 +414,8 @@ impl VtSnapshot {
 
     /// If the cell at `(col, row)` carries an OSC 8 hyperlink, return the
     /// contiguous run of cells on the same row that share its index along
-    /// with the resolved URL. Used by the renderer to draw a hovered-link
-    /// underline and by the input layer to resolve click targets.
-    pub fn hyperlink_run_at(&self, col: u16, row: u16) -> Option<HyperlinkRun<'_>> {
+    /// with the resolved URL.
+    pub fn osc8_run_at(&self, col: u16, row: u16) -> Option<HyperlinkRun<'_>> {
         let cell = self.cell_at(row, col)?;
         if cell.hyperlink_idx == NO_HYPERLINK {
             return None;
@@ -475,6 +484,12 @@ impl VtSnapshot {
                 actual: self.cells.len(),
             });
         }
+        if self.rows_meta.len() != usize::from(self.rows) {
+            return Err(FrameValidationError::InvalidRowMetaCount {
+                expected: usize::from(self.rows),
+                actual: self.rows_meta.len(),
+            });
+        }
         for cell in &self.cells {
             validate_text_range(&self.text, cell.text_start, cell.text_len)?;
         }
@@ -482,8 +497,7 @@ impl VtSnapshot {
     }
 }
 
-/// Contiguous run of hyperlinked cells on a single row, along with the
-/// resolved URL. Returned by [`VtSnapshot::hyperlink_run_at`].
+/// Contiguous OSC 8 run on a single row with its resolved URL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HyperlinkRun<'a> {
     pub row: u16,
@@ -556,11 +570,11 @@ pub enum FrameDelta {
         rows: u16,
         cursor: CursorInfo,
         modes: TerminalModes,
+        pwd: Option<String>,
         placements: Vec<PlacementSnapshot>,
         dirty_rows: Vec<RowDelta>,
-        /// Replacement OSC 8 URL table for the resulting snapshot. Always
-        /// shipped in full because partial-row cells reference it by
-        /// index, so the previous table cannot be reused safely.
+        /// OSC 8 URL table for the resulting snapshot. Partial frames keep
+        /// previous entries stable so unchanged base cells remain valid.
         hyperlinks: Vec<String>,
     },
 }
@@ -595,9 +609,12 @@ impl FrameDelta {
             }
             DirtySnapshot::Full => unreachable!("full handled above"),
         };
+        let mut hyperlinks = previous.hyperlinks.clone();
         let dirty_rows = rows
             .into_iter()
-            .filter_map(|row| RowDelta::from_snapshot_row(snapshot, row))
+            .filter_map(|row| {
+                RowDelta::from_snapshot_row_remapping_links(snapshot, row, &mut hyperlinks)
+            })
             .collect();
 
         Self::Partial {
@@ -607,9 +624,10 @@ impl FrameDelta {
             rows: snapshot.rows,
             cursor: snapshot.cursor,
             modes: snapshot.modes,
+            pwd: snapshot.pwd.clone(),
             placements: snapshot.placements.clone(),
             dirty_rows,
-            hyperlinks: snapshot.hyperlinks.clone(),
+            hyperlinks,
         }
     }
 
@@ -625,6 +643,7 @@ pub type WireFrame = FrameDelta;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RowDelta {
     pub row: u16,
+    pub meta: RowMeta,
     pub cells: Vec<SnapshotCell>,
     pub text: String,
 }
@@ -650,8 +669,68 @@ impl RowDelta {
                 hyperlink_idx: source.hyperlink_idx,
             });
         }
-        Some(Self { row, cells, text })
+        Some(Self {
+            row,
+            meta: snapshot
+                .rows_meta
+                .get(usize::from(row))
+                .copied()
+                .unwrap_or_default(),
+            cells,
+            text,
+        })
     }
+
+    fn from_snapshot_row_remapping_links(
+        snapshot: &VtSnapshot,
+        row: u16,
+        hyperlinks: &mut Vec<String>,
+    ) -> Option<Self> {
+        if row >= snapshot.rows {
+            return None;
+        }
+        let mut text = String::new();
+        let mut cells = Vec::with_capacity(usize::from(snapshot.cols));
+        for col in 0..snapshot.cols {
+            let source = *snapshot.cell_at(row, col)?;
+            let cell_text = snapshot.cell_text(&source);
+            let text_start = text.len();
+            text.push_str(cell_text);
+            let hyperlink_idx = snapshot
+                .cell_hyperlink(&source)
+                .map_or(NO_HYPERLINK, |url| intern_hyperlink(hyperlinks, url));
+            cells.push(SnapshotCell {
+                text_start: u32::try_from(text_start).unwrap_or(u32::MAX),
+                text_len: u16::try_from(cell_text.len()).unwrap_or(0),
+                fg: source.fg,
+                bg: source.bg,
+                attrs: source.attrs,
+                hyperlink_idx,
+            });
+        }
+        Some(Self {
+            row,
+            meta: snapshot
+                .rows_meta
+                .get(usize::from(row))
+                .copied()
+                .unwrap_or_default(),
+            cells,
+            text,
+        })
+    }
+}
+
+fn intern_hyperlink(hyperlinks: &mut Vec<String>, url: &str) -> u16 {
+    if let Some(idx) = hyperlinks.iter().position(|existing| existing == url) {
+        return u16::try_from(idx).unwrap_or(NO_HYPERLINK);
+    }
+    let idx = hyperlinks.len();
+    if idx >= usize::from(NO_HYPERLINK) {
+        return NO_HYPERLINK;
+    }
+    hyperlinks.push(url.to_owned());
+    u16::try_from(idx).unwrap_or(NO_HYPERLINK)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -707,6 +786,7 @@ impl std::error::Error for FrameApplyError {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FrameValidationError {
     InvalidCellCount { expected: usize, actual: usize },
+    InvalidRowMetaCount { expected: usize, actual: usize },
     InvalidTextOffset,
 }
 
@@ -715,6 +795,12 @@ impl fmt::Display for FrameValidationError {
         match self {
             Self::InvalidCellCount { expected, actual } => {
                 write!(f, "snapshot has {actual} cells, expected {expected}")
+            }
+            Self::InvalidRowMetaCount { expected, actual } => {
+                write!(
+                    f,
+                    "snapshot has {actual} row metadata entries, expected {expected}"
+                )
             }
             Self::InvalidTextOffset => f.write_str("snapshot cell text offset is invalid"),
         }
@@ -747,6 +833,7 @@ pub fn apply_frame_delta(
             rows,
             cursor,
             modes,
+            pwd,
             placements,
             dirty_rows,
             hyperlinks,
@@ -773,6 +860,8 @@ pub fn apply_frame_delta(
                 rows: *rows,
                 cells: Vec::with_capacity(usize::from(*cols) * usize::from(*rows)),
                 text: String::new(),
+                rows_meta: Vec::with_capacity(usize::from(*rows)),
+                pwd: pwd.clone(),
                 cursor: *cursor,
                 modes: *modes,
                 dirty: if dirty_rows.is_empty() {
@@ -791,6 +880,16 @@ pub fn apply_frame_delta(
                 } else {
                     None
                 };
+                let meta = replacement.map_or_else(
+                    || {
+                        base.rows_meta
+                            .get(usize::from(row))
+                            .copied()
+                            .unwrap_or_default()
+                    },
+                    |delta| delta.meta,
+                );
+                next.rows_meta.push(meta);
                 for col in 0..*cols {
                     let (source, text) = if let Some(delta) = replacement {
                         let idx = usize::from(col);
@@ -1770,6 +1869,11 @@ mod tests {
             shape: Some(CursorShape::Underline),
         };
         snap.modes.bracketed_paste = true;
+        snap.pwd = Some("/Users/kk/code/seance".to_string());
+        snap.rows_meta[0] = RowMeta {
+            wrap: true,
+            wrap_continuation: false,
+        };
         snap.dirty = DirtySnapshot::Partial(vec![0]);
         snap.placements.push(PlacementSnapshot {
             image_id: ImageId(42),
@@ -1846,6 +1950,10 @@ mod tests {
                 CellAttrs::default(),
             );
         }
+        next.rows_meta[1] = RowMeta {
+            wrap: true,
+            wrap_continuation: false,
+        };
         next.dirty = DirtySnapshot::Partial(vec![1]);
 
         let delta = FrameDelta::from_snapshot(Some(&base), &next);
@@ -1858,6 +1966,7 @@ mod tests {
         assert_eq!(applied.text, "abézz");
         assert_eq!(applied.cells[2].text_start, 2);
         assert_eq!(applied.cells[3].text_start, 4);
+        assert!(applied.rows_meta[1].wrap);
         assert_eq!(applied.dirty, DirtySnapshot::Partial(vec![1]));
     }
 
@@ -1877,6 +1986,20 @@ mod tests {
             FrameDelta::from_snapshot(Some(&base), &next),
             FrameDelta::Full { generation: 2, .. }
         ));
+    }
+
+    #[test]
+    fn row_metadata_length_is_validated() {
+        let mut snap = snapshot(1, 2, 1, &["a", "b"]);
+        snap.rows_meta.pop();
+
+        assert_eq!(
+            snap.validate_dimensions().unwrap_err(),
+            FrameValidationError::InvalidRowMetaCount {
+                expected: 2,
+                actual: 1
+            }
+        );
     }
 
     #[test]
@@ -1910,15 +2033,18 @@ mod tests {
             rows: 1,
             cursor: CursorInfo::default(),
             modes: TerminalModes::default(),
+            pwd: None,
             placements: Vec::new(),
             dirty_rows: vec![
                 RowDelta {
                     row: 0,
+                    meta: RowMeta::default(),
                     cells: vec![SnapshotCell::empty(); 2],
                     text: String::new(),
                 },
                 RowDelta {
                     row: 0,
+                    meta: RowMeta::default(),
                     cells: vec![SnapshotCell::empty(); 2],
                     text: String::new(),
                 },
@@ -1937,9 +2063,11 @@ mod tests {
             rows: 1,
             cursor: CursorInfo::default(),
             modes: TerminalModes::default(),
+            pwd: None,
             placements: Vec::new(),
             dirty_rows: vec![RowDelta {
                 row: 0,
+                meta: RowMeta::default(),
                 cells: vec![
                     SnapshotCell {
                         text_start: 1,
@@ -1976,6 +2104,7 @@ mod tests {
                 bracketed_paste: true,
                 ..TerminalModes::default()
             },
+            pwd: Some("/tmp".to_string()),
             placements: vec![PlacementSnapshot {
                 image_id: ImageId(1),
                 placement_id: 1,
@@ -1998,6 +2127,7 @@ mod tests {
         assert_eq!(applied.cell_text(&applied.cells[0]), "x");
         assert_eq!(applied.cursor.shape, Some(CursorShape::Bar));
         assert!(applied.modes.bracketed_paste);
+        assert_eq!(applied.pwd.as_deref(), Some("/tmp"));
         assert_eq!(applied.placements.len(), 1);
         assert_eq!(applied.dirty, DirtySnapshot::Clean);
     }
@@ -2095,7 +2225,7 @@ mod tests {
     }
 
     #[test]
-    fn hyperlink_run_at_walks_contiguous_same_index_cells() {
+    fn osc8_run_at_walks_contiguous_same_index_cells() {
         // Layout: row 0 = [link_a link_a link_b link_a empty]
         // row 1   = [empty empty empty empty empty]
         let mut snap = VtSnapshot::empty(5, 2);
@@ -2124,25 +2254,25 @@ mod tests {
         }
 
         // Hover on col 0: run spans 0..=1 (the b at col 2 breaks it).
-        let run = snap.hyperlink_run_at(0, 0).unwrap();
+        let run = snap.osc8_run_at(0, 0).unwrap();
         assert_eq!((run.start_col, run.end_col, run.url), (0, 1, url_a));
 
         // Hover on col 1: same run, found by walking left.
-        let run = snap.hyperlink_run_at(1, 0).unwrap();
+        let run = snap.osc8_run_at(1, 0).unwrap();
         assert_eq!((run.start_col, run.end_col, run.url), (0, 1, url_a));
 
         // Hover on col 2 (different URL): single-cell run with url_b.
-        let run = snap.hyperlink_run_at(2, 0).unwrap();
+        let run = snap.osc8_run_at(2, 0).unwrap();
         assert_eq!((run.start_col, run.end_col, run.url), (2, 2, url_b));
 
         // Hover on col 3 (url_a again): single-cell run; the run does not
         // bridge across the url_b cell.
-        let run = snap.hyperlink_run_at(3, 0).unwrap();
+        let run = snap.osc8_run_at(3, 0).unwrap();
         assert_eq!((run.start_col, run.end_col, run.url), (3, 3, url_a));
 
         // No hyperlink at col 4 or anywhere on row 1.
-        assert!(snap.hyperlink_run_at(4, 0).is_none());
-        assert!(snap.hyperlink_run_at(0, 1).is_none());
+        assert!(snap.osc8_run_at(4, 0).is_none());
+        assert!(snap.osc8_run_at(0, 1).is_none());
     }
 
     #[test]
@@ -2165,5 +2295,33 @@ mod tests {
         assert_eq!(applied.cell_hyperlink(cell), Some("https://example.com/x"));
         let other = applied.cell_at(0, 1).unwrap();
         assert_eq!(applied.cell_hyperlink(other), None);
+    }
+
+    #[test]
+    fn frame_delta_partial_keeps_unchanged_row_hyperlinks_valid() {
+        let mut base = snapshot(1, 2, 1, &["a", "b"]);
+        let base_idx = base.intern_hyperlink("https://example.com/base");
+        base.cells[1].hyperlink_idx = base_idx;
+
+        let mut next = snapshot(1, 2, 2, &["x", "b"]);
+        let new_idx = next.intern_hyperlink("https://example.com/new");
+        next.cells[0].hyperlink_idx = new_idx;
+        let base_idx = next.intern_hyperlink("https://example.com/base");
+        next.cells[1].hyperlink_idx = base_idx;
+        next.dirty = DirtySnapshot::Partial(vec![0]);
+
+        let delta = FrameDelta::from_snapshot(Some(&base), &next);
+        let applied = apply_frame_delta(Some(&base), &delta).unwrap();
+
+        let dirty = applied.cell_at(0, 0).unwrap();
+        let unchanged = applied.cell_at(1, 0).unwrap();
+        assert_eq!(
+            applied.cell_hyperlink(dirty),
+            Some("https://example.com/new")
+        );
+        assert_eq!(
+            applied.cell_hyperlink(unchanged),
+            Some("https://example.com/base")
+        );
     }
 }

@@ -19,6 +19,7 @@ pub struct Config {
     pub scrollback: ScrollbackConfig,
     pub mouse: MouseConfig,
     pub input: InputConfig,
+    pub links: LinksConfig,
 }
 
 impl Default for Config {
@@ -32,6 +33,7 @@ impl Default for Config {
             scrollback: ScrollbackConfig::default(),
             mouse: MouseConfig::default(),
             input: InputConfig::default(),
+            links: LinksConfig::default(),
         }
     }
 }
@@ -178,4 +180,44 @@ pub enum MacosOptionAsAlt {
 #[serde(default, deny_unknown_fields)]
 pub struct InputConfig {
     pub macos_option_as_alt: MacosOptionAsAlt,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct LinksConfig {
+    pub url: bool,
+    pub paths: bool,
+    pub modifiers: LinkModifiersConfig,
+}
+
+impl Default for LinksConfig {
+    fn default() -> Self {
+        Self {
+            url: true,
+            paths: true,
+            modifiers: LinkModifiersConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+pub enum LinkModifiersConfig {
+    #[serde(rename = "super+shift")]
+    SuperShift,
+    #[serde(rename = "ctrl+shift")]
+    CtrlShift,
+    #[serde(rename = "super")]
+    Super,
+    #[serde(rename = "ctrl")]
+    Ctrl,
+}
+
+impl Default for LinkModifiersConfig {
+    fn default() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::SuperShift
+        } else {
+            Self::CtrlShift
+        }
+    }
 }

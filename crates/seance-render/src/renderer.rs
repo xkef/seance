@@ -35,14 +35,11 @@ pub struct RendererConfig {
     pub theme: Theme,
 }
 
-/// Inclusive grid range on a single row that should be drawn with a
-/// hovered-link underline. Set by the app whenever the cursor is over an
-/// OSC 8 hyperlink and the activation modifier is held.
+/// Inclusive grid range that should be drawn with a hovered-link underline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HoveredLinkRange {
-    pub row: u16,
-    pub start_col: u16,
-    pub end_col: u16,
+    pub start: GridPos,
+    pub end: GridPos,
 }
 
 /// Per-frame dynamic state the app supplies to the renderer.

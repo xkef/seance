@@ -21,6 +21,7 @@ use winit::window::{Window, WindowId};
 
 use seance_config::Config;
 use seance_input::InputHandler;
+use seance_links::{LinkDetector, LinkModifiers};
 use seance_mux::{
     CursorShape as MuxCursorShape, LocalDomain, MuxClient, MuxEvent, PaneSpawnOptions,
 };
@@ -222,7 +223,15 @@ impl ApplicationHandler<UserEvent> for App {
             cursor_shape: self.config.cursor.style.into(),
             ..RenderInputs::default()
         };
-        let mut surface = SurfaceState::new(window, renderer, mux, active_pane, render_inputs);
+        let link_detector = link_detector_from_config(&self.config.links);
+        let mut surface = SurfaceState::new(
+            window,
+            renderer,
+            mux,
+            active_pane,
+            render_inputs,
+            link_detector,
+        );
         self.apply_terminal_theme_to(&mut surface, &theme);
         self.surface = Some(surface);
 
@@ -255,6 +264,9 @@ impl ApplicationHandler<UserEvent> for App {
                             }
                             if frame_dirty || !image_events.is_empty() {
                                 surface.mark_dirty();
+                            }
+                            if frame_dirty {
+                                surface.refresh_hovered_link();
                             }
                             should_exit = exited.contains(&surface.active_pane);
                         }
@@ -347,6 +359,38 @@ pub(crate) fn mux_shape_from_config(style: seance_config::CursorStyle) -> MuxCur
         seance_config::CursorStyle::Block => MuxCursorShape::Block,
         seance_config::CursorStyle::Bar => MuxCursorShape::Bar,
         seance_config::CursorStyle::Underline => MuxCursorShape::Underline,
+    }
+}
+
+pub(crate) fn link_detector_from_config(config: &seance_config::LinksConfig) -> LinkDetector {
+    let modifiers = link_modifiers_from_config(config.modifiers);
+    LinkDetector::from_options(modifiers, config.url, config.paths).unwrap_or_else(|err| {
+        log::warn!("failed to compile link detector: {err}");
+        LinkDetector::from_options(modifiers, false, false)
+            .expect("disabled link detector should compile")
+    })
+}
+
+fn link_modifiers_from_config(config: seance_config::LinkModifiersConfig) -> LinkModifiers {
+    match config {
+        seance_config::LinkModifiersConfig::SuperShift => LinkModifiers {
+            super_key: true,
+            shift: true,
+            ..LinkModifiers::default()
+        },
+        seance_config::LinkModifiersConfig::CtrlShift => LinkModifiers {
+            ctrl: true,
+            shift: true,
+            ..LinkModifiers::default()
+        },
+        seance_config::LinkModifiersConfig::Super => LinkModifiers {
+            super_key: true,
+            ..LinkModifiers::default()
+        },
+        seance_config::LinkModifiersConfig::Ctrl => LinkModifiers {
+            ctrl: true,
+            ..LinkModifiers::default()
+        },
     }
 }
 

@@ -8,7 +8,7 @@ use libghostty_vt::terminal::{Mode, ScrollViewport};
 use libghostty_vt::{RenderState, Terminal as VtTerminal, TerminalOptions};
 
 use crate::frame::{CursorShape, DirtySnapshot};
-use crate::snapshot::VtSnapshot;
+use crate::snapshot::{RowMeta, VtSnapshot};
 use crate::snapshot_extraction::{SnapshotExtraction, extract_snapshot};
 use crate::terminal::install_png_decoder_for_this_thread;
 
@@ -55,6 +55,8 @@ pub(crate) struct VtCore {
     dirty: DirtyTracker,
     row_cache: Option<RowCache>,
     force_full_next_snapshot: bool,
+    pwd: Option<String>,
+    osc_state: OscState,
 }
 
 impl VtCore {
@@ -98,6 +100,8 @@ impl VtCore {
             dirty: DirtyTracker::default(),
             row_cache: None,
             force_full_next_snapshot: false,
+            pwd: None,
+            osc_state: OscState::Ground,
         };
         core.seed_cursor_shape(options.initial_cursor_shape);
         Ok(core)
@@ -105,6 +109,7 @@ impl VtCore {
 
     pub(crate) fn feed(&mut self, bytes: &[u8]) {
         if !bytes.is_empty() {
+            self.track_osc7(bytes);
             self.vt.vt_write(bytes);
         }
     }
@@ -167,6 +172,7 @@ impl VtCore {
             self.cell_width_px,
             self.cell_height_px,
         )?;
+        snapshot.pwd = self.pwd.clone().or(snapshot.pwd);
         let dirty_delta = self.snapshot_dirty_delta(&snapshot, dirty_delta);
         let generation = self.dirty.next_generation();
         let dirty = self.dirty.record(generation, dirty_delta);
@@ -177,6 +183,69 @@ impl VtCore {
 
     pub(crate) fn ack_rendered(&mut self, generation: u64) {
         self.dirty.ack_rendered(generation);
+    }
+
+    fn track_osc7(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            match (&mut self.osc_state, byte) {
+                (OscState::Ground, 0x1b) => self.osc_state = OscState::Esc,
+                (OscState::Ground, _) => {}
+                (OscState::Esc, b']') => self.osc_state = OscState::Osc(Vec::new()),
+                (OscState::Esc, 0x1b) => {}
+                (OscState::Esc, _) => self.osc_state = OscState::Ground,
+                (OscState::Osc(buf), 0x07 | 0x9c) => {
+                    let content = std::mem::take(buf);
+                    self.apply_osc7(&content);
+                    self.osc_state = OscState::Ground;
+                }
+                (OscState::Osc(buf), 0x1b) => {
+                    let content = std::mem::take(buf);
+                    self.osc_state = OscState::OscEsc(content);
+                }
+                (OscState::Osc(buf), byte) => {
+                    if buf.len() < 4096 {
+                        buf.push(byte);
+                    } else {
+                        self.osc_state = OscState::Ground;
+                    }
+                }
+                (OscState::OscEsc(buf), b'\\') => {
+                    let content = std::mem::take(buf);
+                    self.apply_osc7(&content);
+                    self.osc_state = OscState::Ground;
+                }
+                (OscState::OscEsc(buf), 0x1b) => {
+                    if buf.len() < 4096 {
+                        buf.push(0x1b);
+                    } else {
+                        self.osc_state = OscState::Ground;
+                    }
+                }
+                (OscState::OscEsc(buf), byte) => {
+                    if buf.len() < 4096 {
+                        buf.push(0x1b);
+                        buf.push(byte);
+                        self.osc_state = OscState::Osc(std::mem::take(buf));
+                    } else {
+                        self.osc_state = OscState::Ground;
+                    }
+                }
+            }
+        }
+    }
+
+    fn apply_osc7(&mut self, content: &[u8]) {
+        let Some(raw) = content.strip_prefix(b"7;") else {
+            return;
+        };
+        if raw.is_empty() {
+            self.pwd = None;
+            return;
+        }
+        let Ok(uri) = std::str::from_utf8(raw) else {
+            return;
+        };
+        self.pwd = osc7_uri_to_path(uri);
     }
 
     fn snapshot_dirty_delta(
@@ -228,9 +297,62 @@ impl VtCore {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum OscState {
+    Ground,
+    Esc,
+    Osc(Vec<u8>),
+    OscEsc(Vec<u8>),
+}
+
+fn osc7_uri_to_path(uri: &str) -> Option<String> {
+    if let Some(rest) = uri.strip_prefix("file://") {
+        let path = if let Some(path) = rest.strip_prefix('/') {
+            format!("/{path}")
+        } else {
+            let (_, path) = rest.split_once('/')?;
+            format!("/{path}")
+        };
+        return percent_decode(&path);
+    }
+    if let Some(rest) = uri.strip_prefix("kitty-shell-cwd://") {
+        let (_, path) = rest.split_once('/')?;
+        return Some(format!("/{path}"));
+    }
+    None
+}
+
+fn percent_decode(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut idx = 0;
+    while idx < bytes.len() {
+        if bytes[idx] == b'%' {
+            let hi = *bytes.get(idx + 1)?;
+            let lo = *bytes.get(idx + 2)?;
+            out.push((hex(hi)? << 4) | hex(lo)?);
+            idx += 3;
+        } else {
+            out.push(bytes[idx]);
+            idx += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+fn hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct RowCache {
     cols: u16,
     rows: u16,
+    rows_meta: Vec<RowMeta>,
     rows_data: Vec<Vec<RowCell>>,
 }
 
@@ -240,6 +362,7 @@ struct RowCell {
     fg: crate::frame::CellColor,
     bg: crate::frame::CellColor,
     attrs: crate::frame::CellAttrs,
+    hyperlink: Option<String>,
 }
 
 impl RowCache {
@@ -257,6 +380,7 @@ impl RowCache {
                     fg: cell.fg,
                     bg: cell.bg,
                     attrs: cell.attrs,
+                    hyperlink: snapshot.cell_hyperlink(cell).map(str::to_owned),
                 });
             }
             rows_data.push(row_data);
@@ -264,6 +388,7 @@ impl RowCache {
         Self {
             cols: snapshot.cols,
             rows: snapshot.rows,
+            rows_meta: snapshot.rows_meta.clone(),
             rows_data,
         }
     }
@@ -276,14 +401,17 @@ impl RowCache {
             .rows_data
             .iter()
             .zip(&current.rows_data)
+            .zip(self.rows_meta.iter().zip(&current.rows_meta))
             .enumerate()
-            .filter_map(|(idx, (previous, current))| {
-                if previous == current {
-                    None
-                } else {
-                    u16::try_from(idx).ok()
-                }
-            })
+            .filter_map(
+                |(idx, ((previous, current), (previous_meta, current_meta)))| {
+                    if previous == current && previous_meta == current_meta {
+                        None
+                    } else {
+                        u16::try_from(idx).ok()
+                    }
+                },
+            )
             .collect::<Vec<_>>();
         if rows.is_empty() {
             DirtySnapshot::Clean
@@ -416,6 +544,7 @@ pub(crate) fn cursor_shape_sequence(shape: CursorShape) -> &'static [u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frame::{CellAttrs, CellColor};
 
     fn core() -> VtCore {
         VtCore::new(VtCoreOptions {
@@ -506,5 +635,56 @@ mod tests {
         core.ack_rendered(still_full.generation);
         let clean = core.snapshot().unwrap();
         assert_eq!(clean.dirty, DirtySnapshot::Clean);
+    }
+
+    #[test]
+    fn row_dirty_tracks_hyperlink_url_changes() {
+        let previous = linked_snapshot("https://example.com/a");
+        let current = linked_snapshot("https://example.com/b");
+
+        let previous = RowCache::from_snapshot(&previous);
+        let current = RowCache::from_snapshot(&current);
+
+        assert_eq!(previous.diff(&current), DirtySnapshot::Partial(vec![0]));
+    }
+
+    #[test]
+    fn row_dirty_tracks_wrap_metadata_changes() {
+        let previous = plain_snapshot();
+        let mut current = plain_snapshot();
+        current.rows_meta[0].wrap = true;
+
+        let previous = RowCache::from_snapshot(&previous);
+        let current = RowCache::from_snapshot(&current);
+
+        assert_eq!(previous.diff(&current), DirtySnapshot::Partial(vec![0]));
+    }
+
+    fn linked_snapshot(url: &str) -> VtSnapshot {
+        let mut snapshot = VtSnapshot::empty(4, 1);
+        let idx = snapshot.intern_hyperlink(url);
+        for text in ["l", "i", "n", "k"] {
+            snapshot.push_cell(
+                text,
+                CellColor::Default,
+                CellColor::Default,
+                CellAttrs::default(),
+            );
+            snapshot.set_last_cell_hyperlink(idx);
+        }
+        snapshot
+    }
+
+    fn plain_snapshot() -> VtSnapshot {
+        let mut snapshot = VtSnapshot::empty(4, 1);
+        for text in ["l", "i", "n", "k"] {
+            snapshot.push_cell(
+                text,
+                CellColor::Default,
+                CellColor::Default,
+                CellAttrs::default(),
+            );
+        }
+        snapshot
     }
 }

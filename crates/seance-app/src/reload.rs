@@ -3,7 +3,7 @@
 
 use seance_config::ConfigDiff;
 
-use crate::app::{App, mux_shape_from_config};
+use crate::app::{App, link_detector_from_config, mux_shape_from_config};
 use crate::platform;
 use crate::surface_state::SurfaceState;
 
@@ -125,6 +125,12 @@ impl App {
             if let Some(surface) = self.surface.as_ref() {
                 platform::set_option_as_alt(&surface.window, mode);
             }
+        }
+        if diff.links_changed
+            && let Some(surface) = self.surface.as_mut()
+        {
+            surface.link_detector = link_detector_from_config(&self.config.links);
+            surface.refresh_hovered_link();
         }
         if old_config.cursor.style != self.config.cursor.style
             && let Some(surface) = self.surface.as_mut()
