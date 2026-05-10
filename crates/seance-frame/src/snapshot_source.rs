@@ -50,6 +50,7 @@ impl FrameSource for SnapshotFrameSource<'_> {
                         fg: cell.fg,
                         bg: cell.bg,
                         attrs: cell.attrs,
+                        hyperlink: self.snapshot.cell_hyperlink(cell),
                     },
                 );
             }

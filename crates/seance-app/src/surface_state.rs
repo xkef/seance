@@ -11,13 +11,13 @@ use std::time::Instant;
 use bytes::{Bytes, BytesMut};
 use winit::dpi::PhysicalSize;
 use winit::event::Modifiers;
-use winit::window::Window;
+use winit::window::{CursorIcon, Window};
 
 use seance_mux::{
-    ClientRefresh, CursorShape as MuxCursorShape, GridPos, LocalDomain, MuxClient, PaneRef, Resize,
-    TerminalModes, ThemeColors,
+    ClientRefresh, CursorShape as MuxCursorShape, DetectedLink, GridPos, LinkDetector,
+    LinkModifiers, LinkTarget, LocalDomain, MuxClient, PaneRef, Resize, TerminalModes, ThemeColors,
 };
-use seance_render::{RenderInputs, TerminalRenderer};
+use seance_render::{HoveredLinkRange, RenderInputs, TerminalRenderer};
 
 use crate::mouse::MouseState;
 
@@ -27,6 +27,7 @@ pub(crate) struct SurfaceState {
     pub(crate) mux: MuxClient<LocalDomain>,
     pub(crate) active_pane: PaneRef,
     pub(crate) render_inputs: RenderInputs,
+    pub(crate) link_detector: LinkDetector,
     pub(crate) modifiers: Modifiers,
     pub(crate) cell_size: [f32; 2],
     pub(crate) content_dirty: bool,
@@ -44,6 +45,7 @@ impl SurfaceState {
         mux: MuxClient<LocalDomain>,
         active_pane: PaneRef,
         render_inputs: RenderInputs,
+        link_detector: LinkDetector,
     ) -> Self {
         let cell_size = renderer.cell_size();
         Self {
@@ -52,6 +54,7 @@ impl SurfaceState {
             mux,
             active_pane,
             render_inputs,
+            link_detector,
             modifiers: Modifiers::default(),
             cell_size,
             content_dirty: true,
@@ -197,6 +200,58 @@ impl SurfaceState {
         }
         if let Ok(mut cb) = arboard::Clipboard::new() {
             let _ = cb.set_text(text);
+        }
+    }
+
+    pub(crate) fn refresh_hovered_link(&mut self) {
+        let new_link = self.current_link_at_cursor().map(|link| HoveredLinkRange {
+            start: link.range.start,
+            end: link.range.end,
+        });
+        if self.render_inputs.hovered_link == new_link {
+            return;
+        }
+        let now_active = new_link.is_some();
+        self.render_inputs.hovered_link = new_link;
+        self.window.set_cursor(if now_active {
+            CursorIcon::Pointer
+        } else {
+            CursorIcon::Default
+        });
+        self.mark_dirty();
+    }
+
+    pub(crate) fn current_link_at_cursor(&self) -> Option<DetectedLink> {
+        let pos = self.current_hover_cell();
+        let modifiers = self.link_modifiers();
+        self.mux
+            .pane_view(self.active_pane)?
+            .link_at(pos, &self.link_detector, modifiers)
+    }
+
+    pub(crate) fn current_link_target(&self) -> Option<(LinkTarget, Option<String>)> {
+        let link = self.current_link_at_cursor()?;
+        let pwd = self
+            .mux
+            .pane_view(self.active_pane)
+            .and_then(|view| view.pwd().map(str::to_owned));
+        Some((link.target, pwd))
+    }
+
+    fn current_hover_cell(&self) -> GridPos {
+        let (col, row) = self
+            .renderer
+            .pixel_to_grid(self.mouse.cursor_pos.x, self.mouse.cursor_pos.y);
+        GridPos { col, row }
+    }
+
+    fn link_modifiers(&self) -> LinkModifiers {
+        let state = self.modifiers.state();
+        LinkModifiers {
+            super_key: state.super_key(),
+            ctrl: state.control_key(),
+            alt: state.alt_key(),
+            shift: state.shift_key(),
         }
     }
 

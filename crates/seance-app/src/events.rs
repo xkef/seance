@@ -10,6 +10,7 @@ use seance_input::VtInput;
 
 use crate::app::App;
 use crate::command::AppCommand;
+use crate::link_open;
 use crate::surface_state::SurfaceState;
 
 const FONT_SIZE_MIN: f32 = 6.0;
@@ -129,13 +130,13 @@ impl App {
             return;
         };
         surface.mouse.cursor_pos = position;
-        if !surface.mouse.is_down {
-            return;
-        }
         let (col, row) = surface.renderer.pixel_to_grid(position.x, position.y);
-        surface.update_selection(col, row);
-        surface.sync_selection_to_overlay();
-        surface.mark_dirty();
+        if surface.mouse.is_down {
+            surface.update_selection(col, row);
+            surface.sync_selection_to_overlay();
+            surface.mark_dirty();
+        }
+        surface.refresh_hovered_link();
     }
 
     pub(crate) fn on_mouse_input(&mut self, state: ElementState, button: MouseButton) {
@@ -156,7 +157,12 @@ impl App {
 }
 
 fn handle_mouse_press(surface: &mut SurfaceState) {
-    if surface.modifiers.state().super_key() {
+    let mod_state = surface.modifiers.state();
+    if let Some((target, pwd)) = surface.current_link_target() {
+        link_open::open_link(&target, pwd.as_deref());
+        return;
+    }
+    if mod_state.super_key() {
         let _ = surface.window.drag_window();
         return;
     }

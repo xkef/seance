@@ -57,7 +57,13 @@ pub(crate) struct Uniforms {
     pub selection_color: [f32; 4],
     pub selection_active: u32,
     pub baseline: f32,
-    pub _pad: [u32; 10],
+    pub hovered_link_active: u32,
+    /// Padding to satisfy WGSL `vec2<u32>` 8-byte alignment for the
+    /// hovered_link range below.
+    pub _pad_link: u32,
+    pub hovered_link_start: [u32; 2],
+    pub hovered_link_end: [u32; 2],
+    pub hovered_link_color: [f32; 4],
 }
 
 impl Uniforms {
@@ -75,6 +81,15 @@ impl Uniforms {
                 1u32,
             ),
             None => ([0u32; 2], [0u32; 2], 0u32),
+        };
+
+        let (link_start, link_end, link_active) = match &inputs.hovered_link {
+            Some(range) if range.start.row <= range.end.row => (
+                [u32::from(range.start.col), u32::from(range.start.row)],
+                [u32::from(range.end.col), u32::from(range.end.row)],
+                1u32,
+            ),
+            _ => ([0u32; 2], [0u32; 2], 0u32),
         };
 
         Self {
@@ -100,7 +115,16 @@ impl Uniforms {
             selection_color: theme.selection_bg,
             selection_active: sel_active,
             baseline: fi.baseline,
-            _pad: [0; 10],
+            hovered_link_active: link_active,
+            _pad_link: 0,
+            hovered_link_start: link_start,
+            hovered_link_end: link_end,
+            hovered_link_color: [
+                f32::from(theme.fg[0]) / 255.0,
+                f32::from(theme.fg[1]) / 255.0,
+                f32::from(theme.fg[2]) / 255.0,
+                1.0,
+            ],
         }
     }
 
@@ -139,5 +163,35 @@ mod tests {
         assert_eq!(CursorShape::from(ProtocolCursorShape::Block) as u32, 1);
         assert_eq!(CursorShape::from(ProtocolCursorShape::Underline) as u32, 2);
         assert_eq!(CursorShape::from(ProtocolCursorShape::Bar) as u32, 3);
+    }
+
+    #[test]
+    fn hovered_link_range_maps_to_uniforms() {
+        let fi = FrameInfo {
+            cell_width: 8.0,
+            cell_height: 16.0,
+            baseline: 12.0,
+            grid_cols: 10,
+            grid_rows: 4,
+            grid_padding: [0.0; 4],
+            bg_color: [0, 0, 0, 255],
+            min_contrast: 1.0,
+            cursor_pos: [0, 0],
+            cursor_visible: true,
+            cursor_color: [255, 255, 255, 255],
+            cursor_wide: false,
+        };
+        let inputs = RenderInputs {
+            hovered_link: Some(crate::renderer::HoveredLinkRange {
+                start: seance_protocol::GridPos { col: 2, row: 1 },
+                end: seance_protocol::GridPos { col: 4, row: 2 },
+            }),
+            ..RenderInputs::default()
+        };
+        let uniforms = Uniforms::from_frame_info(&fi, 80.0, 64.0, &inputs, &Theme::blank());
+
+        assert_eq!(uniforms.hovered_link_active, 1);
+        assert_eq!(uniforms.hovered_link_start, [2, 1]);
+        assert_eq!(uniforms.hovered_link_end, [4, 2]);
     }
 }

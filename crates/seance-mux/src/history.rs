@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 
 use seance_protocol::{FrameDelta, PaneRef, PaneUpdate, ServerSeq};
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReplayBatch {
     Replay(Vec<PaneUpdate>),

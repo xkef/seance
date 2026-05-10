@@ -2,9 +2,11 @@
 
 use libghostty_vt::RenderState;
 use libghostty_vt::Terminal as VtTerminal;
+use libghostty_vt::error::Error as LibghosttyError;
 use libghostty_vt::render::{CellIteration, CellIterator, CursorVisualStyle, Dirty, RowIterator};
 use libghostty_vt::style::{self, PaletteIndex, RgbColor};
-use libghostty_vt::terminal::Mode;
+use libghostty_vt::terminal::{Mode, Point, PointCoordinate};
+use seance_protocol::RowMeta;
 
 use crate::core::VtCoreError;
 use crate::frame::{CellAttrs, CellColor, CursorInfo, CursorShape, DirtySnapshot};
@@ -41,8 +43,17 @@ pub(crate) fn extract_snapshot(
 
     let mut out = VtSnapshot::empty(cols, rows);
     out.modes = modes;
+    out.pwd = vt
+        .pwd()
+        .ok()
+        .filter(|pwd| !pwd.is_empty())
+        .map(str::to_owned);
 
     let dirty_delta;
+    // Cells whose URL we still need to query, deferred until the
+    // render-state borrow is released so we can re-borrow `vt` for
+    // `grid_ref`. Stores `(row, col, cell_index_in_out)`.
+    let mut pending_links: Vec<(u32, u16, usize)> = Vec::new();
     {
         let render_snapshot = render_state
             .update(vt)
@@ -95,7 +106,22 @@ pub(crate) fn extract_snapshot(
             let mut cell_iter = cells_iter
                 .update(row)
                 .map_err(|_| VtCoreError::libghostty("cell iterator update"))?;
-            for _col in 0..cols {
+            let raw_row = row.raw_row().ok();
+            if let Some(raw) = raw_row
+                && let Some(meta) = out.rows_meta.get_mut(usize::from(row_idx))
+            {
+                *meta = RowMeta {
+                    wrap: raw.is_wrapped().unwrap_or(false),
+                    wrap_continuation: raw.is_wrap_continuation().unwrap_or(false),
+                };
+            }
+            // Skip the per-cell hyperlink probe entirely when the row
+            // has no OSC 8 cells. libghostty's flag may have false
+            // positives so the per-cell check still gates URL lookup.
+            let row_has_links = raw_row
+                .and_then(|r| r.has_hyperlink().ok())
+                .unwrap_or(false);
+            for col in 0..cols {
                 let Some(cell) = cell_iter.next() else {
                     out.push_empty_cell();
                     continue;
@@ -108,12 +134,21 @@ pub(crate) fn extract_snapshot(
                     scratch.clear();
                 }
                 let style = cell.style().ok();
+                let cell_has_link = row_has_links
+                    && cell
+                        .raw_cell()
+                        .ok()
+                        .and_then(|c| c.has_hyperlink().ok())
+                        .unwrap_or(false);
                 out.push_cell(
                     &scratch,
                     resolve_fg(cell, style.as_ref()),
                     resolve_bg(cell, style.as_ref()),
                     cell_attrs(style.as_ref()),
                 );
+                if cell_has_link {
+                    pending_links.push((u32::from(row_idx), col, out.cells.len() - 1));
+                }
             }
             row.set_dirty(false)
                 .map_err(|_| VtCoreError::libghostty("clear row dirty"))?;
@@ -133,6 +168,10 @@ pub(crate) fn extract_snapshot(
         render_snapshot
             .set_dirty(Dirty::Clean)
             .map_err(|_| VtCoreError::libghostty("clear render dirty"))?;
+    }
+
+    if !pending_links.is_empty() {
+        resolve_pending_hyperlinks(vt, &pending_links, &mut out);
     }
 
     let graphics = extract_kitty_graphics(vt, cell_width_px, cell_height_px);
@@ -170,6 +209,45 @@ fn cell_attrs(style: Option<&style::Style>) -> CellAttrs {
         faint: style.is_some_and(|style| style.faint),
         inverse: style.is_some_and(|style| style.inverse),
         invisible: style.is_some_and(|style| style.invisible),
+    }
+}
+
+/// Walk every cell whose row/cell hyperlink flags fired and copy its OSC 8
+/// URL into `out.hyperlinks`, deduping via [`VtSnapshot::intern_hyperlink`].
+/// Run after the `RenderState` borrow is released so `vt.grid_ref` can
+/// re-borrow the terminal.
+fn resolve_pending_hyperlinks(
+    vt: &VtTerminal<'static, 'static>,
+    pending: &[(u32, u16, usize)],
+    out: &mut VtSnapshot,
+) {
+    let mut buf: Vec<u8> = vec![0; 256];
+    for &(row, col, cell_idx) in pending {
+        let point = Point::Viewport(PointCoordinate { x: col, y: row });
+        let Ok(grid_ref) = vt.grid_ref(point) else {
+            continue;
+        };
+        let written = match grid_ref.hyperlink_uri(&mut buf) {
+            Ok(n) => n,
+            Err(LibghosttyError::OutOfSpace { required }) => {
+                buf.resize(required, 0);
+                match grid_ref.hyperlink_uri(&mut buf) {
+                    Ok(n) => n,
+                    Err(_) => continue,
+                }
+            }
+            Err(_) => continue,
+        };
+        if written == 0 {
+            continue;
+        }
+        let Ok(url) = std::str::from_utf8(&buf[..written]) else {
+            continue;
+        };
+        let idx = out.intern_hyperlink(url);
+        if let Some(cell) = out.cells.get_mut(cell_idx) {
+            cell.hyperlink_idx = idx;
+        }
     }
 }
 

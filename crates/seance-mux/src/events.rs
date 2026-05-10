@@ -5,6 +5,7 @@ pub enum MuxEvent {
     Wake,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DomainEvent {
     PaneUpdate(PaneUpdate),

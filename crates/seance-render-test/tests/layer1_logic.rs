@@ -4,6 +4,8 @@
 //! no fonts, no snapshots. Each test names one observable VT
 //! behavior; a failure points at the specific invariant that regressed.
 
+use seance_mux::{LinkDetector, LinkModifiers, LinkSource, LinkTarget};
+use seance_protocol::GridPos;
 use seance_vt::test_support::HeadlessTerminal;
 
 #[test]
@@ -81,4 +83,79 @@ fn split_input_across_two_writes_matches_single_write() {
     split.feed(b"mred");
 
     assert_eq!(whole.cursor_pos(), split.cursor_pos());
+}
+
+#[test]
+fn osc8_hyperlinks_survive_snapshot_extraction() {
+    let mut term = HeadlessTerminal::new(20, 4).expect("construct");
+    term.feed(b"\x1b]8;;https://example.com/x\x07link\x1b]8;;\x07 bare");
+
+    let snapshot = term.snapshot().expect("snapshot");
+    let run = snapshot.osc8_run_at(0, 0).expect("hyperlink run");
+
+    assert_eq!(snapshot.hyperlinks, ["https://example.com/x"]);
+    assert_eq!(snapshot.cell_text(snapshot.cell_at(0, 0).unwrap()), "l");
+    assert_eq!(
+        (run.row, run.start_col, run.end_col, run.url),
+        (0, 0, 3, "https://example.com/x")
+    );
+    assert!(snapshot.osc8_run_at(4, 0).is_none());
+}
+
+#[test]
+fn osc8_hyperlinks_with_id_params_survive_snapshot_extraction() {
+    let mut term = HeadlessTerminal::new(20, 4).expect("construct");
+    term.feed(b"\x1b]8;id=abc;https://example.com/x\x07link\x1b]8;;\x07");
+
+    let snapshot = term.snapshot().expect("snapshot");
+    let run = snapshot.osc8_run_at(0, 0).expect("hyperlink run");
+
+    assert_eq!(run.url, "https://example.com/x");
+}
+
+#[test]
+fn eza_symlink_output_uses_osc8_for_name_and_path_rule_for_target() {
+    let mut term = HeadlessTerminal::new(80, 4).expect("construct");
+    term.feed(
+        b"\x1b]8;;file:///Users/kk/dotfiles/shell/.hushlogin\x1b\\.hushlogin\x1b]8;;\x1b\\ -> dotfiles/shell/.hushlogin",
+    );
+
+    let snapshot = term.snapshot().expect("snapshot");
+    let mods = LinkModifiers {
+        super_key: true,
+        shift: true,
+        ..LinkModifiers::default()
+    };
+    let detector = LinkDetector::default_ghostty_like(mods);
+
+    let source = detector
+        .link_at(&snapshot, GridPos { col: 0, row: 0 }, mods)
+        .expect("OSC 8 source link");
+    assert_eq!(source.source, LinkSource::Osc8);
+    assert_eq!(
+        source.target,
+        LinkTarget::Url("file:///Users/kk/dotfiles/shell/.hushlogin".to_string())
+    );
+
+    let target = detector
+        .link_at(&snapshot, GridPos { col: 14, row: 0 }, mods)
+        .expect("path target link");
+    assert_eq!(target.source, LinkSource::DefaultUrlPath);
+    assert_eq!(
+        target.target,
+        LinkTarget::Path("dotfiles/shell/.hushlogin".to_string())
+    );
+    assert_eq!((target.range.start.col, target.range.end.col), (14, 38));
+}
+
+#[test]
+fn osc7_pwd_survives_snapshot_extraction() {
+    let mut term = HeadlessTerminal::new(20, 4).expect("construct");
+    let pwd = std::env::temp_dir().join("seance-osc7-pwd");
+    let payload = format!("\x1b]7;file://localhost{}\x1b\\", pwd.display());
+    term.feed(payload.as_bytes());
+
+    let snapshot = term.snapshot().expect("snapshot");
+
+    assert_eq!(snapshot.pwd.as_deref(), pwd.to_str());
 }
