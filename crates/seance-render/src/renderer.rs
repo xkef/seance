@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use seance_config::Theme;
 use seance_frame::FrameSource;
-use seance_protocol::frame::GridPos;
+use seance_protocol::frame::{GridPos, MouseSize};
 use seance_protocol::image_cache::ImageCacheEvent;
 use winit::window::Window;
 
@@ -128,6 +128,27 @@ impl TerminalRenderer {
         let col = ((x as f32 - pad[0]) / self.cell_size[0]).max(0.0) as u16;
         let row = ((y as f32 - pad[1]) / self.cell_size[1]).max(0.0) as u16;
         (col, row)
+    }
+
+    /// Pixel-space geometry the libghostty-vt mouse encoder needs to
+    /// translate surface-space cursor positions into VT cell coordinates.
+    /// `grid_padding` layout matches `pixel_to_grid` above:
+    /// `[left, top, right, bottom]`.
+    pub fn mouse_size(&self) -> MouseSize {
+        let pad = self
+            .cell_builder
+            .last_frame()
+            .map_or([0.0; 4], |fi| fi.grid_padding);
+        MouseSize {
+            screen_width: self.surface_width,
+            screen_height: self.surface_height,
+            cell_width: self.cell_size[0].max(1.0) as u32,
+            cell_height: self.cell_size[1].max(1.0) as u32,
+            padding_left: pad[0].max(0.0) as u32,
+            padding_top: pad[1].max(0.0) as u32,
+            padding_right: pad[2].max(0.0) as u32,
+            padding_bottom: pad[3].max(0.0) as u32,
+        }
     }
 
     pub fn apply_image_cache_event(&mut self, event: &ImageCacheEvent) {
