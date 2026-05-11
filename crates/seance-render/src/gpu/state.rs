@@ -179,6 +179,7 @@ impl GpuState {
         inputs: &RenderInputs,
         theme: &Theme,
     ) -> bool {
+        let _span = tracing::trace_span!("gpu::submit").entered();
         if self.surface_dirty {
             self.surface.configure(&self.device, &self.config);
             self.surface_dirty = false;
@@ -223,7 +224,7 @@ impl GpuState {
                 None
             }
             other => {
-                log::warn!("surface acquire failed: {other:?}");
+                tracing::warn!("surface acquire failed: {other:?}");
                 None
             }
         }

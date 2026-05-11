@@ -94,7 +94,7 @@ impl SurfaceState {
             pixel_width: pixel_size.width as u16,
             pixel_height: pixel_size.height as u16,
         }) {
-            log::warn!("failed to send pane resize: {err}");
+            tracing::warn!("failed to send pane resize: {err}");
         }
     }
 
@@ -106,13 +106,13 @@ impl SurfaceState {
 
     pub(crate) fn write_to_pty(&mut self, bytes: Bytes) {
         if let Err(err) = self.mux.pane(self.active_pane).write(bytes) {
-            log::warn!("failed to send pane write: {err}");
+            tracing::warn!("failed to send pane write: {err}");
         }
     }
 
     pub(crate) fn scroll_lines(&mut self, delta: i32) {
         if let Err(err) = self.mux.pane(self.active_pane).scroll_lines(delta) {
-            log::warn!("failed to send pane scroll: {err}");
+            tracing::warn!("failed to send pane scroll: {err}");
         }
     }
 
@@ -127,19 +127,19 @@ impl SurfaceState {
                 palette: theme.palette,
             })
         {
-            log::warn!("failed to send pane theme colors: {err}");
+            tracing::warn!("failed to send pane theme colors: {err}");
         }
     }
 
     pub(crate) fn set_cursor_shape(&mut self, shape: MuxCursorShape) {
         if let Err(err) = self.mux.pane(self.active_pane).set_cursor_shape(shape) {
-            log::warn!("failed to send pane cursor shape: {err}");
+            tracing::warn!("failed to send pane cursor shape: {err}");
         }
     }
 
     pub(crate) fn ack_presented(&mut self, generation: u64) {
         if let Err(err) = self.mux.pane(self.active_pane).ack_presented(generation) {
-            log::warn!("failed to ack presented pane frame: {err}");
+            tracing::warn!("failed to ack presented pane frame: {err}");
         }
     }
 

@@ -249,6 +249,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::ConfigFileChanged => self.reload_config(),
             UserEvent::ThemeFileChanged(path) => self.on_theme_file_changed(&path),
             UserEvent::Mux(MuxEvent::Wake) => {
+                let _span = tracing::debug_span!("mux::refresh").entered();
                 let mut should_exit = false;
                 if let Some(surface) = self.surface_mut() {
                     match surface.refresh_updates() {
@@ -260,7 +261,7 @@ impl ApplicationHandler<UserEvent> for App {
                                 surface.renderer.apply_image_cache_event(image_event);
                             }
                             for err in refresh.errors {
-                                log::warn!("pane error: {err}");
+                                tracing::warn!("pane error: {err}");
                             }
                             if frame_dirty || !image_events.is_empty() {
                                 surface.mark_dirty();
@@ -270,7 +271,7 @@ impl ApplicationHandler<UserEvent> for App {
                             }
                             should_exit = exited.contains(&surface.active_pane);
                         }
-                        Err(err) => log::warn!("mux refresh failed: {err}"),
+                        Err(err) => tracing::warn!("mux refresh failed: {err}"),
                     }
                 }
                 if should_exit {
@@ -365,7 +366,7 @@ pub(crate) fn mux_shape_from_config(style: seance_config::CursorStyle) -> MuxCur
 pub(crate) fn link_detector_from_config(config: &seance_config::LinksConfig) -> LinkDetector {
     let modifiers = link_modifiers_from_config(config.modifiers);
     LinkDetector::from_options(modifiers, config.url, config.paths).unwrap_or_else(|err| {
-        log::warn!("failed to compile link detector: {err}");
+        tracing::warn!("failed to compile link detector: {err}");
         LinkDetector::from_options(modifiers, false, false)
             .expect("disabled link detector should compile")
     })

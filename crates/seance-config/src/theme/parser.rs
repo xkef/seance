@@ -93,13 +93,13 @@ pub fn parse_source(text: &str) -> Result<Theme, ParseError> {
             // Ghostty accepts these but they never appear in bundled files
             // and we have no implementation yet. Log and skip.
             "palette-generate" | "palette-harmonious" => {
-                log::debug!("theme: ignoring `{key} = {value}` (not implemented)");
+                tracing::debug!("theme: ignoring `{key} = {value}` (not implemented)");
             }
             // Silently ignored per Ghostty parity: theme files cannot set
             // the active theme or pull in more config files.
             "theme" | "config-file" => {}
             _ => {
-                log::warn!("theme: unknown key `{key}` on line {line_no}, skipping");
+                tracing::warn!("theme: unknown key `{key}` on line {line_no}, skipping");
             }
         }
     }

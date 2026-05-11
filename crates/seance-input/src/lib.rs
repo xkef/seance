@@ -287,7 +287,7 @@ impl InputHandler {
         let mut buf = Vec::new();
         let _ = self.key_encoder.encode_to_vec(&key_event, &mut buf);
 
-        if log::log_enabled!(log::Level::Trace) {
+        if tracing::enabled!(tracing::Level::TRACE) {
             let logical = match &event.logical_key {
                 Key::Character(s) => Some(s.as_str()),
                 _ => None,
@@ -296,7 +296,7 @@ impl InputHandler {
             let all_mods = event.text_with_all_modifiers();
             #[cfg(not(target_os = "macos"))]
             let all_mods: Option<&str> = None;
-            log::trace!(
+            tracing::trace!(
                 "encode_key: code={code:?} text={:?} logical={logical:?} all_mods={all_mods:?} \
                  mods={:?} -> {buf:02x?}",
                 event.text.as_deref(),

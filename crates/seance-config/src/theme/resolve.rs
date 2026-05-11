@@ -86,7 +86,7 @@ impl std::error::Error for LoadError {}
 pub fn load(spec: Option<&str>) -> Theme {
     let spec = ThemeSpec::parse(spec.unwrap_or(DEFAULT_THEME_NAME));
     try_load(&spec).unwrap_or_else(|err| {
-        log::warn!("theme load failed ({err}); falling back to {DEFAULT_THEME_NAME}");
+        tracing::warn!("theme load failed ({err}); falling back to {DEFAULT_THEME_NAME}");
         fallback_bundled(DEFAULT_THEME_NAME)
     })
 }
@@ -107,7 +107,7 @@ fn load_named(name: &str) -> Result<Theme, LoadError> {
         let user_path = dir.join("themes").join(name);
         match fs::read_to_string(&user_path) {
             Ok(text) => {
-                log::info!("theme: using user override {}", user_path.display());
+                tracing::info!("theme: using user override {}", user_path.display());
                 return parse_source(&text).map_err(|e| LoadError::Parse(name.to_string(), e));
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -130,7 +130,7 @@ fn fallback_bundled(name: &str) -> Theme {
     bundled::get(name)
         .and_then(|t| parse_source(t).ok())
         .unwrap_or_else(|| {
-            log::error!(
+            tracing::error!(
                 "default bundled theme '{name}' missing or unparseable — \
                  run tools/setup-themes.sh"
             );

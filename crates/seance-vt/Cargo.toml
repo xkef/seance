@@ -15,10 +15,10 @@ seance-protocol.workspace = true
 bytes.workspace = true
 libc.workspace = true
 libghostty-vt.workspace = true
-log.workspace = true
 png.workspace = true
 polling.workspace = true
 portable-pty.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true

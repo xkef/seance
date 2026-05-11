@@ -63,7 +63,7 @@ pub fn config_file_path() -> Option<PathBuf> {
 /// Load the config. Missing file or parse error yields defaults.
 pub fn load() -> Config {
     let Some(path) = config_file_path() else {
-        log::debug!("no XDG_CONFIG_HOME or HOME set; using compile-time config defaults");
+        tracing::debug!("no XDG_CONFIG_HOME or HOME set; using compile-time config defaults");
         return Config::default();
     };
     load_from(&path)
@@ -74,20 +74,20 @@ pub fn load_from(path: &Path) -> Config {
     match fs::read_to_string(path) {
         Ok(text) => match toml::from_str::<Config>(&text) {
             Ok(cfg) => {
-                log::info!("loaded config from {}", path.display());
+                tracing::info!("loaded config from {}", path.display());
                 cfg
             }
             Err(err) => {
-                log::warn!("failed to parse {} — using defaults: {err}", path.display());
+                tracing::warn!("failed to parse {} — using defaults: {err}", path.display());
                 Config::default()
             }
         },
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            log::debug!("no config file at {} — using defaults", path.display());
+            tracing::debug!("no config file at {} — using defaults", path.display());
             Config::default()
         }
         Err(err) => {
-            log::warn!("failed to read {} — using defaults: {err}", path.display());
+            tracing::warn!("failed to read {} — using defaults: {err}", path.display());
             Config::default()
         }
     }

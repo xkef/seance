@@ -105,7 +105,7 @@ pub fn set_option_as_alt(window: &winit::window::Window, mode: seance_input::Opt
         OptionAsAlt::Right => WinitOptionAsAlt::OnlyRight,
         OptionAsAlt::Both => WinitOptionAsAlt::Both,
     };
-    log::info!("macOS option-as-alt -> {mode:?} (winit: {winit_mode:?})");
+    tracing::info!("macOS option-as-alt -> {mode:?} (winit: {winit_mode:?})");
     window.set_option_as_alt(winit_mode);
 }
 

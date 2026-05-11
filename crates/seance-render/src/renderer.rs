@@ -183,8 +183,9 @@ impl TerminalRenderer {
     }
 
     pub fn render(&mut self, inputs: &RenderInputs) -> bool {
+        let _span = tracing::trace_span!("render::frame").entered();
         let Some(fi) = self.cell_builder.last_frame() else {
-            log::warn!("render: no frame built yet");
+            tracing::warn!("render: no frame built yet");
             return false;
         };
         self.gpu.render_frame(

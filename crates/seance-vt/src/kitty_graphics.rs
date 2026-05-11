@@ -190,7 +190,7 @@ fn walk_placements(
         emitted += 1;
     }
     if emitted > 0 {
-        log::debug!("walk_placements layer={layer:?} emitted={emitted}");
+        tracing::debug!("walk_placements layer={layer:?} emitted={emitted}");
     }
     Some(())
 }
@@ -229,7 +229,7 @@ fn walk_images(vt: &VtTerminal<'static, 'static>, visitor: &mut dyn ImageVisitor
         let Some(rgba) = expand_to_rgba(format, width, height, data, &mut scratch) else {
             continue;
         };
-        log::debug!(
+        tracing::debug!(
             "walk_images uploading id={image_id} {width}x{height} format={format:?} bytes={}",
             rgba.len()
         );
@@ -374,7 +374,7 @@ fn walk_virtual_placements(
     if infos.is_empty() {
         return Some(());
     }
-    log::debug!(
+    tracing::debug!(
         "walk_virtual_placements layer={layer:?} virtual_infos={}",
         infos.len()
     );
@@ -422,7 +422,7 @@ fn walk_virtual_placements(
         screen_row += 1;
     }
     if placeholder_cells > 0 {
-        log::debug!(
+        tracing::debug!(
             "walk_virtual_placements layer={layer:?} placeholder_cells={placeholder_cells} \
              cell_px={cell_w}x{cell_h}"
         );
