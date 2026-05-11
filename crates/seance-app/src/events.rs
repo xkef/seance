@@ -87,7 +87,6 @@ impl App {
             AppCommand::SelectAll => {
                 if let Some(surface) = self.surface_mut() {
                     surface.select_all();
-                    surface.sync_selection_to_overlay();
                     surface.mark_dirty();
                 }
             }
@@ -157,7 +156,6 @@ impl App {
         let (col, row) = surface.renderer.pixel_to_grid(position.x, position.y);
         if surface.mouse.is_down {
             surface.update_selection(col, row);
-            surface.sync_selection_to_overlay();
             surface.mark_dirty();
         }
         surface.refresh_hovered_link();
@@ -238,7 +236,6 @@ fn handle_mouse_press(surface: &mut SurfaceState) {
         3 => surface.start_line_selection(row),
         _ => {}
     }
-    surface.sync_selection_to_overlay();
     surface.mouse.is_down = true;
     surface.mark_dirty();
 }
