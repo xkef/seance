@@ -562,9 +562,19 @@ mod unix_actor {
                     pixel_height: options.pixel_height,
                 })
                 .map_err(|err| SpawnError::Pty(err.to_string()))?;
+            // GUI launches (e.g. macOS `.app` bundles) inherit no TERM from
+            // launchd, which leaves terminfo-based programs (htop via ncurses,
+            // tmux via libtinfo) unable to start. Force a widely-installed
+            // terminfo entry so the child shell can describe us. Revisit if we
+            // ship our own terminfo.
+            let mut command = CommandBuilder::new_default_prog();
+            command.env("TERM", "xterm-256color");
+            command.env("COLORTERM", "truecolor");
+            command.env("TERM_PROGRAM", "seance");
+            command.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
             let child = pair
                 .slave
-                .spawn_command(CommandBuilder::new_default_prog())
+                .spawn_command(command)
                 .map_err(|err| SpawnError::Pty(err.to_string()))?;
             let reader = pair
                 .master
