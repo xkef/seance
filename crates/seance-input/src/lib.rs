@@ -198,6 +198,29 @@ impl InputHandler {
         if out.is_empty() { None } else { Some(out) }
     }
 
+    /// Encode wheel scrolling in the alternate screen as Up/Down arrow
+    /// sequences when DECSET 1007 (alternate scroll) is active. Returns
+    /// `None` when the alt-screen isn't active, 1007 is off, or `lines`
+    /// is zero — the caller falls back to local viewport scrolling, which
+    /// is itself a no-op in the alt-screen.
+    pub fn encode_alt_scroll(&self, lines: i32, modes: TerminalModes) -> Option<Vec<u8>> {
+        if !modes.alt_screen || !modes.alt_scroll || lines == 0 {
+            return None;
+        }
+        let seq: &[u8] = match (modes.cursor_keys, lines > 0) {
+            (true, true) => b"\x1bOA",
+            (true, false) => b"\x1bOB",
+            (false, true) => b"\x1b[A",
+            (false, false) => b"\x1b[B",
+        };
+        let count = lines.unsigned_abs() as usize;
+        let mut out = Vec::with_capacity(seq.len() * count);
+        for _ in 0..count {
+            out.extend_from_slice(seq);
+        }
+        Some(out)
+    }
+
     /// Encode a mouse button or motion event as VT mouse sequences. Returns
     /// `None` when mouse tracking is off, or when the event isn't reportable
     /// under the active sub-mode (motion under X10/Normal, motion without a
@@ -280,8 +303,8 @@ impl InputHandler {
             .set_key(gk)
             .set_action(keymap::map_action(event.state))
             .set_mods(keymap::map_mods(modifiers));
-        if let Some(text) = &event.text {
-            key_event.set_utf8(Some(text.as_str()));
+        if let Some(text) = event.text.as_deref().filter(|t| is_safe_encoder_text(t)) {
+            key_event.set_utf8(Some(text));
         }
 
         let mut buf = Vec::new();
@@ -308,6 +331,20 @@ impl InputHandler {
     }
 }
 
+// `libghostty-vt::Event::set_utf8` requires the unmodified character before
+// any Ctrl/Meta transformations and explicitly forbids C0 controls
+// (U+0000-U+001F, U+007F) and macOS PUA function-key codes (U+F700-U+F8FF).
+// winit puts those codepoints in `event.text` for keys like Enter (`\r`),
+// Tab (`\t`), Backspace, and the macOS arrow / function keys — passing
+// them through leaves the encoder in an undefined state. Drop the text on
+// a forbidden codepoint and let the encoder fall back to the logical-key
+// path, which produces the documented VT sequence.
+fn is_safe_encoder_text(text: &str) -> bool {
+    !text
+        .chars()
+        .any(|c| c <= '\u{001F}' || c == '\u{007F}' || ('\u{F700}'..='\u{F8FF}').contains(&c))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,6 +368,19 @@ mod tests {
             mouse_tracking: tracking,
             mouse_format_sgr: sgr,
             bracketed_paste: false,
+            alt_screen: false,
+            alt_scroll: false,
+        }
+    }
+
+    fn alt_scroll_modes(alt_screen: bool, alt_scroll: bool, cursor_keys: bool) -> TerminalModes {
+        TerminalModes {
+            cursor_keys,
+            mouse_tracking: MouseTracking::None,
+            mouse_format_sgr: false,
+            bracketed_paste: false,
+            alt_screen,
+            alt_scroll,
         }
     }
 
@@ -449,5 +499,92 @@ mod tests {
                 "wheel should encode under {t:?}",
             );
         }
+    }
+
+    #[test]
+    fn safe_text_filter_rejects_libghostty_forbidden_codepoints() {
+        for c in ['\r', '\t', '\u{0008}', '\u{001B}', '\u{0000}', '\u{001F}'] {
+            let s = c.to_string();
+            assert!(
+                !is_safe_encoder_text(&s),
+                "C0 control {c:?} should be filtered"
+            );
+        }
+        assert!(!is_safe_encoder_text("\u{007F}"), "DEL should be filtered");
+
+        for c in ['\u{F700}', '\u{F701}', '\u{F702}', '\u{F703}', '\u{F8FF}'] {
+            let s = c.to_string();
+            assert!(
+                !is_safe_encoder_text(&s),
+                "macOS PUA {c:?} should be filtered"
+            );
+        }
+
+        assert!(!is_safe_encoder_text("a\u{F700}"));
+        assert!(!is_safe_encoder_text("\r\n"));
+    }
+
+    #[test]
+    fn safe_text_filter_passes_real_text() {
+        for s in ["a", "Z", "1", " ", "ø", "é", "ab", "你好", "😀"] {
+            assert!(is_safe_encoder_text(s), "{s:?} should pass through");
+        }
+        assert!(is_safe_encoder_text("\u{0020}"));
+        assert!(is_safe_encoder_text("\u{F6FF}"));
+        assert!(is_safe_encoder_text("\u{F900}"));
+    }
+
+    #[test]
+    fn alt_scroll_disabled_when_not_alt_screen() {
+        let h = InputHandler::new();
+        assert!(
+            h.encode_alt_scroll(3, alt_scroll_modes(false, true, false))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn alt_scroll_disabled_when_1007_off() {
+        let h = InputHandler::new();
+        assert!(
+            h.encode_alt_scroll(3, alt_scroll_modes(true, false, false))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn alt_scroll_csi_up_under_normal_cursor_keys() {
+        let h = InputHandler::new();
+        let out = h
+            .encode_alt_scroll(3, alt_scroll_modes(true, true, false))
+            .expect("alt-scroll should emit CSI up");
+        assert_eq!(out, b"\x1b[A\x1b[A\x1b[A");
+    }
+
+    #[test]
+    fn alt_scroll_csi_down_under_normal_cursor_keys() {
+        let h = InputHandler::new();
+        let out = h
+            .encode_alt_scroll(-2, alt_scroll_modes(true, true, false))
+            .expect("alt-scroll should emit CSI down");
+        assert_eq!(out, b"\x1b[B\x1b[B");
+    }
+
+    #[test]
+    fn alt_scroll_ss3_under_application_cursor_keys() {
+        let h = InputHandler::new();
+        let out = h
+            .encode_alt_scroll(1, alt_scroll_modes(true, true, true))
+            .expect("alt-scroll should emit SS3 up under DECCKM");
+        assert_eq!(out, b"\x1bOA");
+    }
+
+    #[test]
+    fn alt_scroll_zero_lines_returns_none() {
+        let h = InputHandler::new();
+        assert!(
+            h.encode_alt_scroll(0, alt_scroll_modes(true, true, false))
+                .is_none()
+        );
     }
 }

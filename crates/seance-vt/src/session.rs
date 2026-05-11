@@ -562,9 +562,19 @@ mod unix_actor {
                     pixel_height: options.pixel_height,
                 })
                 .map_err(|err| SpawnError::Pty(err.to_string()))?;
+            // GUI launches (e.g. macOS `.app` bundles) inherit no TERM from
+            // launchd, which leaves terminfo-based programs (htop via ncurses,
+            // tmux via libtinfo) unable to start. Force a widely-installed
+            // terminfo entry so the child shell can describe us. Revisit if we
+            // ship our own terminfo.
+            let mut command = CommandBuilder::new_default_prog();
+            command.env("TERM", "xterm-256color");
+            command.env("COLORTERM", "truecolor");
+            command.env("TERM_PROGRAM", "seance");
+            command.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
             let child = pair
                 .slave
-                .spawn_command(CommandBuilder::new_default_prog())
+                .spawn_command(command)
                 .map_err(|err| SpawnError::Pty(err.to_string()))?;
             let reader = pair
                 .master
@@ -769,7 +779,7 @@ mod unix_actor {
                         .sync_gate
                         .on_watchdog(self.sync_active(), Instant::now())
                 {
-                    let _ = self.publish_snapshot();
+                    let _ = self.publish_snapshot_if_dirty();
                 }
             }
 
@@ -874,7 +884,7 @@ mod unix_actor {
                     .sync_gate
                     .after_parse_batch(self.sync_active(), Instant::now())
             {
-                let _ = self.publish_snapshot();
+                let _ = self.publish_snapshot_if_dirty();
             }
             Ok(ReadOutcome::Alive)
         }
@@ -883,6 +893,25 @@ mod unix_actor {
             for bytes in self.core.drain_responses() {
                 self.pending_writes.push(bytes);
             }
+        }
+
+        /// Publish a snapshot only if the parse produced visible content
+        /// changes. Mode toggles like `\x1b[?2004h/l`, `\x1b[?2031h/l`, and
+        /// `\x1b[=Nu` round-trip through libghostty without dirtying any
+        /// rows; under rapid history navigation the shell emits a pair of
+        /// these around every prompt redraw, and forwarding them as
+        /// `PaneUpdate`s drives a full GPU redraw per keystroke for zero
+        /// painted-pixel difference. The actor keeps the generation
+        /// increment so subsequent real changes still ship with the
+        /// correct generation; only the slot push, the wake, and the
+        /// downstream redraw are skipped for the no-op snapshot.
+        fn publish_snapshot_if_dirty(&mut self) -> Result<(), VtCoreError> {
+            let snapshot = self.core.snapshot()?;
+            if matches!(snapshot.dirty, crate::frame::DirtySnapshot::Clean) {
+                return Ok(());
+            }
+            self.notifier.publish(Arc::new(snapshot));
+            Ok(())
         }
 
         fn publish_snapshot(&mut self) -> Result<(), VtCoreError> {

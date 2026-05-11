@@ -40,7 +40,7 @@ Epic index:
 ┌─ input ──────────────────────────────────────────────────────────────┐
 │ winit event loop → seance-input                                      │
 │   key: KeyboardEvent → libghostty-vt key encoder → bytes             │
-│   mouse: wheel/click/drag → SGR 1006 / X10 encoding or ScrollLines   │
+│   mouse: click/drag → SGR 1006; wheel → 4/5, alt-arrows, or scroll   │
 │ UI sends mux PaneInput/ResizePane/ScrollLines                        │
 │ Local mux forwards to VT Actor, which writes PTY ─────────▶ shell    │
 └──────────────────────────────────────────────────────────────────────┘
