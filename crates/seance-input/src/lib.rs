@@ -198,6 +198,29 @@ impl InputHandler {
         if out.is_empty() { None } else { Some(out) }
     }
 
+    /// Encode wheel scrolling in the alternate screen as Up/Down arrow
+    /// sequences when DECSET 1007 (alternate scroll) is active. Returns
+    /// `None` when the alt-screen isn't active, 1007 is off, or `lines`
+    /// is zero — the caller falls back to local viewport scrolling, which
+    /// is itself a no-op in the alt-screen.
+    pub fn encode_alt_scroll(&self, lines: i32, modes: TerminalModes) -> Option<Vec<u8>> {
+        if !modes.alt_screen || !modes.alt_scroll || lines == 0 {
+            return None;
+        }
+        let seq: &[u8] = match (modes.cursor_keys, lines > 0) {
+            (true, true) => b"\x1bOA",
+            (true, false) => b"\x1bOB",
+            (false, true) => b"\x1b[A",
+            (false, false) => b"\x1b[B",
+        };
+        let count = lines.unsigned_abs() as usize;
+        let mut out = Vec::with_capacity(seq.len() * count);
+        for _ in 0..count {
+            out.extend_from_slice(seq);
+        }
+        Some(out)
+    }
+
     /// Encode a mouse button or motion event as VT mouse sequences. Returns
     /// `None` when mouse tracking is off, or when the event isn't reportable
     /// under the active sub-mode (motion under X10/Normal, motion without a
@@ -345,6 +368,19 @@ mod tests {
             mouse_tracking: tracking,
             mouse_format_sgr: sgr,
             bracketed_paste: false,
+            alt_screen: false,
+            alt_scroll: false,
+        }
+    }
+
+    fn alt_scroll_modes(alt_screen: bool, alt_scroll: bool, cursor_keys: bool) -> TerminalModes {
+        TerminalModes {
+            cursor_keys,
+            mouse_tracking: MouseTracking::None,
+            mouse_format_sgr: false,
+            bracketed_paste: false,
+            alt_screen,
+            alt_scroll,
         }
     }
 
@@ -496,5 +532,59 @@ mod tests {
         assert!(is_safe_encoder_text("\u{0020}"));
         assert!(is_safe_encoder_text("\u{F6FF}"));
         assert!(is_safe_encoder_text("\u{F900}"));
+    }
+
+    #[test]
+    fn alt_scroll_disabled_when_not_alt_screen() {
+        let h = InputHandler::new();
+        assert!(
+            h.encode_alt_scroll(3, alt_scroll_modes(false, true, false))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn alt_scroll_disabled_when_1007_off() {
+        let h = InputHandler::new();
+        assert!(
+            h.encode_alt_scroll(3, alt_scroll_modes(true, false, false))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn alt_scroll_csi_up_under_normal_cursor_keys() {
+        let h = InputHandler::new();
+        let out = h
+            .encode_alt_scroll(3, alt_scroll_modes(true, true, false))
+            .expect("alt-scroll should emit CSI up");
+        assert_eq!(out, b"\x1b[A\x1b[A\x1b[A");
+    }
+
+    #[test]
+    fn alt_scroll_csi_down_under_normal_cursor_keys() {
+        let h = InputHandler::new();
+        let out = h
+            .encode_alt_scroll(-2, alt_scroll_modes(true, true, false))
+            .expect("alt-scroll should emit CSI down");
+        assert_eq!(out, b"\x1b[B\x1b[B");
+    }
+
+    #[test]
+    fn alt_scroll_ss3_under_application_cursor_keys() {
+        let h = InputHandler::new();
+        let out = h
+            .encode_alt_scroll(1, alt_scroll_modes(true, true, true))
+            .expect("alt-scroll should emit SS3 up under DECCKM");
+        assert_eq!(out, b"\x1bOA");
+    }
+
+    #[test]
+    fn alt_scroll_zero_lines_returns_none() {
+        let h = InputHandler::new();
+        assert!(
+            h.encode_alt_scroll(0, alt_scroll_modes(true, true, false))
+                .is_none()
+        );
     }
 }

@@ -4,6 +4,7 @@ use libghostty_vt::RenderState;
 use libghostty_vt::Terminal as VtTerminal;
 use libghostty_vt::error::Error as LibghosttyError;
 use libghostty_vt::render::{CellIteration, CellIterator, CursorVisualStyle, Dirty, RowIterator};
+use libghostty_vt::screen::Screen;
 use libghostty_vt::style::{self, PaletteIndex, RgbColor};
 use libghostty_vt::terminal::{Mode, Point, PointCoordinate};
 use seance_protocol::frame::RowMeta;
@@ -33,11 +34,17 @@ pub(crate) fn terminal_modes(vt: &VtTerminal<'static, 'static>) -> TerminalModes
     } else {
         MouseTracking::None
     };
+    let alt_screen = vt
+        .active_screen()
+        .map(|s| s == Screen::Alternate)
+        .unwrap_or(false);
     TerminalModes {
         cursor_keys: mode(Mode::DECCKM),
         mouse_tracking,
         mouse_format_sgr: mode(Mode::SGR_MOUSE),
         bracketed_paste: mode(Mode::BRACKETED_PASTE),
+        alt_screen,
+        alt_scroll: mode(Mode::ALT_SCROLL),
     }
 }
 
