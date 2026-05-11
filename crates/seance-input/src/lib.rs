@@ -4,6 +4,8 @@
 //! libghostty-vt's key and mouse encoders. App-level shortcuts (Cmd+Q,
 //! clipboard, font size) are matched upstream before reaching here.
 
+#![warn(missing_docs)]
+
 mod keymap;
 
 use libghostty_vt::{key, mouse};
@@ -17,7 +19,7 @@ use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 #[derive(Debug)]
 pub enum VtInput {
     /// Raw bytes to write to the PTY.
-    Write(Vec<u8>),
+    Write(#[allow(missing_docs)] Vec<u8>),
     /// The event produced nothing to forward.
     Ignore,
 }
@@ -58,15 +60,19 @@ impl OptionAsAlt {
 /// without forcing callers to import the libghostty type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseAction {
+    /// Button pressed.
     Press,
+    /// Button released.
     Release,
+    /// Cursor moved.
     Motion,
 }
 
-/// Inputs to `InputHandler::encode_mouse_event`. Pure-data record so
+/// Inputs to [`InputHandler::encode_mouse_event`]. Pure-data record so
 /// callers don't have to talk to libghostty-vt directly.
 #[derive(Debug, Clone, Copy)]
 pub struct MouseEventInput {
+    #[allow(missing_docs)]
     pub action: MouseAction,
     /// `None` is permitted only for `Action::Motion` under any-event
     /// tracking, where there is no button to report.
@@ -78,7 +84,9 @@ pub struct MouseEventInput {
     /// the encoder to distinguish motion-with-drag from pure motion
     /// under DECSET 1002.
     pub any_button_pressed: bool,
+    #[allow(missing_docs)]
     pub mods: Modifiers,
+    #[allow(missing_docs)]
     pub size: MouseSize,
 }
 
@@ -134,6 +142,8 @@ impl Default for InputHandler {
 }
 
 impl InputHandler {
+    /// Build a fresh input handler with `OptionAsAlt::None` and the
+    /// xterm-style ALT-as-ESC-prefix behaviour enabled.
     pub fn new() -> Self {
         Self::default()
     }
