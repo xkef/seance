@@ -21,11 +21,17 @@ pub const DEFAULT_THEME_NAME: &str = "Catppuccin Frappe";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThemeSpec {
     /// Look up a name in user dir, then bundled.
-    Named(String),
-    /// `light:A,dark:B` — we currently always pick `dark`.
-    LightDark { light: String, dark: String },
+    Named(#[allow(missing_docs)] String),
+    /// `light:A,dark:B` — only the `dark` variant is loaded right now;
+    /// OS-appearance switching is tracked as #131.
+    LightDark {
+        #[allow(missing_docs)]
+        light: String,
+        #[allow(missing_docs)]
+        dark: String,
+    },
     /// Absolute or explicit filesystem path.
-    Path(PathBuf),
+    Path(#[allow(missing_docs)] PathBuf),
 }
 
 impl ThemeSpec {
@@ -58,12 +64,20 @@ fn split_light_dark(s: &str) -> Option<(String, String)> {
 /// Errors from [`load`]. Callers typically log and fall back.
 #[derive(Debug)]
 pub enum LoadError {
-    /// A named theme could not be found in the user dir or the bundled set.
-    NotFound(String),
+    /// A named theme could not be found in the user dir or the bundled
+    /// set.
+    NotFound(#[allow(missing_docs)] String),
     /// An explicit path did not exist or could not be read.
-    Io(PathBuf, std::io::Error),
-    /// Theme file contained invalid syntax.
-    Parse(String, ParseError),
+    Io(
+        #[allow(missing_docs)] PathBuf,
+        #[allow(missing_docs)] std::io::Error,
+    ),
+    /// Theme file contained invalid syntax. The first field is a
+    /// caller-supplied source label (theme name or path).
+    Parse(
+        #[allow(missing_docs)] String,
+        #[allow(missing_docs)] ParseError,
+    ),
 }
 
 impl std::fmt::Display for LoadError {

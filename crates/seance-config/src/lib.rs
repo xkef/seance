@@ -7,6 +7,8 @@
 //! Theme files live alongside the config but use Ghostty's config syntax (not
 //! TOML) and are resolved by a separate module (issue #12).
 
+#![warn(missing_docs)]
+
 mod diff;
 mod schema;
 pub mod theme;
@@ -22,15 +24,24 @@ pub use theme::{Theme, load as load_theme};
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
+/// Filename of the user's TOML config inside the resolved config directory.
 pub const CONFIG_FILENAME: &str = "config.toml";
 
-/// Errors surfaced by [`try_load`] / [`try_load_from`]. Used by the hot-reload
-/// path (#13) so a bad edit can be rejected instead of silently replaced with
-/// defaults.
+/// Errors surfaced by [`try_load_from`]. Used by the hot-reload path
+/// (#13) so a bad edit can be rejected instead of silently replaced
+/// with defaults.
 #[derive(Debug)]
 pub enum ConfigError {
-    Io(PathBuf, std::io::Error),
-    Parse(PathBuf, toml::de::Error),
+    /// Filesystem read failed at the recorded path.
+    Io(
+        #[allow(missing_docs)] PathBuf,
+        #[allow(missing_docs)] std::io::Error,
+    ),
+    /// File at the recorded path could not be parsed as TOML.
+    Parse(
+        #[allow(missing_docs)] PathBuf,
+        #[allow(missing_docs)] toml::de::Error,
+    ),
 }
 
 impl std::fmt::Display for ConfigError {

@@ -3,8 +3,9 @@
 //! Theme files are plain text, one `key = value` per line, `#` comments.
 //! Ghostty permits a broader config grammar (conditionals, lists) but
 //! theme files in the wild — including all 486 bundled themes — use only
-//! the keys enumerated in [`Key`]. Unknown keys are skipped with a warn
-//! log so unexpected input degrades rather than erroring.
+//! a fixed set of keys (see the match in [`parse_source`]). Unknown keys
+//! are skipped with a warn log so unexpected input degrades rather than
+//! erroring.
 //!
 //! Color values are `#RRGGBB` or `#RGB` hex. The bundled set uses
 //! `#RRGGBB` exclusively; X11 color names and the `cell-foreground` /
@@ -17,16 +18,30 @@ use super::{Theme, default_xterm_palette};
 /// log and fall back to a different theme rather than propagating.
 #[derive(Debug, Clone)]
 pub enum ParseError {
-    Line { line: usize, kind: LineError },
+    /// A specific line failed to parse.
+    Line {
+        /// 1-based line number where the failure occurred.
+        line: usize,
+        /// What was wrong with the line.
+        kind: LineError,
+    },
 }
 
+/// Reason a single theme-file line was rejected.
 #[derive(Debug, Clone)]
 pub enum LineError {
+    /// The line had no `=` separator.
     MissingEquals,
+    /// The key portion (left of `=`) was empty.
     EmptyKey,
-    PaletteIndex(String),
+    /// The palette index could not be parsed or was out of range. The
+    /// payload echoes the offending text.
+    PaletteIndex(#[allow(missing_docs)] String),
+    /// A `palette = ...` line lacked the inner `INDEX=#RRGGBB` separator.
     PaletteNoEquals,
-    BadColor(String),
+    /// A colour value could not be parsed. The payload echoes the
+    /// offending text.
+    BadColor(#[allow(missing_docs)] String),
 }
 
 impl std::fmt::Display for ParseError {
