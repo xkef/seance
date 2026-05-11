@@ -78,9 +78,45 @@ impl Selection {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalModes {
     pub cursor_keys: bool,
-    pub mouse_tracking: bool,
+    pub mouse_tracking: MouseTracking,
     pub mouse_format_sgr: bool,
     pub bracketed_paste: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MouseTracking {
+    #[default]
+    None,
+    X10,
+    Normal,
+    Button,
+    Any,
+}
+
+impl MouseTracking {
+    pub fn is_enabled(self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    pub fn reports_motion(self) -> bool {
+        matches!(self, Self::Button | Self::Any)
+    }
+
+    pub fn reports_motion_without_button(self) -> bool {
+        matches!(self, Self::Any)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MouseSize {
+    pub screen_width: u32,
+    pub screen_height: u32,
+    pub cell_width: u32,
+    pub cell_height: u32,
+    pub padding_top: u32,
+    pub padding_bottom: u32,
+    pub padding_left: u32,
+    pub padding_right: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -14,13 +14,28 @@ use crate::kitty_graphics::{extract_kitty_graphics, is_placeholder_text};
 use crate::modes::TerminalModes;
 use crate::selection::GridPos;
 use crate::snapshot::VtSnapshot;
+use seance_protocol::frame::MouseTracking;
 
 /// Copy live libghostty mode flags into séance-owned input state.
 pub(crate) fn terminal_modes(vt: &VtTerminal<'static, 'static>) -> TerminalModes {
     let mode = |m| vt.mode(m).unwrap_or(false);
+    // Highest-precedence enabled mode wins. Apps typically only set
+    // one at a time, but xterm semantics say the most permissive
+    // tracking mode supersedes the others when more than one is on.
+    let mouse_tracking = if mode(Mode::ANY_MOUSE) {
+        MouseTracking::Any
+    } else if mode(Mode::BUTTON_MOUSE) {
+        MouseTracking::Button
+    } else if mode(Mode::NORMAL_MOUSE) {
+        MouseTracking::Normal
+    } else if mode(Mode::X10_MOUSE) {
+        MouseTracking::X10
+    } else {
+        MouseTracking::None
+    };
     TerminalModes {
         cursor_keys: mode(Mode::DECCKM),
-        mouse_tracking: vt.is_mouse_tracking().unwrap_or(false),
+        mouse_tracking,
         mouse_format_sgr: mode(Mode::SGR_MOUSE),
         bracketed_paste: mode(Mode::BRACKETED_PASTE),
     }

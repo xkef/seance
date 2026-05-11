@@ -6,7 +6,7 @@ use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton};
 use winit::event_loop::ActiveEventLoop;
 
-use seance_input::VtInput;
+use seance_input::{MouseAction, MouseEventInput, VtInput};
 
 use crate::app::App;
 use crate::command::AppCommand;
@@ -130,6 +130,28 @@ impl App {
             return;
         };
         surface.mouse.cursor_pos = position;
+
+        let modes = surface.terminal_modes();
+        let shift_held = surface.modifiers.state().shift_key();
+        // Forward motion to the PTY when an app has opted into motion-bearing
+        // tracking modes (DECSET 1002 button-event or 1003 any-event), unless
+        // the user is holding Shift to force local selection. The encoder
+        // itself filters X10/Normal and the no-button-held case under 1002.
+        if modes.mouse_tracking.reports_motion() && !shift_held {
+            let input = MouseEventInput {
+                action: MouseAction::Motion,
+                button: None,
+                position_px: clamp_position(position),
+                any_button_pressed: surface.mouse.is_down,
+                mods: surface.modifiers,
+                size: surface.renderer.mouse_size(),
+            };
+            if let Some(data) = self.input.encode_mouse_event(input, modes) {
+                surface.write_to_pty(Bytes::from(data));
+            }
+            return;
+        }
+
         let (col, row) = surface.renderer.pixel_to_grid(position.x, position.y);
         if surface.mouse.is_down {
             surface.update_selection(col, row);
@@ -140,12 +162,46 @@ impl App {
     }
 
     pub(crate) fn on_mouse_input(&mut self, state: ElementState, button: MouseButton) {
-        if button != MouseButton::Left {
-            return;
-        }
         let Some(surface) = self.surface.as_mut() else {
             return;
         };
+
+        let modes = surface.terminal_modes();
+        let shift_held = surface.modifiers.state().shift_key();
+        // Tracking active and Shift not held: forward to the PTY and skip
+        // the local-selection path entirely. Shift+click/drag preserves
+        // local selection so users can still copy text inside mouse-aware
+        // apps (xterm/Ghostty convention).
+        if modes.mouse_tracking.is_enabled() && !shift_held {
+            let action = match state {
+                ElementState::Pressed => MouseAction::Press,
+                ElementState::Released => MouseAction::Release,
+            };
+            // Update `is_down` BEFORE encoding so that any-button-pressed
+            // reflects the post-event state when reporting under DECSET
+            // 1002 motion (xterm reports drag bytes carrying the held
+            // button, and the very first motion after press needs the
+            // bit set).
+            surface.mouse.is_down = state == ElementState::Pressed;
+            let input = MouseEventInput {
+                action,
+                button: Some(button),
+                position_px: clamp_position(surface.mouse.cursor_pos),
+                any_button_pressed: surface.mouse.is_down,
+                mods: surface.modifiers,
+                size: surface.renderer.mouse_size(),
+            };
+            if let Some(data) = self.input.encode_mouse_event(input, modes) {
+                surface.write_to_pty(Bytes::from(data));
+            }
+            return;
+        }
+
+        // Tracking off (or Shift held): legacy local-selection path.
+        // Right/middle remain unbound locally — match the old behavior.
+        if button != MouseButton::Left {
+            return;
+        }
         match state {
             ElementState::Pressed => handle_mouse_press(surface),
             ElementState::Released => {
@@ -154,6 +210,10 @@ impl App {
             }
         }
     }
+}
+
+fn clamp_position(p: PhysicalPosition<f64>) -> (f32, f32) {
+    (p.x.max(0.0) as f32, p.y.max(0.0) as f32)
 }
 
 fn handle_mouse_press(surface: &mut SurfaceState) {
