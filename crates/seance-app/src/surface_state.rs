@@ -14,8 +14,8 @@ use winit::event::Modifiers;
 use winit::window::{CursorIcon, Window};
 
 use seance_mux::{
-    ClientRefresh, CursorShape as MuxCursorShape, DetectedLink, GridPos, LinkDetector,
-    LinkModifiers, LinkTarget, LocalDomain, MuxClient, PaneRef, Resize, TerminalModes, ThemeColors,
+    ClientRefresh, CursorShape as MuxCursorShape, DetectedLink, GridPos, LinkModifiers, LinkTarget,
+    LocalDomain, MuxClient, PaneRef, Resize, TerminalModes, ThemeColors,
 };
 use seance_render::{HoveredLinkRange, RenderInputs, TerminalRenderer};
 
@@ -27,7 +27,6 @@ pub(crate) struct SurfaceState {
     pub(crate) mux: MuxClient<LocalDomain>,
     pub(crate) active_pane: PaneRef,
     pub(crate) render_inputs: RenderInputs,
-    pub(crate) link_detector: LinkDetector,
     pub(crate) modifiers: Modifiers,
     pub(crate) cell_size: [f32; 2],
     pub(crate) content_dirty: bool,
@@ -45,7 +44,6 @@ impl SurfaceState {
         mux: MuxClient<LocalDomain>,
         active_pane: PaneRef,
         render_inputs: RenderInputs,
-        link_detector: LinkDetector,
     ) -> Self {
         let cell_size = renderer.cell_size();
         Self {
@@ -54,7 +52,6 @@ impl SurfaceState {
             mux,
             active_pane,
             render_inputs,
-            link_detector,
             modifiers: Modifiers::default(),
             cell_size,
             content_dirty: true,
@@ -155,17 +152,12 @@ impl SurfaceState {
 
     pub(crate) fn clear_selection(&mut self) {
         self.mux.pane(self.active_pane).clear_selection();
-        self.render_inputs.selection = None;
     }
 
     pub(crate) fn selection_range(&self) -> Option<(GridPos, GridPos)> {
         self.mux
             .pane_view(self.active_pane)
             .and_then(|view| view.selection_range())
-    }
-
-    pub(crate) fn sync_selection_to_overlay(&mut self) {
-        self.render_inputs.selection = self.selection_range();
     }
 
     pub(crate) fn start_selection(&mut self, col: u16, row: u16) {
@@ -208,38 +200,45 @@ impl SurfaceState {
     }
 
     pub(crate) fn refresh_hovered_link(&mut self) {
-        let new_link = self.current_link_at_cursor().map(|link| HoveredLinkRange {
-            start: link.range.start,
-            end: link.range.end,
-        });
-        if self.render_inputs.hovered_link == new_link {
-            return;
-        }
-        let now_active = new_link.is_some();
-        self.render_inputs.hovered_link = new_link;
-        self.window.set_cursor(if now_active {
+        self.update_hover_input();
+        let new_link = self.hovered_link_range();
+        self.window.set_cursor(if new_link.is_some() {
             CursorIcon::Pointer
         } else {
             CursorIcon::Default
         });
-        self.mark_dirty();
+        if self.render_inputs.hovered_link != new_link {
+            self.mark_dirty();
+        }
     }
 
-    pub(crate) fn current_link_at_cursor(&self) -> Option<DetectedLink> {
-        let pos = self.current_hover_cell();
-        let modifiers = self.link_modifiers();
+    pub(crate) fn hovered_link_range(&self) -> Option<HoveredLinkRange> {
         self.mux
-            .pane_view(self.active_pane)?
-            .link_at(pos, &self.link_detector, modifiers)
+            .hovered_link_range(self.active_pane)
+            .map(|range| HoveredLinkRange {
+                start: range.start,
+                end: range.end,
+            })
     }
 
-    pub(crate) fn current_link_target(&self) -> Option<(LinkTarget, Option<String>)> {
+    pub(crate) fn current_link_at_cursor(&mut self) -> Option<DetectedLink> {
+        self.update_hover_input();
+        self.mux.hovered_link(self.active_pane)
+    }
+
+    pub(crate) fn current_link_target(&mut self) -> Option<(LinkTarget, Option<String>)> {
         let link = self.current_link_at_cursor()?;
         let pwd = self
             .mux
             .pane_view(self.active_pane)
             .and_then(|view| view.pwd().map(str::to_owned));
         Some((link.target, pwd))
+    }
+
+    fn update_hover_input(&mut self) {
+        let pos = self.current_hover_cell();
+        let modifiers = self.link_modifiers();
+        let _ = self.mux.set_hover_input(self.active_pane, pos, modifiers);
     }
 
     fn current_hover_cell(&self) -> GridPos {

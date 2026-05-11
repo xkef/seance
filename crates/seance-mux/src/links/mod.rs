@@ -96,12 +96,22 @@ impl LinkRule {
 }
 
 pub struct LinkDetector {
+    enabled: bool,
     activation_mods: LinkModifiers,
     rules: Vec<LinkRule>,
     default_rule: Option<Regex>,
 }
 
 impl LinkDetector {
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            activation_mods: LinkModifiers::default(),
+            rules: Vec::new(),
+            default_rule: None,
+        }
+    }
+
     pub fn default_ghostty_like(mods: LinkModifiers) -> Self {
         Self::from_options(mods, true, true).expect("default link regex should compile")
     }
@@ -112,6 +122,7 @@ impl LinkDetector {
         paths: bool,
     ) -> Result<Self, fancy_regex::Error> {
         Ok(Self {
+            enabled: true,
             activation_mods,
             rules: Vec::new(),
             default_rule: default_url::compile(urls, paths)?,
@@ -128,7 +139,7 @@ impl LinkDetector {
         pos: GridPos,
         mods: LinkModifiers,
     ) -> Option<DetectedLink> {
-        if !self.activation_mods.matches(mods) {
+        if !self.enabled || !self.activation_mods.matches(mods) {
             return None;
         }
 

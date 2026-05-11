@@ -45,7 +45,12 @@ or error semantics. _Avoid_: pane event, frame dirty event
 materialized into a VT Snapshot. _Avoid_: latest snapshot diff without base
 
 **Pane View**: Client-side pane state that materializes pane updates and owns
-selection/view state. _Avoid_: shared terminal state
+one Pane Interaction State. _Avoid_: shared terminal state
+
+**Pane Interaction State**: Per-client state for how one Pane View is being
+inspected or manipulated, including selection, copy mode, scrollback viewport,
+and hovered link. _Avoid_: shared selection, server-side copy mode, tmux-style
+pane state
 
 **Pane Handle**: The app-facing handle for one Pane View. It sends pane commands
 through the Mux Client and exposes render/copy state from the Pane View.
@@ -75,6 +80,9 @@ adapter
 - A **Mux Client** sends commands through exactly one **Domain**.
 - A **Mux Client** drains **Pane Updates** after a **Mux Wake**.
 - A **Mux Client** applies **Pane Updates** to **Pane Views**.
+- A **Pane View** owns exactly one **Pane Interaction State**.
+- **Pane Interaction State** is per **Mux Client** and is not shared through a
+  **Domain**.
 - A **Pane Handle** sends commands through its **Mux Client**.
 - A **Pane Handle** exposes render/copy state from one **Pane View**.
 - A **Pane View** materializes **Pane Updates** into a current **VT Snapshot**.
@@ -98,3 +106,6 @@ adapter
 - "terminal" can mean the app, the live libghostty terminal, or the user's
   shell. Use **VT Core**, **VT Actor**, **Pane Session**, or **VT Snapshot**
   when those are the intended concepts.
+- "selection" can mean shared tmux-style pane state or per-client UI state; in
+  séance, selection belongs to **Pane Interaction State** unless an explicit
+  shared protocol feature says otherwise.
