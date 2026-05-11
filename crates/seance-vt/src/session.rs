@@ -31,10 +31,15 @@ const PTY_KEY: usize = 0;
 /// Options used when spawning a VT session actor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VtSessionOptions {
+    /// Initial grid width in cells.
     pub cols: u16,
+    /// Initial grid height in cells.
     pub rows: u16,
+    /// Initial cell width in pixels (used for kitty-graphics sizing).
     pub pixel_width: u16,
+    /// Initial cell height in pixels (used for kitty-graphics sizing).
     pub pixel_height: u16,
+    /// Cursor shape the actor presents until DECSCUSR overrides it.
     pub initial_cursor_shape: CursorShape,
 }
 
@@ -53,25 +58,42 @@ impl Default for VtSessionOptions {
 /// Public events emitted by the VT actor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VtEvent {
+    /// A new snapshot is available in [`SnapshotSlot`]. Coalesced —
+    /// multiple updates between observations collapse into one event.
     ContentDirty,
+    /// The PTY's child process exited; no more content will arrive.
     Exited,
 }
 
-/// Commands accepted by the VT actor.
+/// Commands accepted by the VT actor. Sent via [`VtSessionHandle`]; the
+/// actor processes them on its IO thread.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VtCommand {
-    Write(Bytes),
+    /// Write bytes to the PTY input.
+    Write(#[allow(missing_docs)] Bytes),
+    /// Resize the grid and the cell pixel dimensions.
     Resize {
+        #[allow(missing_docs)]
         cols: u16,
+        #[allow(missing_docs)]
         rows: u16,
+        #[allow(missing_docs)]
         pixel_width: u16,
+        #[allow(missing_docs)]
         pixel_height: u16,
     },
-    SetThemeColors(ThemeColors),
-    ScrollLines(i32),
-    SetCursorShape(CursorShape),
-    AckRendered(u64),
+    /// Push a new theme palette into the actor.
+    SetThemeColors(#[allow(missing_docs)] ThemeColors),
+    /// Scroll the viewport by `delta` rows (negative scrolls back).
+    ScrollLines(#[allow(missing_docs)] i32),
+    /// Override the cursor shape from the UI side.
+    SetCursorShape(#[allow(missing_docs)] CursorShape),
+    /// Acknowledge that frame `generation` reached the screen; the
+    /// actor uses this to clear the dirty extent published before that
+    /// frame.
+    AckRendered(#[allow(missing_docs)] u64),
+    /// Stop the actor. The IO thread drains pending work and exits.
     Shutdown,
 }
 
@@ -82,10 +104,12 @@ pub struct SnapshotSlot {
 }
 
 impl SnapshotSlot {
+    /// Empty slot. Equivalent to [`SnapshotSlot::default`].
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Atomically clone the most recently published snapshot, if any.
     pub fn latest_snapshot(&self) -> Option<Arc<VtSnapshot>> {
         self.inner
             .lock()
@@ -101,12 +125,20 @@ impl SnapshotSlot {
 /// Errors returned when spawning the actor.
 #[derive(Debug)]
 pub enum SpawnError {
+    /// Spawn was attempted on a platform without the Unix actor.
     UnsupportedPlatform,
+    /// portable-pty did not give back a Unix raw fd for the master end.
     NoRawFd,
-    Io(io::Error),
-    Pty(String),
-    VtCore(VtCoreError),
-    Init(String),
+    /// IO error during PTY or shell spawn.
+    Io(#[allow(missing_docs)] io::Error),
+    /// portable-pty returned a non-IO error during spawn; payload is
+    /// the human-readable detail.
+    Pty(#[allow(missing_docs)] String),
+    /// libghostty rejected the initial state (sizing, mode setup, …).
+    VtCore(#[allow(missing_docs)] VtCoreError),
+    /// Actor reached an internal initialization failure not classifiable
+    /// above; payload is the human-readable detail.
+    Init(#[allow(missing_docs)] String),
 }
 
 impl fmt::Display for SpawnError {
@@ -141,8 +173,10 @@ impl From<io::Error> for SpawnError {
 /// Errors returned by command methods after the actor has been spawned.
 #[derive(Debug)]
 pub enum VtSessionError {
+    /// The actor has shut down; no more commands can be sent.
     Closed,
-    Notify(io::Error),
+    /// Failed to wake the actor's poller after queuing a command.
+    Notify(#[allow(missing_docs)] io::Error),
 }
 
 impl fmt::Display for VtSessionError {
@@ -173,18 +207,25 @@ pub struct VtSessionHandle {
 }
 
 impl VtSessionHandle {
+    /// Most recently published snapshot, or `None` if the actor has not
+    /// yet produced one.
     pub fn latest_snapshot(&self) -> Option<Arc<VtSnapshot>> {
         self.slot.latest_snapshot()
     }
 
+    /// Acknowledge that the caller has consumed the latest
+    /// [`VtEvent::ContentDirty`]. Subsequent dirty work will set the
+    /// flag again and re-emit.
     pub fn clear_content_dirty_pending(&self) {
         self.content_dirty_pending.store(false, Ordering::SeqCst);
     }
 
+    /// Queue PTY input bytes for the actor to write to the child.
     pub fn write(&self, bytes: Bytes) -> Result<(), VtSessionError> {
         self.send(VtCommand::Write(bytes))
     }
 
+    /// Resize the grid and report the new cell pixel dimensions.
     pub fn resize(&self, resize: Resize) -> Result<(), VtSessionError> {
         self.send(VtCommand::Resize {
             cols: resize.cols,
@@ -194,18 +235,24 @@ impl VtSessionHandle {
         })
     }
 
+    /// Push a new palette into the actor.
     pub fn set_theme_colors(&self, colors: ThemeColors) -> Result<(), VtSessionError> {
         self.send(VtCommand::SetThemeColors(colors))
     }
 
+    /// Scroll the viewport by `delta` rows; negative scrolls back into
+    /// scrollback.
     pub fn scroll_lines(&self, delta: i32) -> Result<(), VtSessionError> {
         self.send(VtCommand::ScrollLines(delta))
     }
 
+    /// Override the cursor shape from the UI side.
     pub fn set_cursor_shape(&self, shape: CursorShape) -> Result<(), VtSessionError> {
         self.send(VtCommand::SetCursorShape(shape))
     }
 
+    /// Tell the actor that frame `generation` reached the screen so it
+    /// can reset the dirty extent published before that frame.
     pub fn ack_rendered(&self, generation: u64) -> Result<(), VtSessionError> {
         self.send(VtCommand::AckRendered(generation))
     }

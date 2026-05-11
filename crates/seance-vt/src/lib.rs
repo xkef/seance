@@ -4,6 +4,11 @@
 //! spawner). External callers send actor commands and render immutable
 //! [`VtSnapshot`] values through [`SnapshotFrameSource`]. [`spawn_vt_session`]
 //! starts the Unix IO actor that owns VT + PTY.
+//!
+//! See `docs/threading.md` for the actor lifetime, snapshot publishing,
+//! and dirty-reset model.
+
+#![warn(missing_docs)]
 
 mod core;
 mod frame;

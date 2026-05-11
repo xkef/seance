@@ -4,6 +4,10 @@
 //! `seance-render-test`. Do not widen without coordinating with the
 //! harness crate.
 
+// `#[doc(hidden)]` does not silence `missing_docs`; this is a private
+// test seam, so blanket-allow inside the module.
+#![allow(missing_docs)]
+
 use libghostty_vt::terminal::Mode;
 
 use crate::VtCoreError;

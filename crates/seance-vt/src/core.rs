@@ -15,9 +15,12 @@ use crate::terminal::install_png_decoder_for_this_thread;
 pub(crate) const DEFAULT_MAX_SCROLLBACK: usize = 10_000;
 pub(crate) const KITTY_IMAGE_STORAGE_LIMIT_BYTES: u64 = 320 * 1000 * 1000;
 
+/// VT-core failure mode propagated outward when libghostty rejects an
+/// operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VtCoreError {
-    LibGhostty(&'static str),
+    /// libghostty reported a failure for the named operation.
+    LibGhostty(#[allow(missing_docs)] &'static str),
 }
 
 impl VtCoreError {
