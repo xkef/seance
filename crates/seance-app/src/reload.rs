@@ -19,7 +19,7 @@ impl App {
         surface.set_theme_colors(theme);
     }
 
-    /// Re-resolve the currently-configured theme and push it to the renderer.
+    /// Re-resolve the active theme and push it to the renderer.
     /// Bad theme files keep the previous theme live (#13).
     pub(crate) fn reload_theme(&mut self) {
         if self.surface.is_none() {

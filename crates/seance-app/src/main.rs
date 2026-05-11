@@ -1,3 +1,9 @@
+//! Binary entry point: builds the winit event loop, loads the config,
+//! and hands control to [`app::App`]. Subsystems (mux, renderer,
+//! config watcher) are wired up lazily on the first `Resumed` event.
+
+#![warn(missing_docs)]
+
 use std::path::PathBuf;
 
 use seance_mux::MuxEvent;
@@ -27,9 +33,9 @@ pub enum UserEvent {
     /// `config.toml` at `$XDG_CONFIG_HOME/seance/` changed.
     ConfigFileChanged,
     /// A file under `$XDG_CONFIG_HOME/seance/themes/` changed.
-    ThemeFileChanged(PathBuf),
+    ThemeFileChanged(#[allow(missing_docs)] PathBuf),
     /// The mux layer has updates ready to drain.
-    Mux(MuxEvent),
+    Mux(#[allow(missing_docs)] MuxEvent),
 }
 
 fn main() {
