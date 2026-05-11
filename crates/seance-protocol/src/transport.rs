@@ -1,3 +1,5 @@
+//! Envelope framing, codec functions, and the [`Transport`] trait.
+
 use std::fmt;
 use std::sync::mpsc;
 
@@ -7,45 +9,71 @@ use crate::identity::ServerSeq;
 use crate::limits::MAX_DECODED_MESSAGE_BYTES;
 use crate::mux::{ClientMessage, MessageKind, ServerMessage};
 
+/// Correlation token attached to a client request. The server echoes
+/// it on the matching [`crate::mux::ServerMessage`]. [`RequestId::PUSH`]
+/// (zero) marks server-initiated messages with no client request.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
-pub struct RequestId(pub u64);
+pub struct RequestId(#[allow(missing_docs)] pub u64);
 
+/// Logical multiplexing channel within a single transport. Used by
+/// [`client_stream`] / [`server_stream`] to keep input, output, image,
+/// and control traffic separable.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
-pub struct StreamId(pub u16);
+pub struct StreamId(#[allow(missing_docs)] pub u16);
 
 impl StreamId {
+    /// Handshake, topology, and acknowledgement traffic.
     pub const CONTROL: Self = Self(0);
+    /// Client-to-server PTY input.
     pub const INPUT: Self = Self(1);
+    /// Server-to-client frame and line traffic.
     pub const OUTPUT: Self = Self(2);
+    /// Image cache events.
     pub const IMAGES: Self = Self(3);
 }
 
 impl RequestId {
+    /// Sentinel for messages with no associated client request — i.e.
+    /// server-initiated push.
     pub const PUSH: Self = Self(0);
 
+    /// Whether this id is the [`PUSH`](Self::PUSH) sentinel.
     pub fn is_push(self) -> bool {
         self.0 == 0
     }
 }
 
+/// Bytes ready for transport, tagged with the [`StreamId`] they belong
+/// on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransportFrame {
+    #[allow(missing_docs)]
     pub stream_id: StreamId,
+    /// Length-prefixed envelope bytes.
     pub bytes: Vec<u8>,
 }
 
+/// Bidirectional, non-blocking transport over which
+/// [`TransportFrame`]s are exchanged. Implementations are expected to
+/// preserve frame boundaries and per-stream ordering.
 pub trait Transport {
+    /// Send `frame`. Returns [`TransportError::Closed`] when the peer
+    /// has gone away.
     fn send(&self, frame: TransportFrame) -> Result<(), TransportError>;
 
+    /// Pull the next frame without blocking. `Ok(None)` means no frame
+    /// is currently available; [`TransportError::Closed`] means EOF.
     fn try_recv(&self) -> Result<Option<TransportFrame>, TransportError>;
 }
 
+/// Failure mode reported by [`Transport`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransportError {
+    /// The transport peer has disconnected.
     Closed,
 }
 
@@ -59,12 +87,16 @@ impl fmt::Display for TransportError {
 
 impl std::error::Error for TransportError {}
 
+/// In-process transport backed by a pair of [`mpsc`] channels. Useful
+/// for the local-only client/server topology and for tests.
 pub struct InProcessTransport {
     tx: mpsc::Sender<TransportFrame>,
     rx: mpsc::Receiver<TransportFrame>,
 }
 
 impl InProcessTransport {
+    /// Build a connected pair: each end's `send` reaches the other's
+    /// `try_recv`.
     pub fn pair() -> (Self, Self) {
         let (client_tx, server_rx) = mpsc::channel();
         let (server_tx, client_rx) = mpsc::channel();
@@ -95,43 +127,74 @@ impl Transport for InProcessTransport {
     }
 }
 
+/// Metadata wrapper around a serialized message payload. The wire form
+/// is `<varint-length-prefix><postcard-encoded Envelope>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope {
+    #[allow(missing_docs)]
     pub request_id: RequestId,
+    #[allow(missing_docs)]
     pub server_seq: ServerSeq,
+    /// Numeric tag of the inner payload's [`MessageKind`].
     pub kind: u16,
+    /// Postcard-encoded message body.
     pub payload: Vec<u8>,
 }
 
 impl Envelope {
+    /// Decode [`Self::kind`] into a [`MessageKind`], or report
+    /// [`CodecError::UnknownMessage`] if the tag is not recognised.
     pub fn known_kind(&self) -> Result<MessageKind, CodecError> {
         MessageKind::try_from(self.kind)
     }
 }
 
+/// Direction a particular [`MessageKind`] is expected to flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageDirection {
+    /// Client-emitted message.
     Client,
+    /// Server-emitted message.
     Server,
 }
 
+/// Reasons a wire-level encode or decode failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodecError {
-    UnknownMessage(u16),
+    /// Envelope tag value did not correspond to a [`MessageKind`].
+    UnknownMessage(#[allow(missing_docs)] u16),
+    /// Frame length exceeded
+    /// [`crate::limits::MAX_DECODED_MESSAGE_BYTES`] (or a custom cap
+    /// passed to [`decode_envelope`]).
     OversizedFrame {
+        #[allow(missing_docs)]
         len: usize,
+        #[allow(missing_docs)]
         max: usize,
     },
+    /// Buffer ended mid-frame.
     TruncatedFrame,
+    /// Length prefix flagged a compressed frame; this build does not
+    /// implement compression.
     BadCompressionFlag,
+    /// Length-prefix varint overflowed `u64`.
     VarintOverflow,
-    CorruptPayload(String),
+    /// Postcard reported a deserialization error; payload is its
+    /// message.
+    CorruptPayload(#[allow(missing_docs)] String),
+    /// A message arrived in the wrong direction (e.g. a server-only
+    /// kind on a client-decode path).
     UnexpectedMessageKind {
+        #[allow(missing_docs)]
         direction: MessageDirection,
+        #[allow(missing_docs)]
         kind: MessageKind,
     },
+    /// Envelope kind did not match the expected variant for the call.
     WrongMessageKind {
+        #[allow(missing_docs)]
         expected: MessageKind,
+        #[allow(missing_docs)]
         actual: u16,
     },
 }
@@ -157,14 +220,18 @@ impl fmt::Display for CodecError {
 
 impl std::error::Error for CodecError {}
 
+/// Postcard-encode `payload` into a byte vector.
 pub fn encode_payload<T: Serialize>(payload: &T) -> Result<Vec<u8>, CodecError> {
     postcard::to_stdvec(payload).map_err(|err| CodecError::CorruptPayload(err.to_string()))
 }
 
+/// Postcard-decode `bytes` into `T`.
 pub fn decode_payload<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, CodecError> {
     postcard::from_bytes(bytes).map_err(|err| CodecError::CorruptPayload(err.to_string()))
 }
 
+/// Encode `payload` into a length-prefixed [`Envelope`] tagged with
+/// `kind`.
 pub fn encode_envelope<T: Serialize>(
     kind: MessageKind,
     request_id: RequestId,
@@ -181,6 +248,10 @@ pub fn encode_envelope<T: Serialize>(
     Ok(encode_length_prefixed(&bytes, false))
 }
 
+/// Decode the next length-prefixed [`Envelope`] from `input`. Returns
+/// the envelope and the number of bytes consumed; subsequent bytes are
+/// the next frame. Frames larger than `max_len` fail with
+/// [`CodecError::OversizedFrame`].
 pub fn decode_envelope(input: &[u8], max_len: usize) -> Result<(Envelope, usize), CodecError> {
     let (len, compressed, prefix_len) = decode_prefix(input)?;
     if compressed {
@@ -199,6 +270,8 @@ pub fn decode_envelope(input: &[u8], max_len: usize) -> Result<(Envelope, usize)
     Ok((envelope, end))
 }
 
+/// Decode `envelope.payload` into `T`, asserting the envelope tag
+/// matches `expected`.
 pub fn decode_typed_payload<T: DeserializeOwned>(
     envelope: &Envelope,
     expected: MessageKind,
@@ -212,6 +285,9 @@ pub fn decode_typed_payload<T: DeserializeOwned>(
     decode_payload(&envelope.payload)
 }
 
+/// Wrap `message` in an envelope, encode it, and route it onto the
+/// appropriate [`StreamId`]. `request_id` is the client's correlation
+/// token.
 pub fn encode_client_frame(
     message: ClientMessage,
     request_id: RequestId,
@@ -224,6 +300,8 @@ pub fn encode_client_frame(
     })
 }
 
+/// Wrap `message` in an envelope, encode it, and route it onto the
+/// appropriate [`StreamId`]. The server seq is read from `message`.
 pub fn encode_server_frame(message: ServerMessage) -> Result<TransportFrame, CodecError> {
     let kind = message.kind();
     let seq = server_seq(&message);
@@ -234,6 +312,8 @@ pub fn encode_server_frame(message: ServerMessage) -> Result<TransportFrame, Cod
     })
 }
 
+/// Decode a [`TransportFrame`] received on a client-bound stream into
+/// a [`ClientMessage`]. Rejects server-only [`MessageKind`]s.
 pub fn decode_client_frame(frame: &TransportFrame) -> Result<ClientMessage, CodecError> {
     let (envelope, _consumed) = decode_envelope(&frame.bytes, MAX_DECODED_MESSAGE_BYTES)?;
     let kind = envelope.known_kind()?;
@@ -248,6 +328,8 @@ pub fn decode_client_frame(frame: &TransportFrame) -> Result<ClientMessage, Code
     Ok(message)
 }
 
+/// Decode a [`TransportFrame`] received on a server-bound stream into
+/// a [`ServerMessage`]. Rejects client-only [`MessageKind`]s.
 pub fn decode_server_frame(frame: &TransportFrame) -> Result<ServerMessage, CodecError> {
     let (envelope, _consumed) = decode_envelope(&frame.bytes, MAX_DECODED_MESSAGE_BYTES)?;
     let kind = envelope.known_kind()?;
@@ -262,6 +344,7 @@ pub fn decode_server_frame(frame: &TransportFrame) -> Result<ServerMessage, Code
     Ok(message)
 }
 
+/// Map a client message variant to the [`StreamId`] it should travel on.
 pub fn client_stream(message: &ClientMessage) -> StreamId {
     match message {
         ClientMessage::PaneInput { .. } => StreamId::INPUT,
@@ -270,6 +353,7 @@ pub fn client_stream(message: &ClientMessage) -> StreamId {
     }
 }
 
+/// Map a server message variant to the [`StreamId`] it should travel on.
 pub fn server_stream(message: &ServerMessage) -> StreamId {
     match message {
         ServerMessage::PaneUpdate(update) if !update.image_events.is_empty() => StreamId::IMAGES,
@@ -278,6 +362,8 @@ pub fn server_stream(message: &ServerMessage) -> StreamId {
     }
 }
 
+/// Sequence number a server message should be stamped with.
+/// Non-sequenced messages return [`ServerSeq`] of zero.
 pub fn server_seq(message: &ServerMessage) -> ServerSeq {
     match message {
         ServerMessage::PaneUpdate(update) => update.seq,
@@ -327,6 +413,10 @@ fn ensure_server_kind(kind: MessageKind) -> Result<(), CodecError> {
     }
 }
 
+/// Prepend `payload` with a varint length prefix. The low bit of the
+/// varint encodes the `compressed` flag; this build never sets it but
+/// reads it for forward-compatibility (see
+/// [`CodecError::BadCompressionFlag`]).
 pub fn encode_length_prefixed(payload: &[u8], compressed: bool) -> Vec<u8> {
     let value = ((payload.len() as u64) << 1) | u64::from(compressed);
     let mut out = Vec::with_capacity(varint_len(value) + payload.len());

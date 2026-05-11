@@ -1,3 +1,5 @@
+//! Terminal grid snapshots, frame deltas, and per-cell types.
+
 use std::collections::BTreeSet;
 use std::fmt;
 
@@ -10,25 +12,39 @@ use crate::identity::ImageId;
 /// OSC 8 hyperlink." Real indices reference [`VtSnapshot::hyperlinks`].
 pub const NO_HYPERLINK: u16 = u16::MAX;
 
+/// Range of scrollback lines; `start` is an absolute scrollback row
+/// index (negative values refer to history above the visible viewport).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LineRange {
+    #[allow(missing_docs)]
     pub start: i64,
+    #[allow(missing_docs)]
     pub count: u16,
 }
 
+/// Zero-based grid coordinate (col, row) within the viewport.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GridPos {
+    #[allow(missing_docs)]
     pub col: u16,
+    #[allow(missing_docs)]
     pub row: u16,
 }
 
+/// Granularity of a [`Selection`] — how clicks/drags expand selected
+/// regions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SelectionGranularity {
+    /// Cell-by-cell selection.
     Character,
+    /// Whole-word selection (double-click).
     Word,
+    /// Whole-line selection (triple-click).
     Line,
 }
 
+/// Live selection state: anchor (where the drag began), head (current
+/// cursor), and selection granularity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Selection {
     anchor: GridPos,
@@ -37,14 +53,17 @@ pub struct Selection {
 }
 
 impl Selection {
+    /// Begin a character-granularity selection at `pos`.
     pub fn new(pos: GridPos) -> Self {
         Self::at(pos, SelectionGranularity::Character)
     }
 
+    /// Begin a word-granularity selection at `pos`.
     pub fn new_word(pos: GridPos) -> Self {
         Self::at(pos, SelectionGranularity::Word)
     }
 
+    /// Begin a line-granularity selection at `pos`.
     pub fn new_line(pos: GridPos) -> Self {
         Self::at(pos, SelectionGranularity::Line)
     }
@@ -57,14 +76,17 @@ impl Selection {
         }
     }
 
+    /// Move the selection head to `pos` (the anchor stays put).
     pub fn update(&mut self, pos: GridPos) {
         self.head = pos;
     }
 
+    /// Selection granularity.
     pub fn granularity(&self) -> SelectionGranularity {
         self.granularity
     }
 
+    /// Anchor and head sorted into `(start, end)` row-major order.
     pub fn ordered_range(&self) -> (GridPos, GridPos) {
         let (a, b) = (self.anchor, self.head);
         if (a.row, a.col) <= (b.row, b.col) {
@@ -75,12 +97,18 @@ impl Selection {
     }
 }
 
+/// DEC private mode bits whose state affects input encoding and paste.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalModes {
+    /// `DECCKM` — cursor keys emit application-mode sequences when true.
     pub cursor_keys: bool,
+    /// Active mouse-tracking mode; `None` means tracking is off.
     pub mouse_tracking: MouseTracking,
+    /// Mouse reports use SGR (1006) rather than X10 (9) framing.
     pub mouse_format_sgr: bool,
+    /// `DECSET 2004` — paste data is wrapped in `ESC[200~` / `ESC[201~`.
     pub bracketed_paste: bool,
+    /// The alternate screen buffer is active (DECSET 1049 / 47).
     pub alt_screen: bool,
     /// DECSET 1007: when set and `alt_screen` is true, the host translates
     /// wheel events into Up/Down arrow sequences instead of touching the
@@ -88,116 +116,204 @@ pub struct TerminalModes {
     pub alt_scroll: bool,
 }
 
+/// Mouse-tracking sub-mode the application has requested. Selects which
+/// events the input layer should encode and forward.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MouseTracking {
+    /// Mouse tracking disabled; clicks fall through to local selection.
     #[default]
     None,
+    /// DECSET 9 — button press only, no release, no motion.
     X10,
+    /// DECSET 1000 — press + release, no motion.
     Normal,
+    /// DECSET 1002 — press + release + motion while a button is held.
     Button,
+    /// DECSET 1003 — press + release + all motion (with or without
+    /// button).
     Any,
 }
 
 impl MouseTracking {
+    /// Whether any tracking mode is active.
     pub fn is_enabled(self) -> bool {
         !matches!(self, Self::None)
     }
 
+    /// Whether motion events should be reported (DECSET 1002 / 1003).
     pub fn reports_motion(self) -> bool {
         matches!(self, Self::Button | Self::Any)
     }
 
+    /// Whether motion is reported even when no button is held (DECSET
+    /// 1003).
     pub fn reports_motion_without_button(self) -> bool {
         matches!(self, Self::Any)
     }
 }
 
+/// Geometry of the rendering surface, used by the input layer to map
+/// pixel coordinates onto grid cells for mouse reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MouseSize {
+    /// Surface width in physical pixels.
     pub screen_width: u32,
+    /// Surface height in physical pixels.
     pub screen_height: u32,
+    /// Cell width in physical pixels.
     pub cell_width: u32,
+    /// Cell height in physical pixels.
     pub cell_height: u32,
+    #[allow(missing_docs)]
     pub padding_top: u32,
+    #[allow(missing_docs)]
     pub padding_bottom: u32,
+    #[allow(missing_docs)]
     pub padding_left: u32,
+    #[allow(missing_docs)]
     pub padding_right: u32,
 }
 
+/// Foreground or background colour of a cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CellColor {
+    /// Theme default (resolved on the rendering side).
     Default,
-    Palette(u8),
-    Rgb(u8, u8, u8),
+    /// Indexed colour from the active 256-colour palette.
+    Palette(#[allow(missing_docs)] u8),
+    /// Direct sRGB colour (R, G, B).
+    Rgb(
+        #[allow(missing_docs)] u8,
+        #[allow(missing_docs)] u8,
+        #[allow(missing_docs)] u8,
+    ),
 }
 
+/// Boolean SGR attributes for a single cell.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CellAttrs {
+    #[allow(missing_docs)]
     pub bold: bool,
+    #[allow(missing_docs)]
     pub italic: bool,
+    #[allow(missing_docs)]
     pub faint: bool,
+    /// SGR 7 — foreground/background swap.
     pub inverse: bool,
+    /// SGR 8 — text rendered as background colour.
     pub invisible: bool,
 }
 
+/// Cursor rendering shape (DECSCUSR).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CursorShape {
+    /// Block cursor (DECSCUSR 1/2).
     Block,
+    /// Vertical bar cursor (DECSCUSR 5/6).
     Bar,
+    /// Horizontal underline cursor (DECSCUSR 3/4).
     Underline,
 }
 
+/// Cursor position and rendering state for the current frame.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CursorInfo {
+    #[allow(missing_docs)]
     pub pos: GridPos,
+    #[allow(missing_docs)]
     pub visible: bool,
+    /// `true` when the cursor sits on the leading half of a wide-glyph
+    /// cell.
     pub wide: bool,
+    /// Optional shape override; `None` means use the renderer's default.
     pub shape: Option<CursorShape>,
 }
 
+/// Which rows of a [`VtSnapshot`] changed relative to the previous
+/// frame. `Partial` row indices are sorted and deduplicated.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DirtySnapshot {
+    /// No rows changed.
     Clean,
-    Partial(Vec<u16>),
+    /// Only the listed row indices changed.
+    Partial(#[allow(missing_docs)] Vec<u16>),
+    /// All rows changed (or the receiver should treat them as such).
     Full,
 }
 
+/// Per-row metadata. Used to walk wrapped logical lines back into a
+/// single string for link detection and selection.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RowMeta {
+    /// This row wraps onto the next physical row.
     pub wrap: bool,
+    /// This row is the continuation of the previous physical row.
     pub wrap_continuation: bool,
 }
 
+/// One kitty-graphics image placement on the grid for a given frame.
+/// Pixel coordinates are in image-source space; viewport coordinates
+/// are in grid cells (negative values mean off-screen left/above).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlacementSnapshot {
+    #[allow(missing_docs)]
     pub image_id: ImageId,
+    #[allow(missing_docs)]
     pub placement_id: u32,
+    #[allow(missing_docs)]
     pub viewport_col: i32,
+    #[allow(missing_docs)]
     pub viewport_row: i32,
+    #[allow(missing_docs)]
     pub pixel_width: u32,
+    #[allow(missing_docs)]
     pub pixel_height: u32,
+    #[allow(missing_docs)]
     pub source_x: u32,
+    #[allow(missing_docs)]
     pub source_y: u32,
+    #[allow(missing_docs)]
     pub source_width: u32,
+    #[allow(missing_docs)]
     pub source_height: u32,
+    #[allow(missing_docs)]
     pub image_width: u32,
+    #[allow(missing_docs)]
     pub image_height: u32,
+    /// Z-order for layered placements (higher draws above lower).
     pub z: i32,
 }
 
+/// Materialised terminal grid for one frame: dimensions, cells, cell
+/// text (concatenated in [`text`](Self::text), referenced by
+/// [`SnapshotCell`] offsets), cursor, modes, dirty extent, image
+/// placements, and the OSC 8 hyperlink table.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VtSnapshot {
+    #[allow(missing_docs)]
     pub generation: u64,
+    #[allow(missing_docs)]
     pub cols: u16,
+    #[allow(missing_docs)]
     pub rows: u16,
+    /// Row-major grid of `cols * rows` cells.
     pub cells: Vec<SnapshotCell>,
+    /// Concatenated cell text; cells reference slices into this string.
     pub text: String,
+    /// Per-row metadata; length always equals `rows`.
     pub rows_meta: Vec<RowMeta>,
+    /// Working directory tracked from OSC 7 sequences, when the shell
+    /// emits them.
     pub pwd: Option<String>,
+    #[allow(missing_docs)]
     pub cursor: CursorInfo,
+    #[allow(missing_docs)]
     pub modes: TerminalModes,
+    #[allow(missing_docs)]
     pub dirty: DirtySnapshot,
+    #[allow(missing_docs)]
     pub placements: Vec<PlacementSnapshot>,
+    #[allow(missing_docs)]
     pub images: Vec<SnapshotImage>,
     /// OSC 8 hyperlink URL table. Cells reference entries by index via
     /// [`SnapshotCell::hyperlink_idx`]; [`NO_HYPERLINK`] means the cell
@@ -206,6 +322,8 @@ pub struct VtSnapshot {
 }
 
 impl VtSnapshot {
+    /// Allocate an empty `cols * rows` snapshot at generation 0 with
+    /// `dirty = Full` so the first apply paints every cell.
     pub fn empty(cols: u16, rows: u16) -> Self {
         Self {
             generation: 0,
@@ -224,12 +342,17 @@ impl VtSnapshot {
         }
     }
 
+    /// Resolve a cell's text slice from its offsets into [`Self::text`].
+    /// Returns `""` if offsets are out of range.
     pub fn cell_text(&self, cell: &SnapshotCell) -> &str {
         let start = cell.text_start as usize;
         let end = start.saturating_add(usize::from(cell.text_len));
         self.text.get(start..end).unwrap_or("")
     }
 
+    /// Concatenate cell text under `sel`, one row per line. Empty cells
+    /// are rendered as a single space; trailing whitespace is trimmed
+    /// per row. Returns `None` when the selection covers no glyphs.
     pub fn selection_text(&self, sel: &Selection) -> Option<String> {
         let (start, end) = sel.ordered_range();
         let granularity = sel.granularity();
@@ -270,6 +393,10 @@ impl VtSnapshot {
         if out.is_empty() { None } else { Some(out) }
     }
 
+    /// Append a cell whose glyph text is `text` to the grid, copying
+    /// `text` into [`Self::text`] and recording its byte range on the
+    /// cell. Falls back to a zero-length text reference if `text`
+    /// overflows `u16`.
     pub fn push_cell(&mut self, text: &str, fg: CellColor, bg: CellColor, attrs: CellAttrs) {
         let text_start = self.text.len();
         self.text.push_str(text);
@@ -291,10 +418,12 @@ impl VtSnapshot {
         });
     }
 
+    /// Append an empty cell (default colours, no glyph).
     pub fn push_empty_cell(&mut self) {
         self.cells.push(SnapshotCell::empty());
     }
 
+    /// Borrow the cell at `(row, col)` or `None` if out of bounds.
     pub fn cell_at(&self, row: u16, col: u16) -> Option<&SnapshotCell> {
         let idx = usize::from(row) * usize::from(self.cols) + usize::from(col);
         self.cells.get(idx)
@@ -375,6 +504,9 @@ impl VtSnapshot {
         }
     }
 
+    /// Verify that `cells.len() == cols * rows`, that
+    /// `rows_meta.len() == rows`, and that every cell's text range lies
+    /// on a UTF-8 boundary inside [`Self::text`].
     pub fn validate_dimensions(&self) -> Result<(), FrameValidationError> {
         let expected = usize::from(self.cols) * usize::from(self.rows);
         if self.cells.len() != expected {
@@ -399,18 +531,29 @@ impl VtSnapshot {
 /// Contiguous OSC 8 run on a single row with its resolved URL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HyperlinkRun<'a> {
+    #[allow(missing_docs)]
     pub row: u16,
+    /// First column of the run (inclusive).
     pub start_col: u16,
+    /// Last column of the run (inclusive).
     pub end_col: u16,
+    /// Resolved URL the cells link to.
     pub url: &'a str,
 }
 
+/// One cell's appearance: a byte range into the parent string + colours
+/// + attributes. `text_len` of zero means an empty cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnapshotCell {
+    /// Byte offset of the cell's glyph text in the parent's text buffer.
     pub text_start: u32,
+    /// Byte length of the cell's glyph text in the parent's text buffer.
     pub text_len: u16,
+    #[allow(missing_docs)]
     pub fg: CellColor,
+    #[allow(missing_docs)]
     pub bg: CellColor,
+    #[allow(missing_docs)]
     pub attrs: CellAttrs,
     /// Index into [`VtSnapshot::hyperlinks`], or [`NO_HYPERLINK`] when
     /// the cell has no OSC 8 hyperlink.
@@ -418,6 +561,8 @@ pub struct SnapshotCell {
 }
 
 impl SnapshotCell {
+    /// Cell with default colours, no glyph, no attributes, and no
+    /// hyperlink.
     pub fn empty() -> Self {
         Self {
             text_start: 0,
@@ -430,47 +575,84 @@ impl SnapshotCell {
     }
 }
 
+/// Pane-scoped image: identity, pixel dimensions, and tightly-packed
+/// RGBA bytes (`width * height * 4`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnapshotImage {
+    #[allow(missing_docs)]
     pub image_id: ImageId,
+    #[allow(missing_docs)]
     pub width: u32,
+    #[allow(missing_docs)]
     pub height: u32,
+    /// Tightly-packed RGBA bytes (`width * height * 4`).
     pub rgba: Vec<u8>,
 }
 
+/// Pane resize request: new grid dimensions and the pixel dimensions of
+/// each cell as the client measured them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Resize {
+    #[allow(missing_docs)]
     pub cols: u16,
+    #[allow(missing_docs)]
     pub rows: u16,
+    /// Cell width in pixels, as measured by the client renderer.
     pub pixel_width: u16,
+    /// Cell height in pixels, as measured by the client renderer.
     pub pixel_height: u16,
 }
 
+/// Pane theme: foreground, background, cursor, and the indexed palette.
+/// All colours are sRGB triples.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThemeColors {
+    #[allow(missing_docs)]
     pub fg: [u8; 3],
+    #[allow(missing_docs)]
     pub bg: [u8; 3],
+    #[allow(missing_docs)]
     pub cursor: [u8; 3],
+    /// Indexed colour palette resolving [`CellColor::Palette`] entries.
     #[serde(with = "BigArray")]
     pub palette: [[u8; 3]; 256],
 }
 
+/// Wire-format frame update. `Full` sends a complete snapshot;
+/// `Partial` only the rows that changed against `base_generation`.
+/// Apply via [`apply_frame_delta`].
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FrameDelta {
+    /// Complete snapshot replacing whatever the client previously had.
     Full {
+        #[allow(missing_docs)]
         generation: u64,
+        #[allow(missing_docs)]
         snapshot: VtSnapshot,
     },
+    /// Partial update — only the rows in `dirty_rows` change against
+    /// the `base_generation` snapshot the client already holds.
     Partial {
+        /// Generation the client must already have applied for this
+        /// delta to be valid; mismatch yields
+        /// [`FrameApplyError::BaseGenerationMismatch`].
         base_generation: u64,
+        #[allow(missing_docs)]
         generation: u64,
+        #[allow(missing_docs)]
         cols: u16,
+        #[allow(missing_docs)]
         rows: u16,
+        #[allow(missing_docs)]
         cursor: CursorInfo,
+        #[allow(missing_docs)]
         modes: TerminalModes,
+        /// Snapshot's working directory, when tracked via OSC 7.
         pwd: Option<String>,
+        #[allow(missing_docs)]
         placements: Vec<PlacementSnapshot>,
+        /// Sorted, unique row replacements.
         dirty_rows: Vec<RowDelta>,
         /// OSC 8 URL table for the resulting snapshot. Partial frames keep
         /// previous entries stable so unchanged base cells remain valid.
@@ -479,6 +661,9 @@ pub enum FrameDelta {
 }
 
 impl FrameDelta {
+    /// Build a delta from `previous` to `snapshot`. Falls back to
+    /// [`FrameDelta::Full`] when dimensions changed, images changed,
+    /// the snapshot is fully dirty, or generations did not advance.
     pub fn from_snapshot(previous: Option<&VtSnapshot>, snapshot: &VtSnapshot) -> Self {
         let Some(previous) = previous else {
             return Self::Full {
@@ -530,6 +715,7 @@ impl FrameDelta {
         }
     }
 
+    /// Generation this delta produces once applied.
     pub fn generation(&self) -> u64 {
         match self {
             Self::Full { generation, .. } | Self::Partial { generation, .. } => *generation,
@@ -537,17 +723,26 @@ impl FrameDelta {
     }
 }
 
+/// Alias used at the transport boundary; equal to [`FrameDelta`].
 pub type WireFrame = FrameDelta;
 
+/// Replacement payload for a single row inside a [`FrameDelta::Partial`].
+/// `cells.len()` must equal the parent's `cols`; `text` is row-local.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RowDelta {
+    #[allow(missing_docs)]
     pub row: u16,
+    /// Row metadata (wrap flags) that goes with this replacement.
     pub meta: RowMeta,
+    #[allow(missing_docs)]
     pub cells: Vec<SnapshotCell>,
+    /// Concatenated cell text for this row only.
     pub text: String,
 }
 
 impl RowDelta {
+    /// Capture row `row` of `snapshot` as a self-contained replacement,
+    /// or `None` if `row` is out of bounds.
     pub fn from_snapshot_row(snapshot: &VtSnapshot, row: u16) -> Option<Self> {
         if row >= snapshot.rows {
             return None;
@@ -632,26 +827,44 @@ fn intern_hyperlink(hyperlinks: &mut Vec<String>, url: &str) -> u16 {
     u16::try_from(idx).unwrap_or(NO_HYPERLINK)
 }
 
+/// Reason [`apply_frame_delta`] could not apply a
+/// [`FrameDelta::Partial`]. Recovering from any of these typically
+/// requires requesting a fresh [`FrameDelta::Full`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FrameApplyError {
+    /// A partial delta was supplied but no `previous` snapshot was given.
     NeedFull,
+    /// The partial delta's `base_generation` does not match `previous`.
     BaseGenerationMismatch {
+        #[allow(missing_docs)]
         expected: u64,
+        #[allow(missing_docs)]
         actual: u64,
     },
+    /// `cols`/`rows` differ between the delta and the previous snapshot.
     DimensionMismatch,
+    /// `dirty_rows` was not sorted strictly ascending and unique.
     InvalidDirtyRows,
+    /// A `dirty_rows` entry referred to a row outside the grid.
     InvalidRowIndex {
+        #[allow(missing_docs)]
         row: u16,
+        #[allow(missing_docs)]
         rows: u16,
     },
+    /// A row delta carried the wrong number of cells.
     InvalidRowCellCount {
+        #[allow(missing_docs)]
         row: u16,
+        #[allow(missing_docs)]
         expected: usize,
+        #[allow(missing_docs)]
         actual: usize,
     },
+    /// A cell's text offset was out of range or off a UTF-8 boundary.
     InvalidTextOffset,
-    InvalidSnapshot(FrameValidationError),
+    /// The reconstructed snapshot failed dimension/text validation.
+    InvalidSnapshot(#[allow(missing_docs)] FrameValidationError),
 }
 
 impl fmt::Display for FrameApplyError {
@@ -682,10 +895,25 @@ impl fmt::Display for FrameApplyError {
 
 impl std::error::Error for FrameApplyError {}
 
+/// Why a [`VtSnapshot`] failed [`VtSnapshot::validate_dimensions`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FrameValidationError {
-    InvalidCellCount { expected: usize, actual: usize },
-    InvalidRowMetaCount { expected: usize, actual: usize },
+    /// `cells.len()` did not equal `cols * rows`.
+    InvalidCellCount {
+        #[allow(missing_docs)]
+        expected: usize,
+        #[allow(missing_docs)]
+        actual: usize,
+    },
+    /// `rows_meta.len()` did not equal `rows`.
+    InvalidRowMetaCount {
+        #[allow(missing_docs)]
+        expected: usize,
+        #[allow(missing_docs)]
+        actual: usize,
+    },
+    /// A cell referenced text outside [`VtSnapshot::text`] or off a
+    /// UTF-8 boundary.
     InvalidTextOffset,
 }
 
@@ -708,6 +936,11 @@ impl fmt::Display for FrameValidationError {
 
 impl std::error::Error for FrameValidationError {}
 
+/// Apply a [`FrameDelta`] to `previous`, returning a freshly
+/// materialised [`VtSnapshot`]. For [`FrameDelta::Full`] this just
+/// validates and clones the embedded snapshot; for
+/// [`FrameDelta::Partial`] it patches the listed dirty rows over
+/// `previous`. See [`FrameApplyError`] for the failure cases.
 pub fn apply_frame_delta(
     previous: Option<&VtSnapshot>,
     frame: &FrameDelta,
