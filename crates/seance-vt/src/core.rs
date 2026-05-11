@@ -7,7 +7,7 @@ use libghostty_vt::style::RgbColor;
 use libghostty_vt::terminal::{Mode, ScrollViewport};
 use libghostty_vt::{RenderState, Terminal as VtTerminal, TerminalOptions};
 
-use crate::frame::{CursorShape, DirtySnapshot};
+use crate::frame::{CursorInfo, CursorShape, DirtySnapshot};
 use crate::snapshot::{RowMeta, VtSnapshot};
 use crate::snapshot_extraction::{SnapshotExtraction, extract_snapshot};
 use crate::terminal::install_png_decoder_for_this_thread;
@@ -354,6 +354,7 @@ struct RowCache {
     rows: u16,
     rows_meta: Vec<RowMeta>,
     rows_data: Vec<Vec<RowCell>>,
+    cursor: CursorInfo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -390,6 +391,7 @@ impl RowCache {
             rows: snapshot.rows,
             rows_meta: snapshot.rows_meta.clone(),
             rows_data,
+            cursor: snapshot.cursor,
         }
     }
 
@@ -397,7 +399,7 @@ impl RowCache {
         if self.cols != current.cols || self.rows != current.rows {
             return DirtySnapshot::Full;
         }
-        let rows = self
+        let mut rows = self
             .rows_data
             .iter()
             .zip(&current.rows_data)
@@ -412,7 +414,25 @@ impl RowCache {
                     }
                 },
             )
-            .collect::<Vec<_>>();
+            .collect::<Vec<u16>>();
+
+        // Cursor-only changes (move, shape, visibility) leave every cell
+        // byte-identical, so the row diff above is empty. libghostty does
+        // mark the affected row dirty, but `snapshot_dirty_delta` overrides
+        // that with this row diff to filter no-op mode toggles. Without
+        // surfacing cursor moves here, vim's `hjkl` and mode flips never
+        // republish — the renderer keeps drawing the previous cursor.
+        if self.cursor != current.cursor {
+            if self.cursor.pos.row < current.rows {
+                rows.push(self.cursor.pos.row);
+            }
+            if current.cursor.pos.row < current.rows {
+                rows.push(current.cursor.pos.row);
+            }
+            rows.sort_unstable();
+            rows.dedup();
+        }
+
         if rows.is_empty() {
             DirtySnapshot::Clean
         } else {
@@ -660,6 +680,54 @@ mod tests {
         assert_eq!(previous.diff(&current), DirtySnapshot::Partial(vec![0]));
     }
 
+    #[test]
+    fn row_dirty_tracks_cursor_move_across_rows() {
+        let previous = cursor_snapshot(0, 0);
+        let current = cursor_snapshot(2, 1);
+
+        let previous = RowCache::from_snapshot(&previous);
+        let current = RowCache::from_snapshot(&current);
+
+        assert_eq!(previous.diff(&current), DirtySnapshot::Partial(vec![0, 1]));
+    }
+
+    #[test]
+    fn row_dirty_tracks_cursor_shape_change() {
+        let mut previous = cursor_snapshot(2, 1);
+        previous.cursor.shape = Some(CursorShape::Block);
+        let mut current = cursor_snapshot(2, 1);
+        current.cursor.shape = Some(CursorShape::Bar);
+
+        let previous = RowCache::from_snapshot(&previous);
+        let current = RowCache::from_snapshot(&current);
+
+        assert_eq!(previous.diff(&current), DirtySnapshot::Partial(vec![1]));
+    }
+
+    #[test]
+    fn row_dirty_tracks_cursor_visibility_toggle() {
+        let mut previous = cursor_snapshot(2, 1);
+        previous.cursor.visible = true;
+        let mut current = cursor_snapshot(2, 1);
+        current.cursor.visible = false;
+
+        let previous = RowCache::from_snapshot(&previous);
+        let current = RowCache::from_snapshot(&current);
+
+        assert_eq!(previous.diff(&current), DirtySnapshot::Partial(vec![1]));
+    }
+
+    #[test]
+    fn row_dirty_clean_when_cursor_and_cells_unchanged() {
+        let previous = cursor_snapshot(2, 1);
+        let current = cursor_snapshot(2, 1);
+
+        let previous = RowCache::from_snapshot(&previous);
+        let current = RowCache::from_snapshot(&current);
+
+        assert_eq!(previous.diff(&current), DirtySnapshot::Clean);
+    }
+
     fn linked_snapshot(url: &str) -> VtSnapshot {
         let mut snapshot = VtSnapshot::empty(4, 1);
         let idx = snapshot.intern_hyperlink(url);
@@ -685,6 +753,27 @@ mod tests {
                 CellAttrs::default(),
             );
         }
+        snapshot
+    }
+
+    fn cursor_snapshot(col: u16, row: u16) -> VtSnapshot {
+        use crate::frame::CursorInfo;
+        use seance_protocol::frame::GridPos;
+        let mut snapshot = VtSnapshot::empty(4, 3);
+        for _ in 0..(4 * 3) {
+            snapshot.push_cell(
+                " ",
+                CellColor::Default,
+                CellColor::Default,
+                CellAttrs::default(),
+            );
+        }
+        snapshot.cursor = CursorInfo {
+            pos: GridPos { col, row },
+            visible: true,
+            wide: false,
+            shape: Some(CursorShape::Block),
+        };
         snapshot
     }
 }
