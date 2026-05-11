@@ -120,6 +120,8 @@ impl App {
         let modes = surface.terminal_modes();
         if let Some(data) = self.input.encode_mouse_wheel(lines, modes) {
             surface.write_to_pty(Bytes::from(data));
+        } else if let Some(data) = self.input.encode_alt_scroll(lines, modes) {
+            surface.write_to_pty(Bytes::from(data));
         } else {
             surface.scroll_lines(-lines);
         }

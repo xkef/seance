@@ -81,6 +81,11 @@ pub struct TerminalModes {
     pub mouse_tracking: MouseTracking,
     pub mouse_format_sgr: bool,
     pub bracketed_paste: bool,
+    pub alt_screen: bool,
+    /// DECSET 1007: when set and `alt_screen` is true, the host translates
+    /// wheel events into Up/Down arrow sequences instead of touching the
+    /// (absent) alt-screen scrollback.
+    pub alt_scroll: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
