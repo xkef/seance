@@ -15,7 +15,6 @@ seance-vt.workspace = true
 # external
 bytes.workspace = true
 fancy-regex.workspace = true
-log.workspace = true
 
 [dev-dependencies]
 # external

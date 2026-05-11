@@ -44,7 +44,7 @@ impl ConfigWatcher {
                 }
                 Err(errors) => {
                     for e in errors {
-                        log::warn!("config watcher error: {e}");
+                        tracing::warn!("config watcher error: {e}");
                     }
                 }
             }
@@ -53,7 +53,7 @@ impl ConfigWatcher {
         let mut debouncer = match new_debouncer(DEBOUNCE, None, handler) {
             Ok(d) => d,
             Err(err) => {
-                log::warn!("config watcher: could not create debouncer: {err}");
+                tracing::warn!("config watcher: could not create debouncer: {err}");
                 return None;
             }
         };
@@ -62,7 +62,7 @@ impl ConfigWatcher {
         // delete/create of config.toml that most editors do) — the themes
         // dir is watched recursively only if it exists on disk.
         if let Err(err) = debouncer.watch(&config_dir_owned, RecursiveMode::NonRecursive) {
-            log::warn!(
+            tracing::warn!(
                 "config watcher: could not watch {}: {err}",
                 config_dir_owned.display()
             );
@@ -71,13 +71,13 @@ impl ConfigWatcher {
         if themes_dir.is_dir()
             && let Err(err) = debouncer.watch(&themes_dir, RecursiveMode::Recursive)
         {
-            log::warn!(
+            tracing::warn!(
                 "config watcher: could not watch {}: {err}",
                 themes_dir.display()
             );
         }
 
-        log::info!("config watcher: watching {}", config_dir_owned.display());
+        tracing::info!("config watcher: watching {}", config_dir_owned.display());
         Some(Self {
             _debouncer: debouncer,
         })

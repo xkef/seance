@@ -183,6 +183,12 @@ impl ApplicationHandler<UserEvent> for App {
         );
 
         let size = window.inner_size();
+        tracing::info!(
+            width = size.width,
+            height = size.height,
+            scale = window.scale_factor(),
+            "window created",
+        );
         let theme = seance_config::load_theme(self.config.theme.as_deref());
         let renderer_config = RendererConfig {
             width: size.width,
@@ -218,6 +224,7 @@ impl ApplicationHandler<UserEvent> for App {
                 initial_cursor_shape: mux_shape_from_config(self.config.cursor.style),
             })
             .expect("failed to spawn local pane");
+        tracing::info!(pane = ?active_pane, cols, rows, "pane spawned");
 
         let render_inputs = RenderInputs {
             cursor_shape: self.config.cursor.style.into(),
@@ -249,6 +256,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::ConfigFileChanged => self.reload_config(),
             UserEvent::ThemeFileChanged(path) => self.on_theme_file_changed(&path),
             UserEvent::Mux(MuxEvent::Wake) => {
+                let _span = tracing::debug_span!("mux::refresh").entered();
                 let mut should_exit = false;
                 if let Some(surface) = self.surface_mut() {
                     match surface.refresh_updates() {
@@ -260,7 +268,7 @@ impl ApplicationHandler<UserEvent> for App {
                                 surface.renderer.apply_image_cache_event(image_event);
                             }
                             for err in refresh.errors {
-                                log::warn!("pane error: {err}");
+                                tracing::warn!("pane error: {err}");
                             }
                             if frame_dirty || !image_events.is_empty() {
                                 surface.mark_dirty();
@@ -270,10 +278,11 @@ impl ApplicationHandler<UserEvent> for App {
                             }
                             should_exit = exited.contains(&surface.active_pane);
                         }
-                        Err(err) => log::warn!("mux refresh failed: {err}"),
+                        Err(err) => tracing::warn!("mux refresh failed: {err}"),
                     }
                 }
                 if should_exit {
+                    tracing::info!("pane closed; shutting down");
                     self.surface = None;
                     event_loop.exit();
                 }
@@ -289,6 +298,7 @@ impl ApplicationHandler<UserEvent> for App {
     ) {
         match event {
             WindowEvent::CloseRequested => {
+                tracing::info!("close requested; shutting down");
                 self.surface = None;
                 event_loop.exit();
             }
@@ -365,7 +375,7 @@ pub(crate) fn mux_shape_from_config(style: seance_config::CursorStyle) -> MuxCur
 pub(crate) fn link_detector_from_config(config: &seance_config::LinksConfig) -> LinkDetector {
     let modifiers = link_modifiers_from_config(config.modifiers);
     LinkDetector::from_options(modifiers, config.url, config.paths).unwrap_or_else(|err| {
-        log::warn!("failed to compile link detector: {err}");
+        tracing::warn!("failed to compile link detector: {err}");
         LinkDetector::from_options(modifiers, false, false)
             .expect("disabled link detector should compile")
     })

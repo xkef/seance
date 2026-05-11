@@ -16,8 +16,8 @@ seance-protocol.workspace = true
 bytemuck.workspace = true
 cosmic-text.workspace = true
 etagere.workspace = true
-log.workspace = true
 rustc-hash.workspace = true
+tracing.workspace = true
 wgpu.workspace = true
 winit.workspace = true
 

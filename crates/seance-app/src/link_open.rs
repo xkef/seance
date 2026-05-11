@@ -7,7 +7,7 @@ const ALLOWED_SCHEMES: &[&str] = &["http", "https", "ftp", "ftps", "file", "mail
 
 pub(crate) fn open_link(target: &LinkTarget, pwd: Option<&str>) -> bool {
     let Some(target) = resolve_open_target(target, pwd) else {
-        log::warn!("refusing to open unresolved link target: {target:?}");
+        tracing::warn!("refusing to open unresolved link target: {target:?}");
         return false;
     };
     let launcher = if cfg!(target_os = "macos") {
@@ -32,7 +32,7 @@ pub(crate) fn open_link(target: &LinkTarget, pwd: Option<&str>) -> bool {
     {
         Ok(_) => true,
         Err(err) => {
-            log::warn!("failed to spawn {launcher}: {err}");
+            tracing::warn!("failed to spawn {launcher}: {err}");
             false
         }
     }

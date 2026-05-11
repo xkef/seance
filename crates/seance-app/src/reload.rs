@@ -21,6 +21,7 @@ impl App {
 
     /// Re-resolve the currently-configured theme and push it to the renderer.
     /// Bad theme files keep the previous theme live (#13).
+    #[tracing::instrument(level = "info", skip_all)]
     pub(crate) fn reload_theme(&mut self) {
         if self.surface.is_none() {
             return;
@@ -34,7 +35,7 @@ impl App {
         let theme = match seance_config::theme::try_load(&spec) {
             Ok(t) => t,
             Err(err) => {
-                log::warn!("theme reload skipped: {err}");
+                tracing::warn!("theme reload skipped: {err}");
                 return;
             }
         };
@@ -47,6 +48,7 @@ impl App {
 
     /// Re-parse `config.toml` and apply whatever actually changed. A bad
     /// TOML parse is logged and the running config is left untouched.
+    #[tracing::instrument(level = "info", skip_all)]
     pub(crate) fn reload_config(&mut self) {
         let Some(path) = seance_config::config_file_path() else {
             return;
@@ -54,7 +56,7 @@ impl App {
         let new_config = match seance_config::try_load_from(&path) {
             Ok(c) => c,
             Err(err) => {
-                log::warn!("config reload skipped: {err}");
+                tracing::warn!("config reload skipped: {err}");
                 return;
             }
         };
@@ -65,7 +67,7 @@ impl App {
             return;
         }
 
-        log::info!("config reloaded: {diff:?}");
+        tracing::info!("config reloaded: {diff:?}");
         self.config = new_config;
 
         if let Some(surface) = self.surface.as_mut() {
@@ -111,7 +113,9 @@ impl App {
             surface.mark_dirty();
         }
         if diff.font_family_changed {
-            log::info!("font.family change takes effect on restart (live swap not yet supported)");
+            tracing::info!(
+                "font.family change takes effect on restart (live swap not yet supported)"
+            );
         }
         if diff.theme_changed {
             self.reload_theme();
@@ -145,6 +149,7 @@ impl App {
     /// A file under `themes/` changed on disk. Only re-resolve if it's the
     /// theme actually in use (either a named override in the user dir or an
     /// absolute-path spec pointing at that file).
+    #[tracing::instrument(level = "info", skip_all)]
     pub(crate) fn on_theme_file_changed(&mut self, path: &std::path::Path) {
         let active = self
             .config
