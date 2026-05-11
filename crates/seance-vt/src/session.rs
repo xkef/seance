@@ -563,9 +563,10 @@ mod unix_actor {
                 })
                 .map_err(|err| SpawnError::Pty(err.to_string()))?;
             // GUI launches (e.g. macOS `.app` bundles) inherit no TERM from
-            // launchd, which leaves ncurses-based programs (htop, tmux) unable
-            // to start. Force a widely-installed terminfo entry so the child
-            // shell can describe us. Revisit if we ship our own terminfo.
+            // launchd, which leaves terminfo-based programs (htop via ncurses,
+            // tmux via libtinfo) unable to start. Force a widely-installed
+            // terminfo entry so the child shell can describe us. Revisit if we
+            // ship our own terminfo.
             let mut command = CommandBuilder::new_default_prog();
             command.env("TERM", "xterm-256color");
             command.env("COLORTERM", "truecolor");
