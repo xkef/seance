@@ -36,6 +36,7 @@ pub struct VtSessionOptions {
     pub pixel_width: u16,
     pub pixel_height: u16,
     pub initial_cursor_shape: CursorShape,
+    pub max_scrollback: usize,
 }
 
 impl Default for VtSessionOptions {
@@ -46,6 +47,7 @@ impl Default for VtSessionOptions {
             pixel_width: 800,
             pixel_height: 384,
             initial_cursor_shape: CursorShape::Block,
+            max_scrollback: crate::core::DEFAULT_MAX_SCROLLBACK,
         }
     }
 }
@@ -478,7 +480,7 @@ mod unix_actor {
     use polling::{Event, Events, Poller};
     use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
-    use crate::core::{DEFAULT_MAX_SCROLLBACK, VtCore, VtCoreOptions};
+    use crate::core::{VtCore, VtCoreOptions};
 
     pub(super) fn spawn_vt_session_unix<F>(
         options: VtSessionOptions,
@@ -677,7 +679,7 @@ mod unix_actor {
                 rows: options.rows,
                 pixel_width: options.pixel_width,
                 pixel_height: options.pixel_height,
-                max_scrollback: DEFAULT_MAX_SCROLLBACK,
+                max_scrollback: options.max_scrollback,
                 initial_cursor_shape: options.initial_cursor_shape,
             })
             .map_err(SpawnError::VtCore)?;
@@ -1053,6 +1055,7 @@ mod unix_actor {
                     pixel_width: 80,
                     pixel_height: 30,
                     initial_cursor_shape: CursorShape::Block,
+                    ..VtSessionOptions::default()
                 },
                 ScriptedPtyAdapter::new(reads),
                 rx,
@@ -1417,6 +1420,7 @@ mod tests {
                 pixel_width: 80,
                 pixel_height: 40,
                 initial_cursor_shape: CursorShape::Block,
+                ..VtSessionOptions::default()
             },
             move |event| sink_events.lock().unwrap().push(event),
         )

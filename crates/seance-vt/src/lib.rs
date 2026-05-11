@@ -18,7 +18,7 @@ mod terminal;
 #[doc(hidden)]
 pub mod test_support;
 
-pub use core::VtCoreError;
+pub use core::{DEFAULT_MAX_SCROLLBACK, VtCoreError};
 pub use frame::{
     CellAttrs, CellColor, CellView, CellVisitor, CursorInfo, CursorShape, DirtySnapshot,
     FrameSource, ImageInfo, ImageVisitor, PlacementLayer, PlacementSnapshot, PlacementVisitor,

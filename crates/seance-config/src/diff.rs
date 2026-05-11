@@ -49,6 +49,10 @@ pub struct ConfigDiff {
     pub input_changed: bool,
     /// `[links]` section changed — caller must rebuild link detection state.
     pub links_changed: bool,
+    /// `scrollback.limit` changed — rebuilding the VT scrollback buffer
+    /// requires respawning the actor, which the live reload path does not do
+    /// today. Caller logs a notice telling the user to restart.
+    pub scrollback_limit_changed: bool,
 }
 
 impl ConfigDiff {
@@ -78,6 +82,7 @@ impl ConfigDiff {
 
         let input_changed = old.input.macos_option_as_alt != new.input.macos_option_as_alt;
         let links_changed = old.links != new.links;
+        let scrollback_limit_changed = old.scrollback.limit != new.scrollback.limit;
 
         Self {
             theme_changed,
@@ -91,6 +96,7 @@ impl ConfigDiff {
             repaint_only,
             input_changed,
             links_changed,
+            scrollback_limit_changed,
         }
     }
 
@@ -106,7 +112,8 @@ impl ConfigDiff {
             || self.window_padding_changed
             || self.repaint_only
             || self.input_changed
-            || self.links_changed)
+            || self.links_changed
+            || self.scrollback_limit_changed)
     }
 }
 
@@ -249,6 +256,18 @@ mod tests {
         assert!(d.links_changed);
         assert!(!d.repaint_only);
         assert!(!d.theme_changed);
+    }
+
+    #[test]
+    fn scrollback_limit_change_is_detected_separately() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.scrollback.limit = a.scrollback.limit + 1;
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.scrollback_limit_changed);
+        assert!(!d.repaint_only);
+        assert!(!d.theme_changed);
+        assert!(!d.is_empty());
     }
 
     #[test]
