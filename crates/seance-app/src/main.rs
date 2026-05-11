@@ -86,6 +86,11 @@ fn init_tracing() -> Option<WorkerGuard> {
 
 fn main() {
     let _log_guard = init_tracing();
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        log_dir = ?log_dir(),
+        "seance starting",
+    );
     let mut builder = EventLoop::<UserEvent>::with_user_event();
     platform::configure_event_loop(&mut builder);
     let event_loop = builder.build().expect("failed to create event loop");

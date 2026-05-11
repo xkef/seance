@@ -439,3 +439,7 @@ live there, not here.
   `$XDG_STATE_HOME/seance/seance.log.YYYY-MM-DD` (Linux, fallback
   `~/.local/state/seance/`). Directory is created on startup; failures degrade
   silently to stderr-only.
+- **Level conventions**: `info` is reserved for once-per-event lifecycle —
+  startup banner, window created, pane spawned/exited, shutdown. Recoverable
+  failures use `warn`; channel-closed and cleanup noise during teardown use
+  `debug`; per-frame and per-PTY-read events use `trace`.

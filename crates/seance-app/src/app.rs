@@ -183,6 +183,12 @@ impl ApplicationHandler<UserEvent> for App {
         );
 
         let size = window.inner_size();
+        tracing::info!(
+            width = size.width,
+            height = size.height,
+            scale = window.scale_factor(),
+            "window created",
+        );
         let theme = seance_config::load_theme(self.config.theme.as_deref());
         let renderer_config = RendererConfig {
             width: size.width,
@@ -218,6 +224,7 @@ impl ApplicationHandler<UserEvent> for App {
                 initial_cursor_shape: mux_shape_from_config(self.config.cursor.style),
             })
             .expect("failed to spawn local pane");
+        tracing::info!(pane = ?active_pane, cols, rows, "pane spawned");
 
         let render_inputs = RenderInputs {
             cursor_shape: self.config.cursor.style.into(),
@@ -275,6 +282,7 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                 }
                 if should_exit {
+                    tracing::info!("pane closed; shutting down");
                     self.surface = None;
                     event_loop.exit();
                 }
@@ -290,6 +298,7 @@ impl ApplicationHandler<UserEvent> for App {
     ) {
         match event {
             WindowEvent::CloseRequested => {
+                tracing::info!("close requested; shutting down");
                 self.surface = None;
                 event_loop.exit();
             }

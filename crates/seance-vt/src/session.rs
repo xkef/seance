@@ -773,6 +773,7 @@ mod unix_actor {
                 }
             }
 
+            tracing::info!("vt actor exiting");
             if let Some(fd) = self.fd {
                 let _ = self.poller.delete(unsafe { BorrowedFd::borrow_raw(fd) });
             }
