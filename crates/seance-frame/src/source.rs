@@ -1,6 +1,7 @@
-use seance_protocol::{
-    CellAttrs, CellColor, CursorInfo, DirtySnapshot, GridPos, ImageId, PaneRef, PlacementSnapshot,
+use seance_protocol::frame::{
+    CellAttrs, CellColor, CursorInfo, DirtySnapshot, GridPos, PlacementSnapshot,
 };
+use seance_protocol::identity::{ImageId, PaneRef};
 
 use crate::PlacementLayer;
 

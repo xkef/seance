@@ -1,7 +1,7 @@
 use crate::renderer::RenderInputs;
 use crate::text::FrameInfo;
 use seance_config::{CursorStyle, Theme};
-use seance_protocol::CursorShape as ProtocolCursorShape;
+use seance_protocol::frame::CursorShape as ProtocolCursorShape;
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -183,8 +183,8 @@ mod tests {
         };
         let inputs = RenderInputs {
             hovered_link: Some(crate::renderer::HoveredLinkRange {
-                start: seance_protocol::GridPos { col: 2, row: 1 },
-                end: seance_protocol::GridPos { col: 4, row: 2 },
+                start: seance_protocol::frame::GridPos { col: 2, row: 1 },
+                end: seance_protocol::frame::GridPos { col: 4, row: 2 },
             }),
             ..RenderInputs::default()
         };

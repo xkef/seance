@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
 use seance_frame::SnapshotFrameSource;
-use seance_protocol::{
-    CursorShape, DirtySnapshot, FrameDelta, GridPos, HyperlinkRun, PaneRef, PaneUpdate, Selection,
-    TerminalModes, VtSnapshot, apply_frame_delta,
+use seance_protocol::frame::{
+    CursorShape, DirtySnapshot, FrameDelta, GridPos, HyperlinkRun, Selection, TerminalModes,
+    VtSnapshot, apply_frame_delta,
 };
+use seance_protocol::identity::{PaneRef, ServerSeq};
+use seance_protocol::mux::PaneUpdate;
 
 use crate::PaneError;
 use crate::links::{DetectedLink, LinkDetector, LinkModifiers};
@@ -15,7 +17,7 @@ pub struct PaneView {
     pane: PaneRef,
     latest_snapshot: Option<Arc<VtSnapshot>>,
     selection: Option<Selection>,
-    last_applied_seq: Option<seance_protocol::ServerSeq>,
+    last_applied_seq: Option<ServerSeq>,
 }
 
 impl PaneView {
@@ -32,7 +34,7 @@ impl PaneView {
         self.pane
     }
 
-    pub fn last_applied_seq(&self) -> Option<seance_protocol::ServerSeq> {
+    pub fn last_applied_seq(&self) -> Option<ServerSeq> {
         self.last_applied_seq
     }
 

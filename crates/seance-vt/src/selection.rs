@@ -1,1 +1,1 @@
-pub use seance_protocol::{GridPos, Selection, SelectionGranularity};
+pub use seance_protocol::frame::{GridPos, Selection, SelectionGranularity};

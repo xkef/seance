@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
 
-use seance_protocol::{FrameDelta, PaneRef, PaneUpdate, ServerSeq};
+use seance_protocol::frame::FrameDelta;
+use seance_protocol::identity::{PaneRef, ServerSeq};
+use seance_protocol::mux::PaneUpdate;
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]

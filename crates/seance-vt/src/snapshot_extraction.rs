@@ -6,7 +6,7 @@ use libghostty_vt::error::Error as LibghosttyError;
 use libghostty_vt::render::{CellIteration, CellIterator, CursorVisualStyle, Dirty, RowIterator};
 use libghostty_vt::style::{self, PaletteIndex, RgbColor};
 use libghostty_vt::terminal::{Mode, Point, PointCoordinate};
-use seance_protocol::RowMeta;
+use seance_protocol::frame::RowMeta;
 
 use crate::core::VtCoreError;
 use crate::frame::{CellAttrs, CellColor, CursorInfo, CursorShape, DirtySnapshot};

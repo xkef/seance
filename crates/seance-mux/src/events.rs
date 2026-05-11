@@ -1,4 +1,6 @@
-use seance_protocol::{ImageCacheEvent, PaneRef, PaneUpdate};
+use seance_protocol::identity::PaneRef;
+use seance_protocol::image_cache::ImageCacheEvent;
+use seance_protocol::mux::PaneUpdate;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MuxEvent {

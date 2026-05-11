@@ -11,7 +11,7 @@ mod cache;
 mod pipeline;
 
 use seance_frame::{FrameSource, PlacementLayer};
-use seance_protocol::ImageCacheEvent;
+use seance_protocol::image_cache::ImageCacheEvent;
 use wgpu::*;
 
 use crate::text::FrameInfo;

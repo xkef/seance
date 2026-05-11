@@ -2,11 +2,15 @@ use std::collections::VecDeque;
 
 use bytes::Bytes;
 use seance_frame::FrameSource;
-use seance_protocol::{
-    CellAttrs, CellColor, ClientMessage, CursorInfo, FrameDelta, ImageCacheEvent, ImageFormat,
-    ImageId, ImageKey, ImagePayload, InProcessTransport, MessageKind, PaneEpoch, PaneId, PaneRef,
-    PaneUpdate, ServerMessage, ServerSeq, TerminalModes, Transport, VtSnapshot,
-    decode_client_frame, encode_server_frame,
+use seance_protocol::frame::{
+    CellAttrs, CellColor, CursorInfo, DirtySnapshot, FrameDelta, RowDelta, TerminalModes,
+    VtSnapshot,
+};
+use seance_protocol::identity::{ImageId, ImageKey, PaneEpoch, PaneId, PaneRef, ServerSeq};
+use seance_protocol::image_cache::{ImageCacheEvent, ImageFormat, ImagePayload};
+use seance_protocol::mux::{ClientMessage, MessageKind, PaneUpdate, ServerMessage};
+use seance_protocol::transport::{
+    InProcessTransport, StreamId, Transport, decode_client_frame, encode_server_frame,
 };
 
 use crate::{
@@ -50,7 +54,7 @@ fn pane_view_applies_full_and_partial_updates() {
     assert_eq!(view.generation(), Some(1));
 
     let mut next = snapshot(2, "b");
-    next.dirty = seance_protocol::DirtySnapshot::Partial(vec![0]);
+    next.dirty = DirtySnapshot::Partial(vec![0]);
     let partial = PaneUpdate {
         pane,
         seq: ServerSeq(2),
@@ -213,7 +217,7 @@ fn protocol_domain_encodes_commands_and_decodes_server_updates() {
 
     domain.write(pane, Bytes::from_static(b"abc")).unwrap();
     let frame = server_transport.try_recv().unwrap().unwrap();
-    assert_eq!(frame.stream_id, seance_protocol::StreamId::INPUT);
+    assert_eq!(frame.stream_id, StreamId::INPUT);
     assert_eq!(
         decode_client_frame(&frame).unwrap(),
         ClientMessage::PaneInput {
@@ -272,9 +276,7 @@ fn frame_history_replays_retained_updates() {
             modes: TerminalModes::default(),
             pwd: None,
             placements: Vec::new(),
-            dirty_rows: vec![
-                seance_protocol::RowDelta::from_snapshot_row(&snapshot(2, "b"), 0).unwrap(),
-            ],
+            dirty_rows: vec![RowDelta::from_snapshot_row(&snapshot(2, "b"), 0).unwrap()],
             hyperlinks: Vec::new(),
         }),
     });

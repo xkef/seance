@@ -1,7 +1,7 @@
 mod default_url;
 
 use fancy_regex::Regex;
-use seance_protocol::{GridPos, VtSnapshot};
+use seance_protocol::frame::{GridPos, VtSnapshot};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LinkModifiers {
@@ -266,7 +266,7 @@ impl LogicalLineMap {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use seance_protocol::{CellAttrs, CellColor, NO_HYPERLINK, RowMeta};
+    use seance_protocol::frame::{CellAttrs, CellColor, NO_HYPERLINK, RowMeta};
 
     fn snapshot(cols: u16, rows: u16, texts: &[&str]) -> VtSnapshot {
         let mut snapshot = VtSnapshot::empty(cols, rows);

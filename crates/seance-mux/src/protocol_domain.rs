@@ -1,11 +1,10 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use bytes::Bytes;
-use seance_protocol::{
-    ClientMessage, CursorShape, DomainId, DomainId as ProtocolDomainId, PaneRef,
-    ProtocolErrorPayload, RequestId, Resize, ServerMessage, ThemeColors, Transport,
-    decode_server_frame, encode_client_frame,
-};
+use seance_protocol::frame::{CursorShape, Resize, ThemeColors};
+use seance_protocol::identity::{DomainId, DomainId as ProtocolDomainId, PaneRef};
+use seance_protocol::mux::{ClientMessage, ProtocolErrorPayload, ServerMessage};
+use seance_protocol::transport::{RequestId, Transport, decode_server_frame, encode_client_frame};
 
 use crate::{Domain, DomainEvent, PaneError, PaneSpawnOptions, SpawnError};
 
