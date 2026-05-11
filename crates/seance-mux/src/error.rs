@@ -2,12 +2,16 @@ use std::fmt;
 
 use seance_protocol::transport::{CodecError, TransportError};
 
+/// Failure surfaced from a [`crate::Domain::spawn_pane`] call. Wraps a
+/// human-readable detail string so the protocol and local back-ends
+/// can surface their own diagnostics through one type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpawnError {
     message: String,
 }
 
 impl SpawnError {
+    /// Build a spawn error with the given diagnostic message.
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -35,12 +39,15 @@ impl From<PaneError> for SpawnError {
     }
 }
 
+/// Failure surfaced from a per-pane operation on a [`crate::Domain`].
+/// Wraps a human-readable detail string; Display reproduces it verbatim.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneError {
     message: String,
 }
 
 impl PaneError {
+    /// Build a pane error with the given diagnostic message.
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),

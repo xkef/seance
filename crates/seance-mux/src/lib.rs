@@ -1,3 +1,20 @@
+//! Multiplexer client and domain abstractions.
+//!
+//! A [`MuxClient`] talks to a [`Domain`] — either an in-process
+//! [`LocalDomain`] that owns VT actors directly, or a [`ProtocolDomain`]
+//! that translates [`MuxClient`] calls into wire messages from
+//! `seance-protocol`. The client holds per-pane [`PaneView`]s
+//! materialised from frame deltas, exposes [`PaneFrame`]s the renderer
+//! can consume, and surfaces refreshes via [`ClientRefresh`].
+//!
+//! Link detection (`pub mod links`) layers on top: it walks
+//! [`seance_protocol::frame::VtSnapshot`] cells and OSC 8 hyperlink runs
+//! to find activatable URLs and paths under the cursor.
+//!
+//! See `docs/architecture.md` for the mux model and threading boundary.
+
+#![warn(missing_docs)]
+
 mod client;
 mod domain;
 mod error;

@@ -1,17 +1,34 @@
+//! Link detection on top of [`seance_protocol::frame::VtSnapshot`].
+//!
+//! The detector inspects an OSC 8 hyperlink run first, then walks the
+//! logical line at the cursor against an optional set of user-supplied
+//! [`LinkRule`]s and a Ghostty-derived URL+path regex. The first match
+//! that contains the cursor wins.
+
 mod default_url;
 
 use fancy_regex::Regex;
 use seance_protocol::frame::{GridPos, VtSnapshot};
 
+/// Modifier-key requirement for a link to be activatable. A field set
+/// to `true` requires that modifier; `false` means "don't care". Use
+/// [`Self::matches`] to compare against the live keyboard state.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LinkModifiers {
+    /// Super (Command on macOS, Windows/Super elsewhere).
     pub super_key: bool,
+    #[allow(missing_docs)]
     pub ctrl: bool,
+    #[allow(missing_docs)]
     pub alt: bool,
+    #[allow(missing_docs)]
     pub shift: bool,
 }
 
 impl LinkModifiers {
+    /// Whether `actual` satisfies the requirement encoded in `self`.
+    /// Each requested modifier in `self` must also be set in `actual`;
+    /// extra modifiers in `actual` are ignored.
     pub fn matches(self, actual: Self) -> bool {
         (!self.super_key || actual.super_key)
             && (!self.ctrl || actual.ctrl)
@@ -20,39 +37,64 @@ impl LinkModifiers {
     }
 }
 
+/// Action the detector reports a matched link supports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkAction {
+    /// Open the link in the OS default handler (browser, file viewer,
+    /// …).
     Open,
 }
 
+/// When the renderer should highlight a detected link.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkHighlight {
+    /// Highlight whenever the cursor hovers a link.
     Hover,
+    /// Highlight only when the cursor hovers and the activation
+    /// modifiers are held.
     HoverMods,
+    /// Always highlight (regardless of cursor position).
     Always,
+    /// Always highlight when the activation modifiers are held.
     AlwaysMods,
 }
 
+/// Where a detected link came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkSource {
+    /// OSC 8 hyperlink emitted by the shell or program.
     Osc8,
-    Rule { index: usize },
+    /// Match from one of the user-supplied [`LinkRule`]s.
+    Rule {
+        /// Index into the rule list passed to
+        /// [`LinkDetector::set_rules`].
+        index: usize,
+    },
+    /// Match from the default Ghostty-derived URL/path regex.
     DefaultUrlPath,
 }
 
+/// Resolved target of a [`DetectedLink`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkTarget {
-    Url(String),
-    Path(String),
+    /// Scheme-prefixed URL (e.g. `https://…`, `mailto:…`).
+    Url(#[allow(missing_docs)] String),
+    /// Filesystem path candidate.
+    Path(#[allow(missing_docs)] String),
 }
 
+/// Inclusive grid range covering one detected link.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridRange {
+    #[allow(missing_docs)]
     pub start: GridPos,
+    #[allow(missing_docs)]
     pub end: GridPos,
 }
 
 impl GridRange {
+    /// Whether `pos` falls inside this range. Multi-row ranges run
+    /// from `start.col` on `start.row` through `end.col` on `end.row`.
     pub fn contains(self, pos: GridPos) -> bool {
         if pos.row < self.start.row || pos.row > self.end.row {
             return false;
@@ -70,13 +112,21 @@ impl GridRange {
     }
 }
 
+/// One detected link: where it sits on the grid, what it points at,
+/// and which detection path produced it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetectedLink {
+    #[allow(missing_docs)]
     pub range: GridRange,
+    #[allow(missing_docs)]
     pub target: LinkTarget,
+    #[allow(missing_docs)]
     pub source: LinkSource,
 }
 
+/// User-supplied regex rule for link detection. Built via
+/// [`Self::new`]; installed on a [`LinkDetector`] via
+/// [`LinkDetector::set_rules`].
 pub struct LinkRule {
     regex: Regex,
     action: LinkAction,
@@ -85,6 +135,8 @@ pub struct LinkRule {
 }
 
 impl LinkRule {
+    /// Compile `pattern` as a fancy-regex and tag matches with
+    /// `LinkSource::Rule { index }`.
     pub fn new(index: usize, pattern: &str) -> Result<Self, fancy_regex::Error> {
         Ok(Self {
             regex: Regex::new(pattern)?,
@@ -95,6 +147,9 @@ impl LinkRule {
     }
 }
 
+/// Stateful link detector: holds activation modifiers, an optional
+/// list of user rules, and the default URL+path regex. Drive it via
+/// [`Self::link_at`] from the input/render path.
 pub struct LinkDetector {
     activation_mods: LinkModifiers,
     rules: Vec<LinkRule>,
@@ -102,10 +157,16 @@ pub struct LinkDetector {
 }
 
 impl LinkDetector {
+    /// Detector with the bundled Ghostty-derived URL+path regex
+    /// enabled for both URLs and paths. Panics on internal regex
+    /// compile failure (the pattern is exercised by tests).
     pub fn default_ghostty_like(mods: LinkModifiers) -> Self {
         Self::from_options(mods, true, true).expect("default link regex should compile")
     }
 
+    /// Detector that selectively enables the default URL and/or path
+    /// branches. Returns `Err` only if the bundled regex fails to
+    /// compile.
     pub fn from_options(
         activation_mods: LinkModifiers,
         urls: bool,
@@ -118,10 +179,15 @@ impl LinkDetector {
         })
     }
 
+    /// Replace the configured user rules. Rules are tried in order,
+    /// before the default URL/path regex.
     pub fn set_rules(&mut self, rules: Vec<LinkRule>) {
         self.rules = rules;
     }
 
+    /// Find a link at `pos` under `mods`. Returns `None` if `mods` do
+    /// not satisfy the configured activation modifiers, if `pos` is
+    /// out of range, or if no detector branch matched.
     pub fn link_at(
         &self,
         snapshot: &VtSnapshot,

@@ -19,6 +19,10 @@ use crate::{
 
 type EventSink = Arc<Mutex<Box<dyn Fn(MuxEvent) + Send>>>;
 
+/// In-process [`Domain`] implementation: spawns and owns
+/// [`seance_vt::VtSessionHandle`]s directly, materialises frame deltas
+/// against per-pane snapshots, and forwards content-dirty wakeups
+/// through the supplied [`MuxEvent`] sink.
 pub struct LocalDomain {
     domain: ProtocolDomainId,
     next_pane_id: u64,
@@ -29,6 +33,9 @@ pub struct LocalDomain {
 }
 
 impl LocalDomain {
+    /// Build an empty domain. `event_sink` is invoked from the VT
+    /// actor thread (and must therefore be `Send + 'static`) whenever
+    /// a pane produces work the consumer needs to react to.
     pub fn new<F>(event_sink: F) -> Self
     where
         F: Fn(MuxEvent) + Send + 'static,
@@ -44,6 +51,8 @@ impl LocalDomain {
         }
     }
 
+    /// Frame history for `pane`, used by resume callers to decide
+    /// whether to replay or resync.
     pub fn history(&self, pane: PaneRef) -> Option<&PaneFrameHistory> {
         self.panes.get(&pane).map(|pane| &pane.history)
     }

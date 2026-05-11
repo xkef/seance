@@ -8,6 +8,14 @@ use seance_protocol::transport::{RequestId, Transport, decode_server_frame, enco
 
 use crate::{Domain, DomainEvent, PaneError, PaneSpawnOptions, SpawnError};
 
+/// Remote [`Domain`] backed by a [`Transport`]. Translates
+/// [`MuxClient`] calls into [`ClientMessage`]s and projects
+/// [`ServerMessage`]s back as [`DomainEvent`]s.
+///
+/// [`MuxClient`]: crate::MuxClient
+/// [`Transport`]: seance_protocol::transport::Transport
+/// [`ClientMessage`]: seance_protocol::mux::ClientMessage
+/// [`ServerMessage`]: seance_protocol::mux::ServerMessage
 pub struct ProtocolDomain<T> {
     transport: T,
     domain: ProtocolDomainId,
@@ -15,10 +23,12 @@ pub struct ProtocolDomain<T> {
 }
 
 impl<T> ProtocolDomain<T> {
+    /// Build a domain that addresses [`DomainId`] `1` on `transport`.
     pub fn new(transport: T) -> Self {
         Self::with_domain(transport, DomainId(1))
     }
 
+    /// Build a domain that addresses `domain` on `transport`.
     pub fn with_domain(transport: T, domain: DomainId) -> Self {
         Self {
             transport,
@@ -27,10 +37,12 @@ impl<T> ProtocolDomain<T> {
         }
     }
 
+    /// Borrow the underlying transport.
     pub fn transport(&self) -> &T {
         &self.transport
     }
 
+    /// Borrow the underlying transport mutably.
     pub fn transport_mut(&mut self) -> &mut T {
         &mut self.transport
     }
