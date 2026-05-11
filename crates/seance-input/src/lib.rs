@@ -280,8 +280,8 @@ impl InputHandler {
             .set_key(gk)
             .set_action(keymap::map_action(event.state))
             .set_mods(keymap::map_mods(modifiers));
-        if let Some(text) = &event.text {
-            key_event.set_utf8(Some(text.as_str()));
+        if let Some(text) = event.text.as_deref().filter(|t| is_safe_encoder_text(t)) {
+            key_event.set_utf8(Some(text));
         }
 
         let mut buf = Vec::new();
@@ -306,6 +306,20 @@ impl InputHandler {
 
         buf
     }
+}
+
+// `libghostty-vt::Event::set_utf8` requires the unmodified character before
+// any Ctrl/Meta transformations and explicitly forbids C0 controls
+// (U+0000-U+001F, U+007F) and macOS PUA function-key codes (U+F700-U+F8FF).
+// winit puts those codepoints in `event.text` for keys like Enter (`\r`),
+// Tab (`\t`), Backspace, and the macOS arrow / function keys — passing
+// them through leaves the encoder in an undefined state. Drop the text on
+// a forbidden codepoint and let the encoder fall back to the logical-key
+// path, which produces the documented VT sequence.
+fn is_safe_encoder_text(text: &str) -> bool {
+    !text
+        .chars()
+        .any(|c| c <= '\u{001F}' || c == '\u{007F}' || ('\u{F700}'..='\u{F8FF}').contains(&c))
 }
 
 #[cfg(test)]
@@ -449,5 +463,38 @@ mod tests {
                 "wheel should encode under {t:?}",
             );
         }
+    }
+
+    #[test]
+    fn safe_text_filter_rejects_libghostty_forbidden_codepoints() {
+        for c in ['\r', '\t', '\u{0008}', '\u{001B}', '\u{0000}', '\u{001F}'] {
+            let s = c.to_string();
+            assert!(
+                !is_safe_encoder_text(&s),
+                "C0 control {c:?} should be filtered"
+            );
+        }
+        assert!(!is_safe_encoder_text("\u{007F}"), "DEL should be filtered");
+
+        for c in ['\u{F700}', '\u{F701}', '\u{F702}', '\u{F703}', '\u{F8FF}'] {
+            let s = c.to_string();
+            assert!(
+                !is_safe_encoder_text(&s),
+                "macOS PUA {c:?} should be filtered"
+            );
+        }
+
+        assert!(!is_safe_encoder_text("a\u{F700}"));
+        assert!(!is_safe_encoder_text("\r\n"));
+    }
+
+    #[test]
+    fn safe_text_filter_passes_real_text() {
+        for s in ["a", "Z", "1", " ", "ø", "é", "ab", "你好", "😀"] {
+            assert!(is_safe_encoder_text(s), "{s:?} should pass through");
+        }
+        assert!(is_safe_encoder_text("\u{0020}"));
+        assert!(is_safe_encoder_text("\u{F6FF}"));
+        assert!(is_safe_encoder_text("\u{F900}"));
     }
 }
