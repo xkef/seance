@@ -6,6 +6,8 @@
 //! an implementation detail — this crate is the unit that would swap
 //! cosmic-text for parley or a hand-rolled stack.
 
+#![warn(missing_docs)]
+
 mod gpu;
 mod image;
 mod renderer;

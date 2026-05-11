@@ -3,13 +3,19 @@ use crate::text::FrameInfo;
 use seance_config::{CursorStyle, Theme};
 use seance_protocol::frame::CursorShape as ProtocolCursorShape;
 
+/// GPU-side cursor shape tag (the discriminant matches the value the
+/// shader expects in the cell-uniform buffer).
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CursorShape {
+    /// Cursor hidden.
     #[default]
     Hidden = 0,
+    /// Filled block over the cell.
     Block = 1,
+    /// Underline along the cell bottom.
     Underline = 2,
+    /// Vertical bar at the cell's leading edge.
     Bar = 3,
 }
 

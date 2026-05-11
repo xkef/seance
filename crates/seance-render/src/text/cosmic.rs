@@ -47,7 +47,7 @@ pub struct BackendConfig<'a> {
     /// Fallback families consulted when the primary `family` lacks a
     /// glyph. Stored verbatim; cosmic-text's font fallback iterator
     /// considers all loaded families regardless, so the list is a hint
-    /// for future wiring (#142) rather than a hard constraint today.
+    /// for future wiring (#142) rather than a hard constraint.
     pub fallback: &'a [String],
 }
 

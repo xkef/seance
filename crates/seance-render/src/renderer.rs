@@ -12,13 +12,23 @@ use crate::text::backend::TextBackend;
 use crate::text::cosmic::{BackendConfig, CosmicTextBackend};
 use crate::text::{BuildFrameConfig, CellBuilder};
 
+/// One-time configuration consumed by [`TerminalRenderer::new`]. After
+/// construction, individual setters mutate the live renderer.
 pub struct RendererConfig {
+    /// Surface width in physical pixels.
     pub width: u32,
+    /// Surface height in physical pixels.
     pub height: u32,
+    /// Pixel scale factor (HiDPI multiplier).
     pub scale: f64,
+    /// Primary font family.
     pub font_family: String,
+    /// Font size in points.
     pub font_size: f32,
+    /// Cell-height tweak as a percentage string (e.g. `"10%"`); see
+    /// [`seance_config::FontConfig::adjust_cell_height`].
     pub adjust_cell_height: Option<String>,
+    /// Cell-width tweak as a percentage string (e.g. `"10%"`).
     pub adjust_cell_width: Option<String>,
     /// OpenType feature tags to enable on every shape ("calt", "liga",
     /// "ss01", …). Empty means the shaper applies its own defaults.
@@ -27,28 +37,42 @@ pub struct RendererConfig {
     /// a glyph. Stored verbatim; cosmic-text already iterates through
     /// loaded fonts on miss, so the list is a hint for future wiring.
     pub font_fallback: Vec<String>,
+    /// Minimum WCAG contrast ratio enforced between cell fg and bg;
+    /// clamped to `1.0..=21.0` on construction.
     pub min_contrast: f32,
     /// Inner gutter between window edges and the cell grid, in physical
     /// pixels. `[x, y]`. The area outside the grid is filled by the
     /// fullscreen bg pass with the effective theme background.
     pub window_padding: [u16; 2],
+    /// Background alpha applied to [`Theme::bg`]; clamped to
+    /// `0.0..=1.0`.
     pub background_opacity: f32,
+    /// Theme used for resolved colours and the fullscreen bg pass.
     pub theme: Theme,
 }
 
-/// Inclusive grid range that should be drawn with a hovered-link underline.
+/// Inclusive grid range that should be drawn with a hovered-link
+/// underline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HoveredLinkRange {
+    /// First cell of the range (inclusive).
     pub start: GridPos,
+    /// Last cell of the range (inclusive).
     pub end: GridPos,
 }
 
-/// Per-frame dynamic state the app supplies to the renderer.
+/// Per-frame dynamic state the app supplies to the renderer. The
+/// referenced state is borrowed only for one
+/// [`TerminalRenderer::render`] call; nothing is retained across frames.
 #[derive(Debug, Clone)]
 pub struct RenderInputs {
+    /// Whether the VT-side cursor is currently visible (DECTCEM).
     pub vt_cursor_visible: bool,
+    /// Shape to paint the cursor as.
     pub cursor_shape: CursorShape,
+    /// Active selection as `(start, end)` in row-major order, if any.
     pub selection: Option<(GridPos, GridPos)>,
+    /// Range to underline as a hovered link, if any.
     pub hovered_link: Option<HoveredLinkRange>,
 }
 
@@ -63,6 +87,9 @@ impl Default for RenderInputs {
     }
 }
 
+/// GPU-side renderer: owns the wgpu surface, the glyph atlas, the cell
+/// builder, and the active text-shaping backend. One instance per
+/// window.
 pub struct TerminalRenderer {
     backend: Box<dyn TextBackend>,
     cell_builder: CellBuilder,
@@ -77,6 +104,8 @@ pub struct TerminalRenderer {
 }
 
 impl TerminalRenderer {
+    /// Build a renderer for `window`. Returns `None` if wgpu adapter or
+    /// surface acquisition fails.
     pub async fn new(window: Arc<Window>, config: RendererConfig) -> Option<Self> {
         let backend: Box<dyn TextBackend> = Box::new(CosmicTextBackend::new(BackendConfig {
             family: &config.font_family,
@@ -105,10 +134,13 @@ impl TerminalRenderer {
         })
     }
 
+    /// `[width, height]` of one cell in physical pixels.
     pub fn cell_size(&self) -> [f32; 2] {
         self.cell_size
     }
 
+    /// `(cols, rows)` the surface fits with the configured padding.
+    /// Caller pushes this to the PTY on resize / config changes.
     pub fn grid_size(&self) -> (u16, u16) {
         let [cw, ch] = self.cell_size;
         let usable_w =
@@ -120,6 +152,8 @@ impl TerminalRenderer {
         (cols.max(1), rows.max(1))
     }
 
+    /// Map a window-space pixel coordinate to a `(col, row)` cell.
+    /// Coordinates inside the padding gutter clamp to row/col 0.
     pub fn pixel_to_grid(&self, x: f64, y: f64) -> (u16, u16) {
         let pad = self
             .cell_builder
@@ -151,10 +185,13 @@ impl TerminalRenderer {
         }
     }
 
+    /// Mutate the GPU-side image cache (e.g. after applying the image
+    /// events from a [`seance_protocol::mux::PaneUpdate`]).
     pub fn apply_image_cache_event(&mut self, event: &ImageCacheEvent) {
         self.gpu.apply_image_cache_event(event);
     }
 
+    /// Resize the wgpu surface and remember the new dimensions.
     pub fn resize_surface(&mut self, width: u32, height: u32) {
         self.surface_width = width;
         self.surface_height = height;
@@ -162,6 +199,9 @@ impl TerminalRenderer {
             .resize(winit::dpi::PhysicalSize::new(width, height));
     }
 
+    /// Pull cells, cursor, placements, and images from `source` and
+    /// rebuild the per-frame CPU state. Pair with [`Self::render`] in
+    /// the same paint pass.
     pub fn update_frame(&mut self, source: &mut dyn FrameSource) {
         let bg_color = self.effective_bg_color();
         let min_contrast = self.min_contrast;
@@ -182,6 +222,9 @@ impl TerminalRenderer {
         }
     }
 
+    /// Submit the GPU pipelines for the most recently built frame.
+    /// Returns `false` if no frame has been built yet (caller logged a
+    /// warning).
     pub fn render(&mut self, inputs: &RenderInputs) -> bool {
         let Some(fi) = self.cell_builder.last_frame() else {
             log::warn!("render: no frame built yet");
@@ -200,6 +243,8 @@ impl TerminalRenderer {
         )
     }
 
+    /// Replace the active font size in points. Drops the glyph cache
+    /// so the next frame re-rasterizes at the new size.
     pub fn set_font_size(&mut self, points: f32) {
         self.backend.set_font_size(points);
         self.cell_builder.reset_glyphs();
@@ -207,6 +252,7 @@ impl TerminalRenderer {
         self.cell_size = [m.cell_width, m.cell_height];
     }
 
+    /// Update the HiDPI pixel scale factor. Drops the glyph cache.
     pub fn set_scale(&mut self, scale: f64) {
         self.backend.set_scale(scale);
         self.cell_builder.reset_glyphs();
@@ -214,12 +260,17 @@ impl TerminalRenderer {
         self.cell_size = [m.cell_width, m.cell_height];
     }
 
+    /// Replace the cell-height tweak. Cell metrics refresh; glyph
+    /// cache remains valid because individual glyph rasters do not
+    /// change.
     pub fn set_adjust_cell_height(&mut self, value: Option<&str>) {
         self.backend.set_adjust_cell_height(value);
         let m = self.backend.metrics();
         self.cell_size = [m.cell_width, m.cell_height];
     }
 
+    /// Replace the cell-width tweak. Cell metrics refresh; glyph
+    /// cache remains valid.
     pub fn set_adjust_cell_width(&mut self, value: Option<&str>) {
         self.backend.set_adjust_cell_width(value);
         let m = self.backend.metrics();
@@ -248,10 +299,13 @@ impl TerminalRenderer {
         self.theme = theme;
     }
 
+    /// Replace the minimum WCAG contrast ratio enforced between cell
+    /// fg and bg. Clamped to `1.0..=21.0`.
     pub fn set_min_contrast(&mut self, min_contrast: f32) {
         self.min_contrast = min_contrast.clamp(1.0, 21.0);
     }
 
+    /// Replace the background opacity. Clamped to `0.0..=1.0`.
     pub fn set_background_opacity(&mut self, opacity: f32) {
         self.background_opacity = opacity.clamp(0.0, 1.0);
     }

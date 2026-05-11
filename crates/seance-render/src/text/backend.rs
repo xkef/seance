@@ -70,7 +70,7 @@ pub struct RasterizedGlyph {
 /// Text shaping + rasterization.
 ///
 /// Sole seam where the implementation can change without touching the
-/// GPU pipeline or the VT iteration. The sole implementor today is
+/// GPU pipeline or the VT iteration. The sole implementor is
 /// [`crate::text::cosmic::CosmicTextBackend`].
 pub trait TextBackend {
     fn metrics(&self) -> &CellMetrics;
