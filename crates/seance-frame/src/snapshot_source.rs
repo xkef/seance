@@ -5,16 +5,21 @@ use crate::{
     CellView, CellVisitor, FrameSource, ImageInfo, ImageVisitor, PlacementLayer, PlacementVisitor,
 };
 
+/// [`FrameSource`] adapter that serves cells, cursor, and image data
+/// directly out of a borrowed [`VtSnapshot`]. Used to render snapshots
+/// pushed across the protocol or stored for replay.
 pub struct SnapshotFrameSource<'a> {
     snapshot: &'a VtSnapshot,
     pane: PaneRef,
 }
 
 impl<'a> SnapshotFrameSource<'a> {
+    /// Adapt `snapshot` as a frame source for the local pane.
     pub fn new(snapshot: &'a VtSnapshot) -> Self {
         Self::for_pane(snapshot, PaneRef::LOCAL)
     }
 
+    /// Adapt `snapshot` as a frame source for `pane`.
     pub fn for_pane(snapshot: &'a VtSnapshot, pane: PaneRef) -> Self {
         Self { snapshot, pane }
     }
