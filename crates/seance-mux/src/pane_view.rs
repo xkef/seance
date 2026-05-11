@@ -2,13 +2,14 @@ use std::sync::Arc;
 
 use seance_frame::SnapshotFrameSource;
 use seance_protocol::frame::{
-    CursorShape, DirtySnapshot, FrameDelta, GridPos, HyperlinkRun, Selection, TerminalModes,
-    VtSnapshot, apply_frame_delta,
+    CursorShape, DirtySnapshot, FrameDelta, GridPos, HyperlinkRun, TerminalModes, VtSnapshot,
+    apply_frame_delta,
 };
 use seance_protocol::identity::{PaneRef, ServerSeq};
 use seance_protocol::mux::PaneUpdate;
 
 use crate::PaneError;
+use crate::interaction::{HoverInput, PaneInteractionState};
 use crate::links::{DetectedLink, LinkDetector, LinkModifiers};
 
 pub type PaneFrame<'a> = SnapshotFrameSource<'a>;
@@ -16,7 +17,7 @@ pub type PaneFrame<'a> = SnapshotFrameSource<'a>;
 pub struct PaneView {
     pane: PaneRef,
     latest_snapshot: Option<Arc<VtSnapshot>>,
-    selection: Option<Selection>,
+    interaction: PaneInteractionState,
     last_applied_seq: Option<ServerSeq>,
 }
 
@@ -25,7 +26,7 @@ impl PaneView {
         Self {
             pane,
             latest_snapshot: None,
-            selection: None,
+            interaction: PaneInteractionState::new(),
             last_applied_seq: None,
         }
     }
@@ -87,47 +88,52 @@ impl PaneView {
             .and_then(|snapshot| snapshot.pwd.as_deref())
     }
 
+    pub fn hover_input(&self) -> Option<HoverInput> {
+        self.interaction.hover_input()
+    }
+
+    pub fn set_hover_input(&mut self, pos: GridPos, modifiers: LinkModifiers) -> bool {
+        self.interaction.set_hover_input(pos, modifiers)
+    }
+
+    pub fn clear_hover_input(&mut self) -> bool {
+        self.interaction.clear_hover_input()
+    }
+
     pub fn has_selection(&self) -> bool {
-        self.selection.is_some()
+        self.interaction.has_selection()
     }
 
     pub fn clear_selection(&mut self) {
-        self.selection = None;
+        self.interaction.clear_selection();
     }
 
     pub fn selection_range(&self) -> Option<(GridPos, GridPos)> {
-        self.selection.as_ref().map(Selection::ordered_range)
+        self.interaction.selection_range()
     }
 
     pub fn start_selection(&mut self, col: u16, row: u16) {
-        self.selection = Some(Selection::new(GridPos { col, row }));
+        self.interaction.start_selection(col, row);
     }
 
     pub fn start_word_selection(&mut self, col: u16, row: u16) {
-        self.selection = Some(Selection::new_word(GridPos { col, row }));
+        self.interaction.start_word_selection(col, row);
     }
 
     pub fn start_line_selection(&mut self, row: u16) {
-        self.selection = Some(Selection::new_line(GridPos { col: 0, row }));
+        self.interaction.start_line_selection(row);
     }
 
     pub fn update_selection(&mut self, col: u16, row: u16) {
-        if let Some(selection) = &mut self.selection {
-            selection.update(GridPos { col, row });
-        }
+        self.interaction.update_selection(col, row);
     }
 
     pub fn select_all(&mut self, cols: u16, rows: u16) {
-        let mut selection = Selection::new_line(GridPos { col: 0, row: 0 });
-        selection.update(GridPos {
-            col: cols.saturating_sub(1),
-            row: rows.saturating_sub(1),
-        });
-        self.selection = Some(selection);
+        self.interaction.select_all(cols, rows);
     }
 
     pub fn selection_text(&self) -> Option<String> {
-        let selection = self.selection.as_ref()?;
+        let selection = self.interaction.selection()?;
         let snapshot = self.latest_snapshot.as_ref()?;
         snapshot.selection_text(selection)
     }
@@ -136,6 +142,11 @@ impl PaneView {
         self.latest_snapshot
             .as_ref()
             .and_then(|snapshot| snapshot.osc8_run_at(col, row))
+    }
+
+    pub fn hovered_link(&self, detector: &LinkDetector) -> Option<DetectedLink> {
+        let input = self.hover_input()?;
+        self.link_at(input.cell, detector, input.modifiers)
     }
 
     pub fn link_at(

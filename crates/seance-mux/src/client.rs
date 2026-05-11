@@ -5,20 +5,26 @@ use seance_protocol::frame::{CursorShape, GridPos, Resize, TerminalModes, ThemeC
 use seance_protocol::identity::PaneRef;
 
 use crate::{
-    ClientRefresh, Domain, DomainEvent, PaneError, PaneFrame, PaneSpawnOptions, PaneView,
-    SpawnError,
+    ClientRefresh, DetectedLink, Domain, DomainEvent, GridRange, LinkDetector, LinkModifiers,
+    PaneError, PaneFrame, PaneSpawnOptions, PaneView, SpawnError,
 };
 
 pub struct MuxClient<D> {
     domain: D,
+    link_detector: LinkDetector,
     active: Option<PaneRef>,
     views: HashMap<PaneRef, PaneView>,
 }
 
 impl<D> MuxClient<D> {
     pub fn new(domain: D) -> Self {
+        Self::with_link_detector(domain, LinkDetector::disabled())
+    }
+
+    pub fn with_link_detector(domain: D, link_detector: LinkDetector) -> Self {
         Self {
             domain,
+            link_detector,
             active: None,
             views: HashMap::new(),
         }
@@ -30,6 +36,14 @@ impl<D> MuxClient<D> {
 
     pub fn domain_mut(&mut self) -> &mut D {
         &mut self.domain
+    }
+
+    pub fn link_detector(&self) -> &LinkDetector {
+        &self.link_detector
+    }
+
+    pub fn set_link_detector(&mut self, link_detector: LinkDetector) {
+        self.link_detector = link_detector;
     }
 
     pub fn active_pane_ref(&self) -> Option<PaneRef> {
@@ -51,6 +65,28 @@ impl<D> MuxClient<D> {
 
     pub fn pane_view_mut(&mut self, pane: PaneRef) -> Option<&mut PaneView> {
         self.views.get_mut(&pane)
+    }
+
+    pub fn set_hover_input(
+        &mut self,
+        pane: PaneRef,
+        pos: GridPos,
+        modifiers: LinkModifiers,
+    ) -> Result<bool, PaneError> {
+        self.views
+            .get_mut(&pane)
+            .map(|view| view.set_hover_input(pos, modifiers))
+            .ok_or_else(|| PaneError::new("unknown pane"))
+    }
+
+    pub fn hovered_link(&self, pane: PaneRef) -> Option<DetectedLink> {
+        self.views
+            .get(&pane)
+            .and_then(|view| view.hovered_link(&self.link_detector))
+    }
+
+    pub fn hovered_link_range(&self, pane: PaneRef) -> Option<GridRange> {
+        self.hovered_link(pane).map(|link| link.range)
     }
 
     pub fn pane(&mut self, pane: PaneRef) -> PaneHandle<'_, D> {
@@ -180,6 +216,20 @@ impl<D> PaneHandle<'_, D> {
 
     pub fn selection_text(&self) -> Option<String> {
         self.view().and_then(PaneView::selection_text)
+    }
+
+    pub fn set_hover_input(&mut self, pos: GridPos, modifiers: LinkModifiers) -> bool {
+        self.view_mut()
+            .is_some_and(|view| view.set_hover_input(pos, modifiers))
+    }
+
+    pub fn hovered_link(&self) -> Option<DetectedLink> {
+        self.view()
+            .and_then(|view| view.hovered_link(&self.client.link_detector))
+    }
+
+    pub fn hovered_link_range(&self) -> Option<GridRange> {
+        self.hovered_link().map(|link| link.range)
     }
 
     fn view(&self) -> Option<&PaneView> {

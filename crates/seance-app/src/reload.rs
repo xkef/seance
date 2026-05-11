@@ -138,7 +138,9 @@ impl App {
         if diff.links_changed
             && let Some(surface) = self.surface.as_mut()
         {
-            surface.link_detector = link_detector_from_config(&self.config.links);
+            surface
+                .mux
+                .set_link_detector(link_detector_from_config(&self.config.links));
             surface.refresh_hovered_link();
         }
         if old_config.cursor.style != self.config.cursor.style

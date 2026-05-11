@@ -14,8 +14,9 @@ use seance_protocol::transport::{
 };
 
 use crate::{
-    CursorShape, Domain, DomainEvent, MuxClient, PaneError, PaneFrameHistory, PaneSpawnOptions,
-    PaneView, ProtocolDomain, ReplayBatch, Resize, SpawnError, ThemeColors,
+    CursorShape, Domain, DomainEvent, LinkDetector, LinkModifiers, LinkSource, LinkTarget,
+    MuxClient, PaneError, PaneFrameHistory, PaneSpawnOptions, PaneView, ProtocolDomain,
+    ReplayBatch, Resize, SpawnError, ThemeColors,
 };
 
 fn pane_ref() -> PaneRef {
@@ -194,6 +195,83 @@ fn mux_client_refresh_collects_image_events() {
     assert_eq!(refresh.image_events, vec![event]);
     assert!(refresh.frame_dirty);
     assert_eq!(client.pane_view(pane).unwrap().generation(), Some(1));
+}
+
+#[test]
+fn mux_client_derives_hovered_link_from_pane_interaction_state() {
+    let pane = pane_ref();
+    let mut frame = snapshot(1, "x");
+    let idx = frame.intern_hyperlink("https://example.com");
+    frame.cells[0].hyperlink_idx = idx;
+    let update = PaneUpdate {
+        pane,
+        seq: ServerSeq(1),
+        image_events: Vec::new(),
+        frame: Some(FrameDelta::Full {
+            generation: 1,
+            snapshot: frame,
+        }),
+    };
+    let mods = LinkModifiers {
+        super_key: true,
+        shift: true,
+        ..LinkModifiers::default()
+    };
+    let mut client = MuxClient::with_link_detector(
+        ScriptedDomain {
+            events: VecDeque::from([DomainEvent::PaneUpdate(update)]),
+            ..ScriptedDomain::default()
+        },
+        LinkDetector::from_options(mods, false, false).unwrap(),
+    );
+
+    let pane = client.spawn_pane(PaneSpawnOptions::default()).unwrap();
+    client
+        .set_hover_input(
+            pane,
+            seance_protocol::frame::GridPos { col: 0, row: 0 },
+            mods,
+        )
+        .unwrap();
+
+    let link = client.hovered_link(pane).unwrap();
+    assert_eq!(link.source, LinkSource::Osc8);
+    assert_eq!(
+        link.target,
+        LinkTarget::Url("https://example.com".to_string())
+    );
+}
+
+#[test]
+fn mux_client_new_uses_disabled_link_detector() {
+    let pane = pane_ref();
+    let mut frame = snapshot(1, "x");
+    let idx = frame.intern_hyperlink("https://example.com");
+    frame.cells[0].hyperlink_idx = idx;
+    let update = PaneUpdate {
+        pane,
+        seq: ServerSeq(1),
+        image_events: Vec::new(),
+        frame: Some(FrameDelta::Full {
+            generation: 1,
+            snapshot: frame,
+        }),
+    };
+    let mut client = MuxClient::new(ScriptedDomain {
+        events: VecDeque::from([DomainEvent::PaneUpdate(update)]),
+        ..ScriptedDomain::default()
+    });
+
+    let pane = client.spawn_pane(PaneSpawnOptions::default()).unwrap();
+    client
+        .set_hover_input(
+            pane,
+            seance_protocol::frame::GridPos { col: 0, row: 0 },
+            LinkModifiers::default(),
+        )
+        .unwrap();
+
+    assert_eq!(client.hovered_link(pane), None);
 }
 
 #[test]

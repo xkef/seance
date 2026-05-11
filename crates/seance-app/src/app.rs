@@ -98,6 +98,10 @@ impl App {
                 surface.renderer.update_frame(&mut source);
             }
         }
+        let selection = surface.selection_range();
+        let hovered_link = surface.hovered_link_range();
+        surface.render_inputs.selection = selection;
+        surface.render_inputs.hovered_link = hovered_link;
         // Prefer the VT-reported shape; fall back to the user's configured
         // default when the VT has no opinion. Refreshed every frame so that
         // hot-reload of `cursor.style` is picked up without extra wiring.
@@ -212,9 +216,13 @@ impl ApplicationHandler<UserEvent> for App {
 
         let (cols, rows) = renderer.grid_size();
         let proxy = self.proxy.clone();
-        let mut mux = MuxClient::new(LocalDomain::new(move |event| {
-            let _ = proxy.send_event(UserEvent::Mux(event));
-        }));
+        let link_detector = link_detector_from_config(&self.config.links);
+        let mut mux = MuxClient::with_link_detector(
+            LocalDomain::new(move |event| {
+                let _ = proxy.send_event(UserEvent::Mux(event));
+            }),
+            link_detector,
+        );
         let active_pane = mux
             .spawn_pane(PaneSpawnOptions {
                 cols,
@@ -231,15 +239,7 @@ impl ApplicationHandler<UserEvent> for App {
             cursor_shape: self.config.cursor.style.into(),
             ..RenderInputs::default()
         };
-        let link_detector = link_detector_from_config(&self.config.links);
-        let mut surface = SurfaceState::new(
-            window,
-            renderer,
-            mux,
-            active_pane,
-            render_inputs,
-            link_detector,
-        );
+        let mut surface = SurfaceState::new(window, renderer, mux, active_pane, render_inputs);
         self.apply_terminal_theme_to(&mut surface, &theme);
         self.surface = Some(surface);
 
