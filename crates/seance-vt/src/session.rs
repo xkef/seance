@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use bytes::{Buf, Bytes};
 
-pub use seance_protocol::{Resize, ThemeColors};
+pub use seance_protocol::frame::{Resize, ThemeColors};
 
 use crate::core::VtCoreError;
 use crate::frame::CursorShape;

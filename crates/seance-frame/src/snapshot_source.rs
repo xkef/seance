@@ -1,4 +1,5 @@
-use seance_protocol::{CursorInfo, DirtySnapshot, GridPos, PaneRef, VtSnapshot};
+use seance_protocol::frame::{CursorInfo, DirtySnapshot, GridPos, VtSnapshot};
+use seance_protocol::identity::PaneRef;
 
 use crate::{
     CellView, CellVisitor, FrameSource, ImageInfo, ImageVisitor, PlacementLayer, PlacementVisitor,
@@ -86,9 +87,10 @@ impl FrameSource for SnapshotFrameSource<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use seance_protocol::{
-        CellAttrs, CellColor, CursorShape, PaneEpoch, PaneId, PlacementSnapshot, SnapshotImage,
+    use seance_protocol::frame::{
+        CellAttrs, CellColor, CursorShape, PlacementSnapshot, SnapshotImage,
     };
+    use seance_protocol::identity::{PaneEpoch, PaneId};
 
     fn snapshot_with_cells(cols: u16, rows: u16, texts: &[&str]) -> VtSnapshot {
         let mut snapshot = VtSnapshot::empty(cols, rows);

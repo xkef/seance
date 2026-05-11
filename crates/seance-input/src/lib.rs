@@ -7,7 +7,7 @@
 mod keymap;
 
 use libghostty_vt::{key, mouse};
-use seance_protocol::TerminalModes;
+use seance_protocol::frame::TerminalModes;
 use winit::event::{ElementState, KeyEvent, Modifiers};
 use winit::keyboard::{Key, PhysicalKey};
 #[cfg(target_os = "macos")]

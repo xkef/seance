@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use seance_config::Theme;
 use seance_frame::FrameSource;
-use seance_protocol::{GridPos, ImageCacheEvent};
+use seance_protocol::frame::GridPos;
+use seance_protocol::image_cache::ImageCacheEvent;
 use winit::window::Window;
 
 pub use crate::gpu::uniforms::CursorShape;

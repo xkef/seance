@@ -1,1 +1,1 @@
-pub use seance_protocol::TerminalModes;
+pub use seance_protocol::frame::TerminalModes;

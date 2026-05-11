@@ -2,11 +2,15 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, mpsc};
 
 use bytes::Bytes;
-use seance_protocol::{
-    CursorShape, DomainId as ProtocolDomainId, FrameDelta, ImageCacheEvent, ImageFormat, ImageKey,
-    ImagePayload, PaneEpoch, PaneId, PaneRef, PaneUpdate, Resize, ServerSeq, SnapshotImage,
-    ThemeColors, VtSnapshot,
+use seance_protocol::frame::{
+    CursorShape, FrameDelta, Resize, SnapshotImage, ThemeColors, VtSnapshot,
 };
+use seance_protocol::identity::{
+    DomainId as ProtocolDomainId, ImageKey, PaneEpoch, PaneId, PaneRef, ServerSeq,
+};
+use seance_protocol::image_cache::{ImageCacheEvent, ImageFormat, ImagePayload};
+use seance_protocol::limits::MAX_RETAINED_PANE_UPDATES;
+use seance_protocol::mux::PaneUpdate;
 use seance_vt::{VtEvent, VtSessionHandle, spawn_vt_session};
 
 use crate::{
@@ -231,7 +235,7 @@ impl LocalPane {
         Self {
             vt,
             server_snapshot: None,
-            history: PaneFrameHistory::new(pane_ref, seance_protocol::MAX_RETAINED_PANE_UPDATES),
+            history: PaneFrameHistory::new(pane_ref, MAX_RETAINED_PANE_UPDATES),
             next_seq: 1,
             exited: false,
         }
@@ -247,7 +251,8 @@ impl LocalPane {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use seance_protocol::{CellAttrs, CellColor, ImageId};
+    use seance_protocol::frame::{CellAttrs, CellColor};
+    use seance_protocol::identity::ImageId;
 
     fn pane_ref() -> PaneRef {
         PaneRef {

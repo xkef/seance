@@ -21,11 +21,13 @@ pub use local::LocalDomain;
 pub use pane_view::{PaneFrame, PaneView};
 pub use protocol_domain::ProtocolDomain;
 pub use seance_frame::SnapshotFrameSource;
-pub use seance_protocol::{
-    CellAttrs, CellColor, CursorInfo, CursorShape, DomainId, GridPos, ImageId, ImageKey,
-    InProcessTransport, LineContent, LineRange, PaneRef, PlacementSnapshot, Resize, Selection,
-    SelectionGranularity, TerminalModes, ThemeColors, TransportFrame,
+pub use seance_protocol::frame::{
+    CellAttrs, CellColor, CursorInfo, CursorShape, GridPos, LineRange, PlacementSnapshot, Resize,
+    Selection, SelectionGranularity, TerminalModes, ThemeColors,
 };
+pub use seance_protocol::identity::{DomainId, ImageId, ImageKey, PaneRef};
+pub use seance_protocol::mux::LineContent;
+pub use seance_protocol::transport::{InProcessTransport, TransportFrame};
 
 #[cfg(test)]
 mod tests;

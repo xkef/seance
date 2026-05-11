@@ -1,5 +1,6 @@
 use bytes::Bytes;
-use seance_protocol::{CursorShape, PaneRef, Resize, ThemeColors};
+use seance_protocol::frame::{CursorShape, Resize, ThemeColors};
+use seance_protocol::identity::PaneRef;
 
 use crate::{DomainEvent, PaneError, SpawnError};
 

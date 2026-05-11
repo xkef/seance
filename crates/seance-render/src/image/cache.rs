@@ -7,7 +7,8 @@
 
 use rustc_hash::FxHashMap;
 use seance_frame::{ImageInfo, ImageVisitor};
-use seance_protocol::{ImageCacheEvent, ImageKey, ImagePayload, PaneRef};
+use seance_protocol::identity::{ImageKey, PaneRef};
+use seance_protocol::image_cache::{ImageCacheEvent, ImagePayload};
 use wgpu::*;
 
 /// Frames of grace before an unreferenced image is dropped. At ~240Hz

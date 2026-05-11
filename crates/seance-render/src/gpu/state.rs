@@ -13,7 +13,8 @@ use crate::renderer::RenderInputs;
 use crate::text::{CellText, FrameInfo, GlyphAtlas};
 use seance_config::Theme;
 use seance_frame::{FrameSource, PlacementLayer};
-use seance_protocol::{DirtySnapshot, ImageCacheEvent};
+use seance_protocol::frame::DirtySnapshot;
+use seance_protocol::image_cache::ImageCacheEvent;
 
 const ATLAS_GRAYSCALE_FORMAT: TextureFormat = TextureFormat::R8Unorm;
 const ATLAS_COLOR_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;

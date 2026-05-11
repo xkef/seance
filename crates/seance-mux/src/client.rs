@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use bytes::Bytes;
-use seance_protocol::{CursorShape, GridPos, PaneRef, Resize, TerminalModes, ThemeColors};
+use seance_protocol::frame::{CursorShape, GridPos, Resize, TerminalModes, ThemeColors};
+use seance_protocol::identity::PaneRef;
 
 use crate::{
     ClientRefresh, Domain, DomainEvent, PaneError, PaneFrame, PaneSpawnOptions, PaneView,

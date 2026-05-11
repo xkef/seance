@@ -11,7 +11,7 @@
 use std::fmt::Write;
 
 use seance_frame::{CellView, CellVisitor, FrameSource};
-use seance_protocol::{CellColor, GridPos};
+use seance_protocol::frame::{CellColor, GridPos};
 use unicode_width::UnicodeWidthStr;
 
 /// Build the L4 text dump for `source`.

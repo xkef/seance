@@ -1,6 +1,6 @@
 use std::fmt;
 
-use seance_protocol::{CodecError, TransportError};
+use seance_protocol::transport::{CodecError, TransportError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpawnError {

@@ -7,7 +7,8 @@
 
 use bytemuck::{Pod, Zeroable};
 use seance_frame::{PlacementLayer, PlacementVisitor};
-use seance_protocol::{ImageKey, PaneRef, PlacementSnapshot};
+use seance_protocol::frame::PlacementSnapshot;
+use seance_protocol::identity::{ImageKey, PaneRef};
 
 use crate::text::FrameInfo;
 
@@ -155,7 +156,7 @@ impl PlacementVisitor for PlacementCollector<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use seance_protocol::{ImageId, PaneEpoch, PaneId};
+    use seance_protocol::identity::{ImageId, PaneEpoch, PaneId};
 
     fn frame_info() -> FrameInfo {
         FrameInfo {
