@@ -422,9 +422,10 @@ live there, not here.
   `tracing::{trace,debug,info,warn,error}!` with capture syntax (`{var}`).
   Prefer structured fields (`err = %err`) when the value is a typed error.
 - **Subscriber**: configured once in `seance-app::main` via a `Registry` with
-  two layers — stderr `fmt::layer` and a `tracing_appender::rolling::daily`
-  writer wrapped in `non_blocking`. The `WorkerGuard` is held in `main` so the
-  appender flushes on shutdown.
+  two layers — stdout `fmt::layer` (so `cargo run` prints logs to the parent
+  terminal) and a `tracing_appender::rolling::daily` writer wrapped in
+  `non_blocking`. The `WorkerGuard` is held in `main` so the appender flushes on
+  shutdown.
 - **Filter**: `EnvFilter` honors `RUST_LOG`. Default when unset:
   `seance=info,wgpu=warn,wgpu_core=warn,wgpu_hal=warn,winit=warn,cosmic_text=warn,naga=warn,notify=warn`.
 - **Spans on hot paths**: per-frame `render::frame`, `gpu::submit`; per-tick

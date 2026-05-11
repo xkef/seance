@@ -56,7 +56,7 @@ fn log_dir() -> Option<PathBuf> {
     }
 }
 
-/// Install the global `tracing` subscriber with a stderr layer plus an
+/// Install the global `tracing` subscriber with a stdout layer plus an
 /// optional non-blocking daily-rolling file layer. The returned guard
 /// must outlive every emitted event; main holds it for the lifetime of
 /// the event loop so the appender flushes on shutdown.
@@ -67,7 +67,7 @@ fn init_tracing() -> Option<WorkerGuard> {
              winit=warn,cosmic_text=warn,naga=warn,notify=warn",
         )
     });
-    let stderr_layer = fmt::layer().with_writer(std::io::stderr).with_target(false);
+    let stdout_layer = fmt::layer().with_writer(std::io::stdout).with_target(false);
     let (file_layer, guard) = match log_dir() {
         Some(dir) if std::fs::create_dir_all(&dir).is_ok() => {
             let appender = rolling::daily(&dir, "seance.log");
@@ -78,7 +78,7 @@ fn init_tracing() -> Option<WorkerGuard> {
     };
     tracing_subscriber::registry()
         .with(filter)
-        .with(stderr_layer)
+        .with(stdout_layer)
         .with(file_layer)
         .init();
     guard
