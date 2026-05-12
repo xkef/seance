@@ -71,6 +71,12 @@ impl HeadlessTerminal {
         self.core.is_cursor_visible()
     }
 
+    /// Scroll the viewport by `delta` rows. Negative values scroll up into the
+    /// scrollback, positive values scroll back down toward the active screen.
+    pub fn scroll_lines(&mut self, delta: i32) {
+        self.core.scroll_lines(delta);
+    }
+
     pub fn mode(&self, m: Mode) -> bool {
         self.core.mode(m)
     }
