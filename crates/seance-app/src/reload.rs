@@ -117,6 +117,11 @@ impl App {
                 "font.family change takes effect on restart (live swap not yet supported)"
             );
         }
+        if diff.scrollback_limit_changed {
+            tracing::info!(
+                "scrollback.limit change takes effect on restart (live swap not yet supported)"
+            );
+        }
         if diff.theme_changed {
             self.reload_theme();
         }
