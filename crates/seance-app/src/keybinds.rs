@@ -5,7 +5,7 @@
 //! to `seance_input::InputHandler`.
 
 use winit::event::{ElementState, KeyEvent, Modifiers};
-use winit::keyboard::Key;
+use winit::keyboard::{Key, NamedKey};
 
 use crate::command::AppCommand;
 
@@ -24,19 +24,20 @@ impl Keybinds {
         if !modifiers.state().super_key() {
             return None;
         }
-        let Key::Character(c) = &event.logical_key else {
-            return None;
-        };
-        Some(match c.as_str() {
-            "q" => AppCommand::Quit,
-            "w" => AppCommand::CloseWindow,
-            "c" => AppCommand::Copy,
-            "v" => AppCommand::Paste,
-            "a" => AppCommand::SelectAll,
-            "+" | "=" => AppCommand::FontSizeDelta(1),
-            "-" => AppCommand::FontSizeDelta(-1),
-            "0" => AppCommand::FontSizeReset,
-            _ => return None,
-        })
+        match &event.logical_key {
+            Key::Character(c) => Some(match c.as_str() {
+                "q" => AppCommand::Quit,
+                "w" => AppCommand::CloseWindow,
+                "c" => AppCommand::Copy,
+                "v" => AppCommand::Paste,
+                "a" => AppCommand::SelectAll,
+                "+" | "=" => AppCommand::FontSizeDelta(1),
+                "-" => AppCommand::FontSizeDelta(-1),
+                "0" => AppCommand::FontSizeReset,
+                _ => return None,
+            }),
+            Key::Named(NamedKey::Enter) => Some(AppCommand::ToggleFullscreen),
+            _ => None,
+        }
     }
 }
