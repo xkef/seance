@@ -33,6 +33,10 @@ struct Uniforms {
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 
+const ATLAS_MASK: u32 = 0xFFu;
+const CURSOR_GLYPH_FLAGS_MASK: u32 = 0xFF00u;
+const MIN_CONTRAST_FLAG: u32 = 0x10000u;
+
 // ================================================================
 // Min-contrast (WCAG relative luminance in linearized sRGB)
 // ================================================================
@@ -257,6 +261,7 @@ struct CellTextOut {
     @location(1) @interpolate(flat) color: vec4<f32>,
     @location(2) @interpolate(flat) atlas: u32,
     @location(3) @interpolate(flat) bg_color: vec3<f32>,
+    @location(4) @interpolate(flat) min_contrast: u32,
 }
 
 @group(2) @binding(0) var atlas_grayscale: texture_2d<f32>;
@@ -280,7 +285,7 @@ fn vs_cell_text(
 
     let world_pos = cell_pos + size * corner + offset + uniforms.grid_padding.xy;
 
-    let is_cursor_glyph = (instance.atlas_and_flags & 0xFF00u) != 0u;
+    let is_cursor_glyph = (instance.atlas_and_flags & CURSOR_GLYPH_FLAGS_MASK) != 0u;
     let at_cursor = uniforms.cursor_visible != 0u
                  && instance.grid_pos.x == uniforms.cursor_pos.x
                  && instance.grid_pos.y == uniforms.cursor_pos.y;
@@ -308,8 +313,9 @@ fn vs_cell_text(
     out.tex_coord = vec2<f32>(f32(instance.glyph_pos.x), f32(instance.glyph_pos.y))
                   + vec2<f32>(f32(instance.glyph_size.x), f32(instance.glyph_size.y)) * corner;
     out.color = color;
-    out.atlas = instance.atlas_and_flags & 0xFFu;
+    out.atlas = instance.atlas_and_flags & ATLAS_MASK;
     out.bg_color = effective_bg;
+    out.min_contrast = instance.atlas_and_flags & MIN_CONTRAST_FLAG;
 
     return out;
 }
@@ -321,7 +327,10 @@ fn fs_cell_text(in: CellTextOut) -> @location(0) vec4<f32> {
         let uv = in.tex_coord / gs_size;
         let a = textureSample(atlas_grayscale, atlas_sampler, uv).r;
 
-        let fg = apply_min_contrast(in.color.rgb, in.bg_color, uniforms.min_contrast);
+        var fg = in.color.rgb;
+        if in.min_contrast != 0u {
+            fg = apply_min_contrast(fg, in.bg_color, uniforms.min_contrast);
+        }
 
         let alpha = a * in.color.a;
         return vec4<f32>(fg * alpha, alpha);

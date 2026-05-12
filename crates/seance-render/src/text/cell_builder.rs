@@ -39,6 +39,8 @@ pub struct CellText {
 
 const _: () = assert!(size_of::<CellText>() == 32);
 
+const TEXT_FLAG_MIN_CONTRAST: u32 = 1 << 16;
+
 pub struct FrameInfo {
     pub cell_width: f32,
     pub cell_height: f32,
@@ -85,6 +87,7 @@ struct CellSlot {
     byte_offset: u32,
     col: u16,
     fg: [u8; 4],
+    min_contrast: bool,
 }
 
 /// A contiguous group of cells on the same row sharing one [`FontAttrs`],
@@ -114,11 +117,12 @@ impl ShapeRun {
         }
     }
 
-    fn push_cell(&mut self, col: u16, fg: [u8; 4], text: &str) {
+    fn push_cell(&mut self, col: u16, fg: [u8; 4], min_contrast: bool, text: &str) {
         self.slots.push(CellSlot {
             byte_offset: self.text.len() as u32,
             col,
             fg,
+            min_contrast,
         });
         self.text.push_str(text);
     }
@@ -371,13 +375,17 @@ fn shape_runs(
                 continue;
             };
             let slot = run.slot_for_cluster(glyph.cluster);
+            let mut atlas_and_flags = u32::from(entry.is_color);
+            if slot.min_contrast {
+                atlas_and_flags |= TEXT_FLAG_MIN_CONTRAST;
+            }
             out.push(CellText {
                 glyph_pos: entry.pos,
                 glyph_size: entry.size,
                 bearings: [entry.bearing_x as i16, entry.bearing_y as i16],
                 grid_pos: [slot.col, run.row],
                 color: slot.fg,
-                atlas_and_flags: u32::from(entry.is_color),
+                atlas_and_flags,
             });
         }
     }
@@ -454,6 +462,7 @@ impl CellVisitor for RunBuilder<'_> {
         let idx = row as usize * self.cols as usize + col as usize;
 
         let theme_bg = [self.theme.bg[0], self.theme.bg[1], self.theme.bg[2]];
+        let min_contrast = matches!(view.fg, CellColor::Default) && !view.attrs.inverse;
         let mut fg_rgb = resolve_color(self.theme, &view.fg).unwrap_or(self.theme.fg);
         let mut bg_rgb = resolve_color(self.theme, &view.bg).unwrap_or(theme_bg);
         if view.attrs.inverse {
@@ -489,7 +498,7 @@ impl CellVisitor for RunBuilder<'_> {
         self.open
             .as_mut()
             .expect("open run set above")
-            .push_cell(col, fg, view.text);
+            .push_cell(col, fg, min_contrast, view.text);
     }
 }
 
@@ -752,6 +761,30 @@ mod tests {
     }
 
     #[test]
+    fn walk_grid_into_runs_marks_only_default_fg_for_min_contrast() {
+        let theme = Theme::blank();
+        let cells = [
+            ("d", CellColor::Default, CellColor::Default, plain()),
+            ("p", CellColor::Palette(1), CellColor::Default, plain()),
+            ("r", CellColor::Rgb(10, 20, 30), CellColor::Default, plain()),
+            (
+                "i",
+                CellColor::Default,
+                CellColor::Palette(2),
+                CellAttrs {
+                    inverse: true,
+                    ..CellAttrs::default()
+                },
+            ),
+        ];
+        let (_bg, runs) = collect_runs(4, 1, &cells, &theme);
+
+        assert_eq!(runs.len(), 1);
+        let flags: Vec<bool> = runs[0].slots.iter().map(|s| s.min_contrast).collect();
+        assert_eq!(flags, vec![true, false, false, false]);
+    }
+
+    #[test]
     fn walk_grid_into_runs_swaps_fg_and_bg_for_inverse_cells() {
         let theme = Theme::blank();
         let cells = [(
@@ -880,9 +913,9 @@ mod tests {
         // Three cells "a", "é" (2 bytes), "b" → text "aéb",
         // slots at byte_offset [0, 1, 3].
         let mut run = ShapeRun::new(0, FontAttrs::default());
-        run.push_cell(0, [1, 1, 1, 255], "a");
-        run.push_cell(1, [2, 2, 2, 255], "é");
-        run.push_cell(2, [3, 3, 3, 255], "b");
+        run.push_cell(0, [1, 1, 1, 255], true, "a");
+        run.push_cell(1, [2, 2, 2, 255], true, "é");
+        run.push_cell(2, [3, 3, 3, 255], true, "b");
 
         assert_eq!(run.slot_for_cluster(0).col, 0);
         assert_eq!(run.slot_for_cluster(1).col, 1);
@@ -1034,6 +1067,27 @@ mod tests {
         builder.build_frame(&mut source, &mut backend, build_config(&theme));
         let cols: Vec<u16> = builder.text_cells().iter().map(|c| c.grid_pos[0]).collect();
         assert_eq!(cols, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn min_contrast_flag_only_set_for_default_foreground_glyphs() {
+        let theme = Theme::blank();
+        let cells = [
+            ("D", CellColor::Default, CellColor::Default, plain()),
+            ("P", CellColor::Palette(1), CellColor::Default, plain()),
+            ("R", CellColor::Rgb(10, 20, 30), CellColor::Default, plain()),
+        ];
+        let mut source = FakeFrame::new(3, 1, &cells);
+        let mut backend = distributing_backend();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        let flags: Vec<bool> = builder
+            .text_cells()
+            .iter()
+            .map(|c| c.atlas_and_flags & TEXT_FLAG_MIN_CONTRAST != 0)
+            .collect();
+        assert_eq!(flags, vec![true, false, false]);
     }
 
     /// Backend that returns a single ligature glyph at cluster 0 for "==".
