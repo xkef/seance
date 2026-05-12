@@ -173,8 +173,10 @@ mod tests {
     #[test]
     fn clipboard_defaults_match_spec() {
         let cfg = Config::default();
-        assert_eq!(cfg.clipboard.read, ClipboardPolicy::Ask);
-        assert_eq!(cfg.clipboard.write, ClipboardPolicy::Allow);
+        // Both default to deny — users opt in to OSC 52 explicitly. See the
+        // `ClipboardPolicy` doc-comment for the `ask` upgrade path.
+        assert_eq!(cfg.clipboard.read, ClipboardPolicy::Deny);
+        assert_eq!(cfg.clipboard.write, ClipboardPolicy::Deny);
         assert!(cfg.clipboard.paste_protection);
         assert!(!cfg.clipboard.copy_on_select);
     }

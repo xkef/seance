@@ -128,8 +128,9 @@ seance-render-test -> seance-vt, seance-protocol, seance-frame
   through the VT actor, and the App layer
   (`SurfaceState::handle_clipboard_request`) routes them through `arboard`,
   echoing reads back via an OSC 52 reply. Gated by
-  `clipboard.{read,write} = "allow" | "ask" | "deny"`; `ask` denies-and-logs
-  until the M3 confirm-overlay UI lands.
+  `clipboard.{read,write} = "allow" | "ask" | "deny"`, both default `deny`;
+  users opt in by setting `allow` (or `ask` once the M3 confirm-overlay UI
+  ships).
 - **Kitty graphics protocol** [IMPLEMENTED] — transmission, decode (PNG and raw
   24/32-bit), per-image cache with 320 MB storage cap, placement resolution.
   Virtual placeholders (U+10EEEE), animation, and iTerm2 inline images remain
