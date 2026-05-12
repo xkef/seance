@@ -34,7 +34,7 @@ impl From<ProtocolCursorShape> for CursorShape {
 }
 
 /// Layout must match the `Uniforms` struct in `cell.wgsl` exactly.
-const _: () = assert!(size_of::<Uniforms>() == 256);
+const _: () = assert!(size_of::<Uniforms>() == 272);
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -55,6 +55,10 @@ pub(crate) struct Uniforms {
     pub selection_start: [u32; 2],
     pub selection_end: [u32; 2],
     pub selection_color: [f32; 4],
+    /// RGBA selection foreground. `a == 0` is the sentinel for "no
+    /// override" — glyphs inside the selection then fall back to their
+    /// effective bg, which gives natural contrast against `selection_color`.
+    pub selection_fg: [f32; 4],
     pub selection_active: u32,
     pub baseline: f32,
     pub hovered_link_active: u32,
@@ -113,6 +117,16 @@ impl Uniforms {
             selection_start: sel_start,
             selection_end: sel_end,
             selection_color: theme.selection_bg,
+            selection_fg: match theme.selection_fg {
+                Some([r, g, b]) => [
+                    f32::from(r) / 255.0,
+                    f32::from(g) / 255.0,
+                    f32::from(b) / 255.0,
+                    1.0,
+                ],
+                // alpha=0 sentinel → wgsl falls back to cell bg.
+                None => [0.0, 0.0, 0.0, 0.0],
+            },
             selection_active: sel_active,
             baseline: fi.baseline,
             hovered_link_active: link_active,

@@ -20,6 +20,7 @@ struct Uniforms {
     selection_start: vec2<u32>,
     selection_end: vec2<u32>,
     selection_color: vec4<f32>,
+    selection_fg: vec4<f32>,
     selection_active: u32,
     baseline: f32,
     hovered_link_active: u32,

@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use seance_frame::SnapshotFrameSource;
 use seance_protocol::frame::{
-    CursorShape, DirtySnapshot, FrameDelta, GridPos, HyperlinkRun, TerminalModes, VtSnapshot,
-    apply_frame_delta,
+    CursorShape, DirtySnapshot, FrameDelta, GridPos, HyperlinkRun, Selection, TerminalModes,
+    VtSnapshot, apply_frame_delta,
 };
 use seance_protocol::identity::{PaneRef, ServerSeq};
 use seance_protocol::mux::PaneUpdate;
@@ -117,11 +117,36 @@ impl PaneView {
     }
 
     pub fn start_word_selection(&mut self, col: u16, row: u16) {
-        self.interaction.start_word_selection(col, row);
+        // Resolve the word range against the latest snapshot. If the
+        // snapshot is missing or the click landed on whitespace, fall
+        // back to a single-cell character selection so the click never
+        // disappears silently.
+        let resolved = self
+            .latest_snapshot
+            .as_ref()
+            .and_then(|snap| snap.word_range_at(row, col));
+        if let Some((start, end)) = resolved {
+            self.interaction
+                .set_selection(Selection::word_range(start, end));
+        } else {
+            self.interaction.start_selection(col, row);
+        }
     }
 
     pub fn start_line_selection(&mut self, row: u16) {
-        self.interaction.start_line_selection(row);
+        if let Some(snap) = self.latest_snapshot.as_ref() {
+            let (first, last) = snap.wrap_chain(row);
+            let last_col = snap.cols.saturating_sub(1);
+            self.interaction.set_selection(Selection::line_range(
+                GridPos { col: 0, row: first },
+                GridPos {
+                    col: last_col,
+                    row: last,
+                },
+            ));
+        } else {
+            self.interaction.start_line_selection(row);
+        }
     }
 
     pub fn update_selection(&mut self, col: u16, row: u16) {
@@ -166,5 +191,93 @@ impl PaneView {
         } else {
             Err(PaneError::new("message routed to a different pane"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use seance_protocol::frame::{
+        CellAttrs, CellColor, FrameDelta, RowMeta, SelectionGranularity, VtSnapshot,
+    };
+    use seance_protocol::identity::{PaneRef, ServerSeq};
+    use seance_protocol::mux::PaneUpdate;
+
+    fn snapshot_with(cols: u16, rows: u16, cells: &[&str]) -> VtSnapshot {
+        let mut snap = VtSnapshot::empty(cols, rows);
+        snap.generation = 1;
+        for text in cells {
+            snap.push_cell(
+                text,
+                CellColor::Default,
+                CellColor::Default,
+                CellAttrs::default(),
+            );
+        }
+        snap
+    }
+
+    fn install_snapshot(snap: VtSnapshot) -> PaneView {
+        let mut view = PaneView::new(PaneRef::LOCAL);
+        view.apply_update(&PaneUpdate {
+            pane: PaneRef::LOCAL,
+            seq: ServerSeq(1),
+            image_events: Vec::new(),
+            frame: Some(FrameDelta::Full {
+                generation: snap.generation,
+                snapshot: snap,
+            }),
+        })
+        .unwrap();
+        view
+    }
+
+    #[test]
+    fn start_word_selection_resolves_word_range_from_snapshot() {
+        let snap = snapshot_with(6, 1, &["f", "o", "o", " ", "b", "r"]);
+        let mut view = install_snapshot(snap);
+        view.start_word_selection(1, 0);
+        let (s, e) = view.selection_range().unwrap();
+        assert_eq!((s.col, e.col), (0, 2));
+        assert_eq!(view.selection_text().as_deref(), Some("foo"));
+    }
+
+    #[test]
+    fn start_word_selection_on_whitespace_falls_back_to_single_cell() {
+        let snap = snapshot_with(3, 1, &["a", " ", "b"]);
+        let mut view = install_snapshot(snap);
+        view.start_word_selection(1, 0);
+        let (s, e) = view.selection_range().unwrap();
+        assert_eq!((s.col, e.col), (1, 1));
+        // Single-cell character selection of an empty cell yields no text.
+        assert_eq!(view.selection_text(), None);
+    }
+
+    #[test]
+    fn start_line_selection_spans_wrap_chain() {
+        let mut snap = snapshot_with(2, 3, &["a", "b", "c", "d", "e", "f"]);
+        snap.rows_meta[0] = RowMeta {
+            wrap: true,
+            wrap_continuation: false,
+        };
+        snap.rows_meta[1] = RowMeta {
+            wrap: false,
+            wrap_continuation: true,
+        };
+        let mut view = install_snapshot(snap);
+        view.start_line_selection(0);
+        let sel = view.interaction.selection().unwrap();
+        assert_eq!(sel.granularity(), SelectionGranularity::Line);
+        let (s, e) = sel.ordered_range();
+        assert_eq!((s.row, e.row), (0, 1));
+        assert_eq!(view.selection_text().as_deref(), Some("ab\ncd"));
+    }
+
+    #[test]
+    fn start_line_selection_without_snapshot_falls_back_to_single_row() {
+        let mut view = PaneView::new(PaneRef::LOCAL);
+        view.start_line_selection(2);
+        let sel = view.interaction.selection().unwrap();
+        assert_eq!(sel.granularity(), SelectionGranularity::Line);
     }
 }

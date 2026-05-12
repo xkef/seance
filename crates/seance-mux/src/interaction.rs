@@ -63,11 +63,18 @@ impl PaneInteractionState {
     }
 
     pub fn start_word_selection(&mut self, col: u16, row: u16) {
-        self.selection = Some(Selection::new_word(GridPos { col, row }));
+        self.selection = Some(Selection::new(GridPos { col, row }));
     }
 
     pub fn start_line_selection(&mut self, row: u16) {
         self.selection = Some(Selection::new_line(GridPos { col: 0, row }));
+    }
+
+    /// Replace the active selection with `selection`. Used when callers
+    /// (e.g. `PaneView`) have resolved a multi-cell range against the
+    /// current snapshot and want to install it directly.
+    pub fn set_selection(&mut self, selection: Selection) {
+        self.selection = Some(selection);
     }
 
     pub fn update_selection(&mut self, col: u16, row: u16) {

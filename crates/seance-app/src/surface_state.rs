@@ -6,7 +6,7 @@
 //! future mux domain (`Window -> Tab -> SplitTree`).
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bytes::{Bytes, BytesMut};
 use winit::dpi::PhysicalSize;
@@ -35,6 +35,10 @@ pub(crate) struct SurfaceState {
     pub(crate) blink_on: bool,
     pub(crate) last_blink_edge: Instant,
     pub(crate) last_vt_cursor_shape: Option<MuxCursorShape>,
+    /// When set, the active selection should be cleared once `Instant::now()`
+    /// reaches this deadline. Drives the brief "flash" overlay shown after
+    /// double/triple-click and Enter-copies operations.
+    pub(crate) selection_dismiss_at: Option<Instant>,
 }
 
 impl SurfaceState {
@@ -60,6 +64,7 @@ impl SurfaceState {
             blink_on: true,
             last_blink_edge: Instant::now(),
             last_vt_cursor_shape: None,
+            selection_dismiss_at: None,
         }
     }
 
@@ -197,6 +202,25 @@ impl SurfaceState {
         if let Ok(mut cb) = arboard::Clipboard::new() {
             let _ = cb.set_text(text);
         }
+    }
+
+    /// Copy the current selection to the clipboard and arm a deferred
+    /// dismiss `delay` from now. The selection stays painted during the
+    /// flash window so the user gets a visible confirmation that the
+    /// copy happened, then `App` clears it on the next animation tick.
+    pub(crate) fn flash_copy_selection(&mut self, delay: Duration) {
+        if !self.has_selection() {
+            return;
+        }
+        self.copy_selection_to_clipboard();
+        self.selection_dismiss_at = Some(Instant::now() + delay);
+        self.mark_dirty();
+    }
+
+    /// Clear the deferred-dismiss state without touching the selection.
+    /// Called when the user starts a new selection during the flash.
+    pub(crate) fn cancel_flash_dismiss(&mut self) {
+        self.selection_dismiss_at = None;
     }
 
     pub(crate) fn refresh_hovered_link(&mut self) {

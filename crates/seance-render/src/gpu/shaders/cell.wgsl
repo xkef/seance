@@ -22,6 +22,10 @@ struct Uniforms {
     selection_start: vec2<u32>,
     selection_end: vec2<u32>,
     selection_color: vec4<f32>,
+    // alpha == 0 means "no override"; glyphs in selection then fall
+    // back to the cell's effective bg for natural contrast against
+    // selection_color.
+    selection_fg: vec4<f32>,
     selection_active: u32,
     baseline: f32,
     hovered_link_active: u32,
@@ -194,10 +198,9 @@ fn fs_cell_bg(in: FullScreenOut) -> @location(0) vec4<f32> {
 
     if is_in_selection(col, row) {
         let sel = uniforms.selection_color;
-        color = vec4<f32>(
-            mix(color.rgb, sel.rgb, sel.a),
-            max(color.a, sel.a),
-        );
+        // Tmux-style: paint the cell bg fully opaque so glyphs sit on a
+        // solid block instead of an alpha tint.
+        color = vec4<f32>(sel.rgb, 1.0);
     }
 
     if uniforms.cursor_visible != 0u
@@ -299,7 +302,17 @@ fn vs_cell_text(
     let effective_bg = select(bg_srgb.rgb, uniforms.bg_color.rgb, bg_srgb.a < 0.01);
 
     var color = instance.color;
-    if (at_cursor || at_cursor_wide) && !is_cursor_glyph {
+    if is_in_selection(instance.grid_pos.x, instance.grid_pos.y) {
+        // Selection wins over cursor inversion. Use the explicit
+        // selection_fg if the theme provides one (alpha != 0); else
+        // fall back to the cell's effective bg for contrast against the
+        // (now opaque) selection bg.
+        if uniforms.selection_fg.a > 0.0 {
+            color = vec4<f32>(uniforms.selection_fg.rgb, color.a);
+        } else {
+            color = vec4<f32>(effective_bg, color.a);
+        }
+    } else if (at_cursor || at_cursor_wide) && !is_cursor_glyph {
         if uniforms.overlay_shape == 1u {
             // Block cursor fills the cell; invert glyph to bg for legibility.
             color = vec4<f32>(effective_bg, color.a);
