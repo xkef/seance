@@ -7,6 +7,7 @@ use libghostty_vt::style::RgbColor;
 use libghostty_vt::terminal::{Mode, ScrollViewport};
 use libghostty_vt::{RenderState, Terminal as VtTerminal, TerminalOptions};
 
+use crate::clipboard::{ClipboardRequest, parse_osc52};
 use crate::frame::{CursorInfo, CursorShape, DirtySnapshot};
 use crate::snapshot::{RowMeta, VtSnapshot};
 use crate::snapshot_extraction::{SnapshotExtraction, extract_snapshot};
@@ -14,6 +15,10 @@ use crate::terminal::install_png_decoder_for_this_thread;
 
 pub const DEFAULT_MAX_SCROLLBACK: usize = 10_000;
 pub(crate) const KITTY_IMAGE_STORAGE_LIMIT_BYTES: u64 = 320 * 1000 * 1000;
+/// Hard cap on bytes buffered while assembling a single OSC sequence. xterm
+/// and tmux flush long clipboard payloads in one go; 1 MiB covers a realistic
+/// "copy a whole file" use case while still bounding pathological inputs.
+const MAX_OSC_BUFFER: usize = 1 << 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VtCoreError {
@@ -63,6 +68,7 @@ pub(crate) struct VtCore {
     force_full_next_snapshot: bool,
     pwd: Option<String>,
     osc_state: OscState,
+    clipboard_requests: VecDeque<ClipboardRequest>,
 }
 
 impl VtCore {
@@ -109,6 +115,7 @@ impl VtCore {
             force_full_next_snapshot: false,
             pwd: None,
             osc_state: OscState::Ground,
+            clipboard_requests: VecDeque::new(),
         };
         core.seed_cursor_shape(options.initial_cursor_shape);
         Ok(core)
@@ -116,7 +123,7 @@ impl VtCore {
 
     pub(crate) fn feed(&mut self, bytes: &[u8]) {
         if !bytes.is_empty() {
-            self.track_osc7(bytes);
+            self.track_osc(bytes);
             self.vt.vt_write(bytes);
         }
     }
@@ -127,6 +134,10 @@ impl VtCore {
             out.push(bytes);
         }
         out
+    }
+
+    pub(crate) fn drain_clipboard_requests(&mut self) -> Vec<ClipboardRequest> {
+        self.clipboard_requests.drain(..).collect()
     }
 
     pub(crate) fn resize(
@@ -192,7 +203,7 @@ impl VtCore {
         self.dirty.ack_rendered(generation);
     }
 
-    fn track_osc7(&mut self, bytes: &[u8]) {
+    fn track_osc(&mut self, bytes: &[u8]) {
         for &byte in bytes {
             match (&mut self.osc_state, byte) {
                 (OscState::Ground, 0x1b) => self.osc_state = OscState::Esc,
@@ -202,7 +213,7 @@ impl VtCore {
                 (OscState::Esc, _) => self.osc_state = OscState::Ground,
                 (OscState::Osc(buf), 0x07 | 0x9c) => {
                     let content = std::mem::take(buf);
-                    self.apply_osc7(&content);
+                    self.dispatch_osc(&content);
                     self.osc_state = OscState::Ground;
                 }
                 (OscState::Osc(buf), 0x1b) => {
@@ -210,7 +221,7 @@ impl VtCore {
                     self.osc_state = OscState::OscEsc(content);
                 }
                 (OscState::Osc(buf), byte) => {
-                    if buf.len() < 4096 {
+                    if buf.len() < MAX_OSC_BUFFER {
                         buf.push(byte);
                     } else {
                         self.osc_state = OscState::Ground;
@@ -218,18 +229,18 @@ impl VtCore {
                 }
                 (OscState::OscEsc(buf), b'\\') => {
                     let content = std::mem::take(buf);
-                    self.apply_osc7(&content);
+                    self.dispatch_osc(&content);
                     self.osc_state = OscState::Ground;
                 }
                 (OscState::OscEsc(buf), 0x1b) => {
-                    if buf.len() < 4096 {
+                    if buf.len() < MAX_OSC_BUFFER {
                         buf.push(0x1b);
                     } else {
                         self.osc_state = OscState::Ground;
                     }
                 }
                 (OscState::OscEsc(buf), byte) => {
-                    if buf.len() < 4096 {
+                    if buf.len() < MAX_OSC_BUFFER {
                         buf.push(0x1b);
                         buf.push(byte);
                         self.osc_state = OscState::Osc(std::mem::take(buf));
@@ -241,10 +252,20 @@ impl VtCore {
         }
     }
 
-    fn apply_osc7(&mut self, content: &[u8]) {
-        let Some(raw) = content.strip_prefix(b"7;") else {
+    fn dispatch_osc(&mut self, content: &[u8]) {
+        // OSC 7 (current working directory) is consumed before the libghostty
+        // parser sees the sequence; OSC 52 is intercepted here so the renderer
+        // never tries to render escape bytes that should drive clipboard I/O.
+        if content.starts_with(b"7;") {
+            self.apply_osc7(&content[2..]);
             return;
-        };
+        }
+        if let Some(request) = parse_osc52(content) {
+            self.clipboard_requests.push_back(request);
+        }
+    }
+
+    fn apply_osc7(&mut self, raw: &[u8]) {
         if raw.is_empty() {
             self.pwd = None;
             return;
@@ -743,6 +764,33 @@ mod tests {
             cursor_dirty_delta(Some(prev), curr, 24),
             DirtySnapshot::Partial(vec![7]),
         );
+    }
+
+    #[test]
+    fn osc52_write_enqueued_when_fed() {
+        let mut core = core();
+        core.feed(b"\x1b]52;c;aGVsbG8=\x07");
+        let requests = core.drain_clipboard_requests();
+        assert_eq!(
+            requests,
+            vec![ClipboardRequest::Write(Bytes::from_static(b"hello"))],
+        );
+    }
+
+    #[test]
+    fn osc52_read_request_enqueued_when_fed() {
+        let mut core = core();
+        core.feed(b"\x1b]52;c;?\x1b\\");
+        let requests = core.drain_clipboard_requests();
+        assert_eq!(requests, vec![ClipboardRequest::Read]);
+    }
+
+    #[test]
+    fn osc7_still_routed_after_osc52_dispatch_rewrite() {
+        let mut core = core();
+        core.feed(b"\x1b]7;file:///tmp/work\x07");
+        let snapshot = core.snapshot().unwrap();
+        assert_eq!(snapshot.pwd.as_deref(), Some("/tmp/work"));
     }
 
     #[test]

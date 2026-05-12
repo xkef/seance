@@ -280,17 +280,27 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Mux(MuxEvent::Wake) => {
                 let _span = tracing::debug_span!("mux::refresh").entered();
                 let mut should_exit = false;
+                let read_policy = self.config.clipboard.read;
+                let write_policy = self.config.clipboard.write;
                 if let Some(surface) = self.surface_mut() {
                     match surface.refresh_updates() {
                         Ok(refresh) => {
                             let frame_dirty = refresh.frame_dirty;
                             let image_events = refresh.image_events;
                             let exited = refresh.exited;
+                            let clipboard_requests = refresh.clipboard_requests;
                             for image_event in &image_events {
                                 surface.renderer.apply_image_cache_event(image_event);
                             }
                             for err in refresh.errors {
                                 tracing::warn!("pane error: {err}");
+                            }
+                            for (_pane, request) in clipboard_requests {
+                                surface.handle_clipboard_request(
+                                    request,
+                                    read_policy,
+                                    write_policy,
+                                );
                             }
                             if frame_dirty || !image_events.is_empty() {
                                 surface.mark_dirty();

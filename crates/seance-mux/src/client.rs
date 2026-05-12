@@ -134,6 +134,9 @@ impl<D: Domain> MuxClient<D> {
                 DomainEvent::PaneExited { pane } => {
                     refresh.exited.push(pane);
                 }
+                DomainEvent::ClipboardRequest { pane, request } => {
+                    refresh.clipboard_requests.push((pane, request));
+                }
                 DomainEvent::Error { message, .. } => {
                     refresh.errors.push(message);
                 }

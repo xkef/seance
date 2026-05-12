@@ -13,7 +13,7 @@ pub mod theme;
 
 pub use diff::ConfigDiff;
 pub use schema::{
-    ClipboardConfig, Config, CursorConfig, CursorStyle, FontConfig, InputConfig,
+    ClipboardConfig, ClipboardPolicy, Config, CursorConfig, CursorStyle, FontConfig, InputConfig,
     LinkModifiersConfig, LinksConfig, MacosOptionAsAlt, MouseConfig, ScrollbackConfig,
     WindowConfig,
 };
@@ -173,10 +173,30 @@ mod tests {
     #[test]
     fn clipboard_defaults_match_spec() {
         let cfg = Config::default();
-        assert!(cfg.clipboard.read);
-        assert!(cfg.clipboard.write);
+        assert_eq!(cfg.clipboard.read, ClipboardPolicy::Ask);
+        assert_eq!(cfg.clipboard.write, ClipboardPolicy::Allow);
         assert!(cfg.clipboard.paste_protection);
         assert!(!cfg.clipboard.copy_on_select);
+    }
+
+    #[test]
+    fn clipboard_policy_parses_each_variant() {
+        for (raw, want) in [
+            ("allow", ClipboardPolicy::Allow),
+            ("ask", ClipboardPolicy::Ask),
+            ("deny", ClipboardPolicy::Deny),
+        ] {
+            let src = format!(
+                r#"
+                [clipboard]
+                read = "{raw}"
+                write = "{raw}"
+                "#,
+            );
+            let cfg: Config = toml::from_str(&src).unwrap();
+            assert_eq!(cfg.clipboard.read, want);
+            assert_eq!(cfg.clipboard.write, want);
+        }
     }
 
     #[test]

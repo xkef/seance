@@ -109,11 +109,26 @@ impl Default for CursorConfig {
     }
 }
 
+/// How OSC 52 clipboard reads/writes are authorized.
+///
+/// `Ask` is the safe default for `read`: the prompt UI lives behind the
+/// modal-overlay work tracked in epic M3, so until that ships the runtime
+/// treats `Ask` as `Deny` and logs a one-shot hint to flip the config to
+/// `allow` (or wait for the overlay).
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ClipboardPolicy {
+    Allow,
+    #[default]
+    Ask,
+    Deny,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ClipboardConfig {
-    pub read: bool,
-    pub write: bool,
+    pub read: ClipboardPolicy,
+    pub write: ClipboardPolicy,
     pub paste_protection: bool,
     pub copy_on_select: bool,
 }
@@ -121,8 +136,8 @@ pub struct ClipboardConfig {
 impl Default for ClipboardConfig {
     fn default() -> Self {
         Self {
-            read: true,
-            write: true,
+            read: ClipboardPolicy::Ask,
+            write: ClipboardPolicy::Allow,
             paste_protection: true,
             copy_on_select: false,
         }
