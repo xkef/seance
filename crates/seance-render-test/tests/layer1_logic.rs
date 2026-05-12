@@ -51,6 +51,32 @@ fn hide_cursor_sequence_toggles_visibility() {
 }
 
 #[test]
+fn cursor_invisible_in_snapshot_when_viewport_is_scrolled_into_scrollback() {
+    // 3-row viewport, feed 9 lines so 6 land in the scrollback.
+    let mut term = HeadlessTerminal::new(8, 3).expect("construct");
+    for i in 0..9u8 {
+        term.feed(format!("row{i}\r\n").as_bytes());
+    }
+    let bottom = term.snapshot().expect("snapshot at bottom");
+    assert!(bottom.cursor.visible, "cursor visible at bottom of buffer");
+
+    // Negative delta scrolls up. Three lines is enough to push the cursor
+    // (anchored to the active screen) below the viewport.
+    term.scroll_lines(-3);
+    let scrolled = term.snapshot().expect("snapshot scrolled into scrollback");
+    assert!(
+        !scrolled.cursor.visible,
+        "cursor hidden while viewport is in scrollback",
+    );
+
+    // Scrolling back down past the bottom is a no-op past the active screen,
+    // so any value ≥ the prior up-scroll returns us to the bottom.
+    term.scroll_lines(9);
+    let back = term.snapshot().expect("snapshot after returning to bottom");
+    assert!(back.cursor.visible, "cursor visible after return to bottom");
+}
+
+#[test]
 fn cursor_position_sequence_moves_cursor() {
     let mut term = HeadlessTerminal::new(80, 24).expect("construct");
     // CSI Ps;Ps H — 1-based row;col; 5;10 → (col 9, row 4).
