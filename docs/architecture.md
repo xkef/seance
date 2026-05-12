@@ -165,14 +165,14 @@ seance-render-test -> seance-vt, seance-protocol, seance-frame
 
 ### CellText instance layout (matches WGSL, 32 bytes)
 
-| Offset | Field             | Type    | Purpose                                                        |
-| ------ | ----------------- | ------- | -------------------------------------------------------------- |
-| 0      | `glyph_pos`       | `u32×2` | atlas pixel coords                                             |
-| 8      | `glyph_size`      | `u32×2` | bitmap dimensions                                              |
-| 16     | `bearings`        | `i16×2` | x/y bearing                                                    |
-| 20     | `grid_pos`        | `u16×2` | column, row                                                    |
-| 24     | `color`           | `u8×4`  | RGBA foreground (Unorm8x4)                                     |
-| 28     | `atlas_and_flags` | `u32`   | low byte: atlas (0=gray,1=color); byte 1: flags (bit 0=cursor) |
+| Offset | Field             | Type    | Purpose                                                                            |
+| ------ | ----------------- | ------- | ---------------------------------------------------------------------------------- |
+| 0      | `glyph_pos`       | `u32×2` | atlas pixel coords                                                                 |
+| 8      | `glyph_size`      | `u32×2` | bitmap dimensions                                                                  |
+| 16     | `bearings`        | `i16×2` | x/y bearing                                                                        |
+| 20     | `grid_pos`        | `u16×2` | column, row                                                                        |
+| 24     | `color`           | `u8×4`  | RGBA foreground (Unorm8x4)                                                         |
+| 28     | `atlas_and_flags` | `u32`   | low byte: atlas (0=gray,1=color); byte 1: cursor flags; byte 2 bit 0: min-contrast |
 
 ---
 
@@ -312,7 +312,7 @@ palette.
 family = "JetBrainsMono Nerd Font"
 size = 14.0
 features = ["calt"]
-min_contrast = 1.1
+min_contrast = 1.0
 adjust_cell_height = 1.20
 
 [window]

@@ -58,7 +58,7 @@ impl Default for FontConfig {
             features: vec!["calt".to_string(), "liga".to_string()],
             adjust_cell_height: None,
             adjust_cell_width: None,
-            min_contrast: 1.1,
+            min_contrast: 1.0,
             fallback: Vec::new(),
         }
     }

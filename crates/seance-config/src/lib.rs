@@ -137,7 +137,7 @@ mod tests {
         assert_eq!(cfg.theme.as_deref(), Some("Catppuccin Mocha"));
         assert_eq!(cfg.font.family, "Berkeley Mono");
         assert_eq!(cfg.font.size, 16.0);
-        assert_eq!(cfg.font.min_contrast, 1.1);
+        assert_eq!(cfg.font.min_contrast, 1.0);
         assert_eq!(
             cfg.font.features,
             vec!["calt".to_string(), "liga".to_string()]
