@@ -141,6 +141,22 @@ impl App {
         }
     }
 
+    /// Clear a flashed selection once its deadline has passed.
+    fn step_selection_flash(&mut self) {
+        let Some(surface) = self.surface.as_mut() else {
+            return;
+        };
+        if let Some(deadline) = surface.selection_dismiss_at
+            && Instant::now() >= deadline
+        {
+            surface.selection_dismiss_at = None;
+            if surface.has_selection() {
+                surface.clear_selection();
+            }
+            surface.mark_dirty();
+        }
+    }
+
     /// Earliest instant at which any animation source needs the next
     /// wake. `None` means the terminal is idle — `about_to_wait` will
     /// drop into `ControlFlow::Wait` and the OS suspends us until either
@@ -152,10 +168,15 @@ impl App {
         if surface.occluded {
             return None;
         }
-        if self.config.cursor.blink {
-            Some(surface.last_blink_edge + BLINK_HALF_PERIOD)
-        } else {
-            None
+        let blink = self
+            .config
+            .cursor
+            .blink
+            .then(|| surface.last_blink_edge + BLINK_HALF_PERIOD);
+        match (blink, surface.selection_dismiss_at) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(d), None) | (None, Some(d)) => Some(d),
+            (None, None) => None,
         }
     }
 }
@@ -340,6 +361,7 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         }
         self.step_blink();
+        self.step_selection_flash();
         if let Some(surface) = self.surface.as_ref()
             && surface.content_dirty
             && !surface.occluded

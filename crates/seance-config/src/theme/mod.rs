@@ -47,13 +47,24 @@ impl Theme {
     /// fails. Not exposed via `Default` because production code should
     /// always route through [`load`].
     pub fn blank() -> Self {
+        // tmux-style inverse: opaque selection bg painted with the
+        // theme's foreground, and glyphs drawn with the theme bg. The
+        // alpha-1.0 here is authoritative — the renderer paints the
+        // selection bg as a straight replace, not an alpha blend.
+        let bg = [0u8, 0, 0];
+        let fg = [200u8, 200, 200];
         Self {
-            bg: [0, 0, 0, 255],
-            fg: [200, 200, 200],
+            bg: [bg[0], bg[1], bg[2], 255],
+            fg,
             cursor: [200, 200, 200, 255],
             cursor_text: None,
-            selection_bg: [0.3, 0.5, 0.8, 0.4],
-            selection_fg: None,
+            selection_bg: [
+                f32::from(fg[0]) / 255.0,
+                f32::from(fg[1]) / 255.0,
+                f32::from(fg[2]) / 255.0,
+                1.0,
+            ],
+            selection_fg: Some(bg),
             palette: default_xterm_palette(),
         }
     }

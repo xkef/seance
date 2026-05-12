@@ -41,12 +41,29 @@ impl Selection {
         Self::at(pos, SelectionGranularity::Character)
     }
 
-    pub fn new_word(pos: GridPos) -> Self {
-        Self::at(pos, SelectionGranularity::Word)
-    }
-
     pub fn new_line(pos: GridPos) -> Self {
         Self::at(pos, SelectionGranularity::Line)
+    }
+
+    /// Word selection spanning a precomputed `(start, end)` pair. Both
+    /// endpoints must already point at the inclusive boundaries of the
+    /// word; rendering uses them verbatim.
+    pub fn word_range(start: GridPos, end: GridPos) -> Self {
+        Self {
+            anchor: start,
+            head: end,
+            granularity: SelectionGranularity::Word,
+        }
+    }
+
+    /// Line selection spanning a precomputed `(start, end)` pair, used
+    /// for wrap-aware logical lines.
+    pub fn line_range(start: GridPos, end: GridPos) -> Self {
+        Self {
+            anchor: start,
+            head: end,
+            granularity: SelectionGranularity::Line,
+        }
     }
 
     fn at(pos: GridPos, granularity: SelectionGranularity) -> Self {
@@ -222,6 +239,61 @@ impl VtSnapshot {
             images: Vec::new(),
             hyperlinks: Vec::new(),
         }
+    }
+
+    /// Inclusive `(start, end)` range of the word containing `(row, col)`.
+    /// Returns `None` if the cell is empty/whitespace, or out of bounds.
+    /// A "word" extends across consecutive cells whose text contains at
+    /// least one [`is_word_char`] character — covers identifiers, paths,
+    /// and URLs while breaking on whitespace and most punctuation.
+    pub fn word_range_at(&self, row: u16, col: u16) -> Option<(GridPos, GridPos)> {
+        if row >= self.rows || col >= self.cols {
+            return None;
+        }
+        if !self.cell_is_word(row, col) {
+            return None;
+        }
+        let mut start = col;
+        while start > 0 && self.cell_is_word(row, start - 1) {
+            start -= 1;
+        }
+        let mut end = col;
+        while end + 1 < self.cols && self.cell_is_word(row, end + 1) {
+            end += 1;
+        }
+        Some((GridPos { col: start, row }, GridPos { col: end, row }))
+    }
+
+    fn cell_is_word(&self, row: u16, col: u16) -> bool {
+        let Some(cell) = self.cell_at(row, col) else {
+            return false;
+        };
+        let text = self.cell_text(cell);
+        text.chars().any(is_word_char)
+    }
+
+    /// Inclusive row range of the wrap chain containing `row` — i.e. the
+    /// rows that together form one logical (possibly soft-wrapped) line.
+    /// Walks up while the previous row is a wrap continuation, then down
+    /// while the current row's `wrap` flag is set.
+    pub fn wrap_chain(&self, row: u16) -> (u16, u16) {
+        if row >= self.rows || self.rows == 0 {
+            return (row, row);
+        }
+        let mut start = row;
+        while start > 0
+            && self
+                .rows_meta
+                .get(usize::from(start))
+                .is_some_and(|m| m.wrap_continuation)
+        {
+            start -= 1;
+        }
+        let mut end = row;
+        while end + 1 < self.rows && self.rows_meta.get(usize::from(end)).is_some_and(|m| m.wrap) {
+            end += 1;
+        }
+        (start, end)
     }
 
     pub fn cell_text(&self, cell: &SnapshotCell) -> &str {
@@ -819,6 +891,21 @@ pub fn apply_frame_delta(
     }
 }
 
+/// Returns true for characters that should be treated as part of a
+/// "word" by double-click selection. Includes Unicode alphanumerics
+/// plus a small set of identifier/path/URL punctuation. Approximates
+/// tmux's default word-separators behaviour while staying useful for
+/// paths and URLs. A future PR may expose this via config.
+fn is_word_char(c: char) -> bool {
+    if c.is_alphanumeric() {
+        return true;
+    }
+    matches!(
+        c,
+        '-' | '_' | '.' | '/' | '~' | '+' | '@' | ':' | '?' | '#' | '%' | '&' | '='
+    )
+}
+
 fn column_range(
     granularity: SelectionGranularity,
     row_idx: u16,
@@ -1267,6 +1354,79 @@ mod tests {
         assert_eq!(applied.cell_hyperlink(cell), Some("https://example.com/x"));
         let other = applied.cell_at(0, 1).unwrap();
         assert_eq!(applied.cell_hyperlink(other), None);
+    }
+
+    #[test]
+    fn word_range_at_expands_across_word_chars_only() {
+        // "hello world/path one"
+        let snap = snapshot(
+            20,
+            1,
+            1,
+            &[
+                "h", "e", "l", "l", "o", " ", "w", "o", "r", "l", "d", "/", "p", "a", "t", "h",
+                " ", "o", "n", "e",
+            ],
+        );
+        // Click inside "hello".
+        let (s, e) = snap.word_range_at(0, 2).unwrap();
+        assert_eq!((s.col, e.col), (0, 4));
+        // Click on the trailing 'o' of hello.
+        let (s, e) = snap.word_range_at(0, 4).unwrap();
+        assert_eq!((s.col, e.col), (0, 4));
+        // Click on space → None.
+        assert!(snap.word_range_at(0, 5).is_none());
+        // Click inside "world/path" — the slash is part of the word class.
+        let (s, e) = snap.word_range_at(0, 9).unwrap();
+        assert_eq!((s.col, e.col), (6, 15));
+        // Click on the slash itself — still part of the word.
+        let (s, e) = snap.word_range_at(0, 11).unwrap();
+        assert_eq!((s.col, e.col), (6, 15));
+        // Last word reaches the row's end.
+        let (s, e) = snap.word_range_at(0, 18).unwrap();
+        assert_eq!((s.col, e.col), (17, 19));
+        // Out-of-bounds row → None.
+        assert!(snap.word_range_at(5, 0).is_none());
+    }
+
+    #[test]
+    fn wrap_chain_walks_continuation_metadata_in_both_directions() {
+        let mut snap = snapshot(1, 4, 1, &["a", "b", "c", "d"]);
+        // Rows 0–2 form one logical line; row 3 is its own line.
+        snap.rows_meta[0] = RowMeta {
+            wrap: true,
+            wrap_continuation: false,
+        };
+        snap.rows_meta[1] = RowMeta {
+            wrap: true,
+            wrap_continuation: true,
+        };
+        snap.rows_meta[2] = RowMeta {
+            wrap: false,
+            wrap_continuation: true,
+        };
+        snap.rows_meta[3] = RowMeta::default();
+
+        assert_eq!(snap.wrap_chain(0), (0, 2));
+        assert_eq!(snap.wrap_chain(1), (0, 2));
+        assert_eq!(snap.wrap_chain(2), (0, 2));
+        assert_eq!(snap.wrap_chain(3), (3, 3));
+    }
+
+    #[test]
+    fn line_range_selection_spans_wrap_chain() {
+        let mut snap = snapshot(2, 3, 1, &["a", "b", "c", "d", "e", "f"]);
+        snap.rows_meta[0] = RowMeta {
+            wrap: true,
+            wrap_continuation: false,
+        };
+        snap.rows_meta[1] = RowMeta {
+            wrap: false,
+            wrap_continuation: true,
+        };
+        snap.rows_meta[2] = RowMeta::default();
+        let sel = Selection::line_range(GridPos { col: 0, row: 0 }, GridPos { col: 1, row: 1 });
+        assert_eq!(snap.selection_text(&sel).as_deref(), Some("ab\ncd"));
     }
 
     #[test]
