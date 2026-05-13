@@ -9,6 +9,7 @@ use seance_protocol::identity::{PaneRef, ServerSeq};
 use seance_protocol::mux::PaneUpdate;
 
 use crate::PaneError;
+use crate::interaction::{HoverInput, PaneInteractionState};
 use crate::links::{DetectedLink, LinkDetector, LinkModifiers};
 
 pub type PaneFrame<'a> = SnapshotFrameSource<'a>;
@@ -16,7 +17,7 @@ pub type PaneFrame<'a> = SnapshotFrameSource<'a>;
 pub struct PaneView {
     pane: PaneRef,
     latest_snapshot: Option<Arc<VtSnapshot>>,
-    selection: Option<Selection>,
+    interaction: PaneInteractionState,
     last_applied_seq: Option<ServerSeq>,
 }
 
@@ -25,7 +26,7 @@ impl PaneView {
         Self {
             pane,
             latest_snapshot: None,
-            selection: None,
+            interaction: PaneInteractionState::new(),
             last_applied_seq: None,
         }
     }
@@ -87,47 +88,77 @@ impl PaneView {
             .and_then(|snapshot| snapshot.pwd.as_deref())
     }
 
+    pub fn hover_input(&self) -> Option<HoverInput> {
+        self.interaction.hover_input()
+    }
+
+    pub fn set_hover_input(&mut self, pos: GridPos, modifiers: LinkModifiers) -> bool {
+        self.interaction.set_hover_input(pos, modifiers)
+    }
+
+    pub fn clear_hover_input(&mut self) -> bool {
+        self.interaction.clear_hover_input()
+    }
+
     pub fn has_selection(&self) -> bool {
-        self.selection.is_some()
+        self.interaction.has_selection()
     }
 
     pub fn clear_selection(&mut self) {
-        self.selection = None;
+        self.interaction.clear_selection();
     }
 
     pub fn selection_range(&self) -> Option<(GridPos, GridPos)> {
-        self.selection.as_ref().map(Selection::ordered_range)
+        self.interaction.selection_range()
     }
 
     pub fn start_selection(&mut self, col: u16, row: u16) {
-        self.selection = Some(Selection::new(GridPos { col, row }));
+        self.interaction.start_selection(col, row);
     }
 
     pub fn start_word_selection(&mut self, col: u16, row: u16) {
-        self.selection = Some(Selection::new_word(GridPos { col, row }));
-    }
-
-    pub fn start_line_selection(&mut self, row: u16) {
-        self.selection = Some(Selection::new_line(GridPos { col: 0, row }));
-    }
-
-    pub fn update_selection(&mut self, col: u16, row: u16) {
-        if let Some(selection) = &mut self.selection {
-            selection.update(GridPos { col, row });
+        // Resolve the word range against the latest snapshot. If the
+        // snapshot is missing or the click landed on whitespace, fall
+        // back to a single-cell character selection so the click never
+        // disappears silently.
+        let resolved = self
+            .latest_snapshot
+            .as_ref()
+            .and_then(|snap| snap.word_range_at(row, col));
+        if let Some((start, end)) = resolved {
+            self.interaction
+                .set_selection(Selection::word_range(start, end));
+        } else {
+            self.interaction.start_selection(col, row);
         }
     }
 
+    pub fn start_line_selection(&mut self, row: u16) {
+        if let Some(snap) = self.latest_snapshot.as_ref() {
+            let (first, last) = snap.wrap_chain(row);
+            let last_col = snap.cols.saturating_sub(1);
+            self.interaction.set_selection(Selection::line_range(
+                GridPos { col: 0, row: first },
+                GridPos {
+                    col: last_col,
+                    row: last,
+                },
+            ));
+        } else {
+            self.interaction.start_line_selection(row);
+        }
+    }
+
+    pub fn update_selection(&mut self, col: u16, row: u16) {
+        self.interaction.update_selection(col, row);
+    }
+
     pub fn select_all(&mut self, cols: u16, rows: u16) {
-        let mut selection = Selection::new_line(GridPos { col: 0, row: 0 });
-        selection.update(GridPos {
-            col: cols.saturating_sub(1),
-            row: rows.saturating_sub(1),
-        });
-        self.selection = Some(selection);
+        self.interaction.select_all(cols, rows);
     }
 
     pub fn selection_text(&self) -> Option<String> {
-        let selection = self.selection.as_ref()?;
+        let selection = self.interaction.selection()?;
         let snapshot = self.latest_snapshot.as_ref()?;
         snapshot.selection_text(selection)
     }
@@ -136,6 +167,11 @@ impl PaneView {
         self.latest_snapshot
             .as_ref()
             .and_then(|snapshot| snapshot.osc8_run_at(col, row))
+    }
+
+    pub fn hovered_link(&self, detector: &LinkDetector) -> Option<DetectedLink> {
+        let input = self.hover_input()?;
+        self.link_at(input.cell, detector, input.modifiers)
     }
 
     pub fn link_at(
@@ -155,5 +191,93 @@ impl PaneView {
         } else {
             Err(PaneError::new("message routed to a different pane"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use seance_protocol::frame::{
+        CellAttrs, CellColor, FrameDelta, RowMeta, SelectionGranularity, VtSnapshot,
+    };
+    use seance_protocol::identity::{PaneRef, ServerSeq};
+    use seance_protocol::mux::PaneUpdate;
+
+    fn snapshot_with(cols: u16, rows: u16, cells: &[&str]) -> VtSnapshot {
+        let mut snap = VtSnapshot::empty(cols, rows);
+        snap.generation = 1;
+        for text in cells {
+            snap.push_cell(
+                text,
+                CellColor::Default,
+                CellColor::Default,
+                CellAttrs::default(),
+            );
+        }
+        snap
+    }
+
+    fn install_snapshot(snap: VtSnapshot) -> PaneView {
+        let mut view = PaneView::new(PaneRef::LOCAL);
+        view.apply_update(&PaneUpdate {
+            pane: PaneRef::LOCAL,
+            seq: ServerSeq(1),
+            image_events: Vec::new(),
+            frame: Some(FrameDelta::Full {
+                generation: snap.generation,
+                snapshot: snap,
+            }),
+        })
+        .unwrap();
+        view
+    }
+
+    #[test]
+    fn start_word_selection_resolves_word_range_from_snapshot() {
+        let snap = snapshot_with(6, 1, &["f", "o", "o", " ", "b", "r"]);
+        let mut view = install_snapshot(snap);
+        view.start_word_selection(1, 0);
+        let (s, e) = view.selection_range().unwrap();
+        assert_eq!((s.col, e.col), (0, 2));
+        assert_eq!(view.selection_text().as_deref(), Some("foo"));
+    }
+
+    #[test]
+    fn start_word_selection_on_whitespace_falls_back_to_single_cell() {
+        let snap = snapshot_with(3, 1, &["a", " ", "b"]);
+        let mut view = install_snapshot(snap);
+        view.start_word_selection(1, 0);
+        let (s, e) = view.selection_range().unwrap();
+        assert_eq!((s.col, e.col), (1, 1));
+        // Single-cell character selection of an empty cell yields no text.
+        assert_eq!(view.selection_text(), None);
+    }
+
+    #[test]
+    fn start_line_selection_spans_wrap_chain() {
+        let mut snap = snapshot_with(2, 3, &["a", "b", "c", "d", "e", "f"]);
+        snap.rows_meta[0] = RowMeta {
+            wrap: true,
+            wrap_continuation: false,
+        };
+        snap.rows_meta[1] = RowMeta {
+            wrap: false,
+            wrap_continuation: true,
+        };
+        let mut view = install_snapshot(snap);
+        view.start_line_selection(0);
+        let sel = view.interaction.selection().unwrap();
+        assert_eq!(sel.granularity(), SelectionGranularity::Line);
+        let (s, e) = sel.ordered_range();
+        assert_eq!((s.row, e.row), (0, 1));
+        assert_eq!(view.selection_text().as_deref(), Some("ab\ncd"));
+    }
+
+    #[test]
+    fn start_line_selection_without_snapshot_falls_back_to_single_row() {
+        let mut view = PaneView::new(PaneRef::LOCAL);
+        view.start_line_selection(2);
+        let sel = view.interaction.selection().unwrap();
+        assert_eq!(sel.granularity(), SelectionGranularity::Line);
     }
 }

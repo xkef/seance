@@ -246,7 +246,7 @@ fn parse_metric_modifier(value: Option<&str>) -> Option<MetricModifier> {
 
     if let Some(percent) = input.strip_suffix('%') {
         let Ok(percent) = percent.parse::<f32>() else {
-            log::warn!("invalid adjust_cell_* value: {input}");
+            tracing::warn!("invalid adjust_cell_* value: {input}");
             return None;
         };
         return Some(MetricModifier::Percent((1.0 + percent / 100.0).max(0.0)));
@@ -255,7 +255,7 @@ fn parse_metric_modifier(value: Option<&str>) -> Option<MetricModifier> {
     match input.parse::<i32>() {
         Ok(value) => Some(MetricModifier::Absolute(value)),
         Err(_) => {
-            log::warn!("invalid adjust_cell_* value: {input}");
+            tracing::warn!("invalid adjust_cell_* value: {input}");
             None
         }
     }
@@ -402,7 +402,7 @@ fn build_font_features(features: &[String]) -> FontFeatures {
     for tag in features {
         let bytes = tag.as_bytes();
         if bytes.len() != 4 {
-            log::warn!("font.feature {tag:?} ignored: OpenType tags must be 4 bytes");
+            tracing::warn!("font.feature {tag:?} ignored: OpenType tags must be 4 bytes");
             continue;
         }
         let mut buf = [0u8; 4];

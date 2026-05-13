@@ -87,19 +87,19 @@ pub fn parse_source(text: &str) -> Result<Theme, ParseError> {
             "cursor-color" => theme.cursor = rgba(parse_color(value, line_no)?),
             "cursor-text" => theme.cursor_text = Some(parse_color(value, line_no)?),
             "selection-background" => {
-                theme.selection_bg = rgba_f32(parse_color(value, line_no)?, 0.4);
+                theme.selection_bg = rgba_f32(parse_color(value, line_no)?, 1.0);
             }
             "selection-foreground" => theme.selection_fg = Some(parse_color(value, line_no)?),
             // Ghostty accepts these but they never appear in bundled files
             // and we have no implementation yet. Log and skip.
             "palette-generate" | "palette-harmonious" => {
-                log::debug!("theme: ignoring `{key} = {value}` (not implemented)");
+                tracing::debug!("theme: ignoring `{key} = {value}` (not implemented)");
             }
             // Silently ignored per Ghostty parity: theme files cannot set
             // the active theme or pull in more config files.
             "theme" | "config-file" => {}
             _ => {
-                log::warn!("theme: unknown key `{key}` on line {line_no}, skipping");
+                tracing::warn!("theme: unknown key `{key}` on line {line_no}, skipping");
             }
         }
     }
@@ -214,8 +214,8 @@ mod tests {
         assert!(t.selection_fg.is_some());
         assert_eq!(t.selection_fg.unwrap(), [0xff, 0xee, 0xdd]);
         assert_eq!(t.cursor_text, Some([0x01, 0x02, 0x03]));
-        // alpha on selection stays at the hardcoded 0.4 blend default.
-        assert!((t.selection_bg[3] - 0.4).abs() < 1e-6);
+        // Selection bg is painted opaque (tmux-style inverse), not alpha-blended.
+        assert!((t.selection_bg[3] - 1.0).abs() < 1e-6);
     }
 
     #[test]

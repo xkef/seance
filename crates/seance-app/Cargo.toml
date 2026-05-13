@@ -20,8 +20,9 @@ seance-render.workspace = true
 # external
 arboard.workspace = true
 bytes.workspace = true
-env_logger.workspace = true
-log.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
 notify.workspace = true
 notify-debouncer-full.workspace = true
 pollster.workspace = true

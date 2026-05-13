@@ -9,8 +9,8 @@ description = "Configuration and theme loading for seance (TOML config, Ghostty-
 [dependencies]
 # external
 include_dir.workspace = true
-log.workspace = true
 serde.workspace = true
+tracing.workspace = true
 toml.workspace = true
 
 [lints]

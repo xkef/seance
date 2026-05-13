@@ -36,6 +36,7 @@ pub struct VtSessionOptions {
     pub pixel_width: u16,
     pub pixel_height: u16,
     pub initial_cursor_shape: CursorShape,
+    pub max_scrollback: usize,
 }
 
 impl Default for VtSessionOptions {
@@ -46,6 +47,7 @@ impl Default for VtSessionOptions {
             pixel_width: 800,
             pixel_height: 384,
             initial_cursor_shape: CursorShape::Block,
+            max_scrollback: crate::core::DEFAULT_MAX_SCROLLBACK,
         }
     }
 }
@@ -478,7 +480,7 @@ mod unix_actor {
     use polling::{Event, Events, Poller};
     use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
-    use crate::core::{DEFAULT_MAX_SCROLLBACK, VtCore, VtCoreOptions};
+    use crate::core::{VtCore, VtCoreOptions};
 
     pub(super) fn spawn_vt_session_unix<F>(
         options: VtSessionOptions,
@@ -677,7 +679,7 @@ mod unix_actor {
                 rows: options.rows,
                 pixel_width: options.pixel_width,
                 pixel_height: options.pixel_height,
-                max_scrollback: DEFAULT_MAX_SCROLLBACK,
+                max_scrollback: options.max_scrollback,
                 initial_cursor_shape: options.initial_cursor_shape,
             })
             .map_err(SpawnError::VtCore)?;
@@ -710,6 +712,7 @@ mod unix_actor {
         fn run(&mut self) {
             let mut events = Events::new();
             loop {
+                let _span = tracing::trace_span!("vt::tick").entered();
                 if self.drain_and_apply_commands() {
                     break;
                 }
@@ -723,7 +726,7 @@ mod unix_actor {
                 }
 
                 if let Err(err) = self.reregister() {
-                    log::warn!("VT actor failed to register PTY interest: {err}");
+                    tracing::warn!("VT actor failed to register PTY interest: {err}");
                     self.notifier.exited();
                     break;
                 }
@@ -733,7 +736,7 @@ mod unix_actor {
                 match self.poller.wait(&mut events, timeout) {
                     Ok(_) => {}
                     Err(err) => {
-                        log::warn!("VT actor poll failed: {err}");
+                        tracing::warn!("VT actor poll failed: {err}");
                         self.notifier.exited();
                         break;
                     }
@@ -762,7 +765,7 @@ mod unix_actor {
                             break;
                         }
                         Err(err) => {
-                            log::warn!("VT actor PTY read failed: {err}");
+                            tracing::warn!("VT actor PTY read failed: {err}");
                             self.notifier.exited();
                             break;
                         }
@@ -782,6 +785,7 @@ mod unix_actor {
                 }
             }
 
+            tracing::info!("vt actor exiting");
             if let Some(fd) = self.fd {
                 let _ = self.poller.delete(unsafe { BorrowedFd::borrow_raw(fd) });
             }
@@ -842,7 +846,7 @@ mod unix_actor {
                 resize.pixel_width,
                 resize.pixel_height,
             ) {
-                log::warn!("VT actor failed to resize VT core: {err}");
+                tracing::warn!("VT actor failed to resize VT core: {err}");
             }
             self.pty.resize(PtySize {
                 rows: resize.rows,
@@ -857,6 +861,7 @@ mod unix_actor {
         }
 
         fn read_pty_batch(&mut self) -> io::Result<ReadOutcome> {
+            let _span = tracing::trace_span!("vt::read_pty").entered();
             let mut total = 0usize;
             let mut changed = false;
             let mut buf = [0u8; READ_CHUNK];
@@ -1050,6 +1055,7 @@ mod unix_actor {
                     pixel_width: 80,
                     pixel_height: 30,
                     initial_cursor_shape: CursorShape::Block,
+                    ..VtSessionOptions::default()
                 },
                 ScriptedPtyAdapter::new(reads),
                 rx,
@@ -1414,6 +1420,7 @@ mod tests {
                 pixel_width: 80,
                 pixel_height: 40,
                 initial_cursor_shape: CursorShape::Block,
+                ..VtSessionOptions::default()
             },
             move |event| sink_events.lock().unwrap().push(event),
         )

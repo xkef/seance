@@ -1,10 +1,14 @@
 //! Winit event handlers that live on `App`. Split out from `app.rs` to keep
 //! the main file focused on lifecycle and frame loop.
 
+use std::time::Duration;
+
 use bytes::Bytes;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton};
 use winit::event_loop::ActiveEventLoop;
+use winit::keyboard::{Key, NamedKey};
+use winit::window::Fullscreen;
 
 use seance_input::{MouseAction, MouseEventInput, VtInput};
 
@@ -15,6 +19,10 @@ use crate::surface_state::SurfaceState;
 
 const FONT_SIZE_MIN: f32 = 6.0;
 const FONT_SIZE_MAX: f32 = 72.0;
+
+/// Duration of the post-copy flash overlay. Long enough to register
+/// visually as a confirmation, short enough to feel instantaneous.
+const SELECTION_FLASH: Duration = Duration::from_millis(150);
 
 impl App {
     pub(crate) fn on_keyboard_input(
@@ -43,6 +51,19 @@ impl App {
                 surface.mark_dirty();
             }
             self.execute_app_command(event_loop, cmd);
+            return;
+        }
+
+        // Bare Enter on an active local selection: copy + flash + dismiss
+        // instead of forwarding to the PTY. Modified Enter (Ctrl/Shift/etc.)
+        // still forwards normally so existing shortcuts keep working.
+        if event.state == ElementState::Pressed
+            && matches!(event.logical_key, Key::Named(NamedKey::Enter))
+            && modifiers.state().is_empty()
+            && let Some(surface) = self.surface_mut()
+            && surface.has_selection()
+        {
+            surface.flash_copy_selection(SELECTION_FLASH);
             return;
         }
 
@@ -87,7 +108,6 @@ impl App {
             AppCommand::SelectAll => {
                 if let Some(surface) = self.surface_mut() {
                     surface.select_all();
-                    surface.sync_selection_to_overlay();
                     surface.mark_dirty();
                 }
             }
@@ -99,6 +119,16 @@ impl App {
             AppCommand::FontSizeReset => {
                 self.font_size = self.config.font.size;
                 self.apply_font_size();
+            }
+            AppCommand::ToggleFullscreen => {
+                if let Some(surface) = self.surface_mut() {
+                    let next = surface
+                        .window
+                        .fullscreen()
+                        .is_none()
+                        .then_some(Fullscreen::Borderless(None));
+                    surface.window.set_fullscreen(next);
+                }
             }
         }
     }
@@ -157,7 +187,6 @@ impl App {
         let (col, row) = surface.renderer.pixel_to_grid(position.x, position.y);
         if surface.mouse.is_down {
             surface.update_selection(col, row);
-            surface.sync_selection_to_overlay();
             surface.mark_dirty();
         }
         surface.refresh_hovered_link();
@@ -233,12 +262,24 @@ fn handle_mouse_press(surface: &mut SurfaceState) {
         .pixel_to_grid(surface.mouse.cursor_pos.x, surface.mouse.cursor_pos.y);
     let clicks = surface.mouse.register_click(col, row);
     match clicks {
-        1 => surface.start_selection(col, row),
-        2 => surface.start_word_selection(col, row),
-        3 => surface.start_line_selection(row),
+        1 => {
+            // A new single click invalidates any pending flash dismissal
+            // — the user is starting a fresh selection gesture.
+            surface.cancel_flash_dismiss();
+            surface.start_selection(col, row);
+            surface.mouse.is_down = true;
+        }
+        2 => {
+            surface.start_word_selection(col, row);
+            // Don't enter drag mode: a follow-up motion shouldn't extend
+            // the flashed word selection.
+            surface.flash_copy_selection(SELECTION_FLASH);
+        }
+        3 => {
+            surface.start_line_selection(row);
+            surface.flash_copy_selection(SELECTION_FLASH);
+        }
         _ => {}
     }
-    surface.sync_selection_to_overlay();
-    surface.mouse.is_down = true;
     surface.mark_dirty();
 }

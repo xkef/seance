@@ -22,6 +22,10 @@ struct Uniforms {
     selection_start: vec2<u32>,
     selection_end: vec2<u32>,
     selection_color: vec4<f32>,
+    // alpha == 0 means "no override"; glyphs in selection then fall
+    // back to the cell's effective bg for natural contrast against
+    // selection_color.
+    selection_fg: vec4<f32>,
     selection_active: u32,
     baseline: f32,
     hovered_link_active: u32,
@@ -32,6 +36,10 @@ struct Uniforms {
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+const ATLAS_MASK: u32 = 0xFFu;
+const CURSOR_GLYPH_FLAGS_MASK: u32 = 0xFF00u;
+const MIN_CONTRAST_FLAG: u32 = 0x10000u;
 
 // ================================================================
 // Min-contrast (WCAG relative luminance in linearized sRGB)
@@ -190,10 +198,9 @@ fn fs_cell_bg(in: FullScreenOut) -> @location(0) vec4<f32> {
 
     if is_in_selection(col, row) {
         let sel = uniforms.selection_color;
-        color = vec4<f32>(
-            mix(color.rgb, sel.rgb, sel.a),
-            max(color.a, sel.a),
-        );
+        // Tmux-style: paint the cell bg fully opaque so glyphs sit on a
+        // solid block instead of an alpha tint.
+        color = vec4<f32>(sel.rgb, 1.0);
     }
 
     if uniforms.cursor_visible != 0u
@@ -257,6 +264,7 @@ struct CellTextOut {
     @location(1) @interpolate(flat) color: vec4<f32>,
     @location(2) @interpolate(flat) atlas: u32,
     @location(3) @interpolate(flat) bg_color: vec3<f32>,
+    @location(4) @interpolate(flat) min_contrast: u32,
 }
 
 @group(2) @binding(0) var atlas_grayscale: texture_2d<f32>;
@@ -280,7 +288,7 @@ fn vs_cell_text(
 
     let world_pos = cell_pos + size * corner + offset + uniforms.grid_padding.xy;
 
-    let is_cursor_glyph = (instance.atlas_and_flags & 0xFF00u) != 0u;
+    let is_cursor_glyph = (instance.atlas_and_flags & CURSOR_GLYPH_FLAGS_MASK) != 0u;
     let at_cursor = uniforms.cursor_visible != 0u
                  && instance.grid_pos.x == uniforms.cursor_pos.x
                  && instance.grid_pos.y == uniforms.cursor_pos.y;
@@ -294,7 +302,17 @@ fn vs_cell_text(
     let effective_bg = select(bg_srgb.rgb, uniforms.bg_color.rgb, bg_srgb.a < 0.01);
 
     var color = instance.color;
-    if (at_cursor || at_cursor_wide) && !is_cursor_glyph {
+    if is_in_selection(instance.grid_pos.x, instance.grid_pos.y) {
+        // Selection wins over cursor inversion. Use the explicit
+        // selection_fg if the theme provides one (alpha != 0); else
+        // fall back to the cell's effective bg for contrast against the
+        // (now opaque) selection bg.
+        if uniforms.selection_fg.a > 0.0 {
+            color = vec4<f32>(uniforms.selection_fg.rgb, color.a);
+        } else {
+            color = vec4<f32>(effective_bg, color.a);
+        }
+    } else if (at_cursor || at_cursor_wide) && !is_cursor_glyph {
         if uniforms.overlay_shape == 1u {
             // Block cursor fills the cell; invert glyph to bg for legibility.
             color = vec4<f32>(effective_bg, color.a);
@@ -308,8 +326,9 @@ fn vs_cell_text(
     out.tex_coord = vec2<f32>(f32(instance.glyph_pos.x), f32(instance.glyph_pos.y))
                   + vec2<f32>(f32(instance.glyph_size.x), f32(instance.glyph_size.y)) * corner;
     out.color = color;
-    out.atlas = instance.atlas_and_flags & 0xFFu;
+    out.atlas = instance.atlas_and_flags & ATLAS_MASK;
     out.bg_color = effective_bg;
+    out.min_contrast = instance.atlas_and_flags & MIN_CONTRAST_FLAG;
 
     return out;
 }
@@ -321,7 +340,10 @@ fn fs_cell_text(in: CellTextOut) -> @location(0) vec4<f32> {
         let uv = in.tex_coord / gs_size;
         let a = textureSample(atlas_grayscale, atlas_sampler, uv).r;
 
-        let fg = apply_min_contrast(in.color.rgb, in.bg_color, uniforms.min_contrast);
+        var fg = in.color.rgb;
+        if in.min_contrast != 0u {
+            fg = apply_min_contrast(fg, in.bg_color, uniforms.min_contrast);
+        }
 
         let alpha = a * in.color.a;
         return vec4<f32>(fg * alpha, alpha);

@@ -165,14 +165,14 @@ seance-render-test -> seance-vt, seance-protocol, seance-frame
 
 ### CellText instance layout (matches WGSL, 32 bytes)
 
-| Offset | Field             | Type    | Purpose                                                        |
-| ------ | ----------------- | ------- | -------------------------------------------------------------- |
-| 0      | `glyph_pos`       | `u32×2` | atlas pixel coords                                             |
-| 8      | `glyph_size`      | `u32×2` | bitmap dimensions                                              |
-| 16     | `bearings`        | `i16×2` | x/y bearing                                                    |
-| 20     | `grid_pos`        | `u16×2` | column, row                                                    |
-| 24     | `color`           | `u8×4`  | RGBA foreground (Unorm8x4)                                     |
-| 28     | `atlas_and_flags` | `u32`   | low byte: atlas (0=gray,1=color); byte 1: flags (bit 0=cursor) |
+| Offset | Field             | Type    | Purpose                                                                            |
+| ------ | ----------------- | ------- | ---------------------------------------------------------------------------------- |
+| 0      | `glyph_pos`       | `u32×2` | atlas pixel coords                                                                 |
+| 8      | `glyph_size`      | `u32×2` | bitmap dimensions                                                                  |
+| 16     | `bearings`        | `i16×2` | x/y bearing                                                                        |
+| 20     | `grid_pos`        | `u16×2` | column, row                                                                        |
+| 24     | `color`           | `u8×4`  | RGBA foreground (Unorm8x4)                                                         |
+| 28     | `atlas_and_flags` | `u32`   | low byte: atlas (0=gray,1=color); byte 1: cursor flags; byte 2 bit 0: min-contrast |
 
 ---
 
@@ -312,7 +312,7 @@ palette.
 family = "JetBrainsMono Nerd Font"
 size = 14.0
 features = ["calt"]
-min_contrast = 1.1
+min_contrast = 1.0
 adjust_cell_height = 1.20
 
 [window]
@@ -386,21 +386,21 @@ caches; keybind → rebuild action table).
 
 ## Appendix — component choices
 
-| Problem                   | Component                                | Why                                                                                                                                         |
-| ------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| GPU API                   | `wgpu`                                   | One abstraction for Metal/Vulkan/DX12/GL4/WebGPU. Dual-source blending (for LCD subpixel AA) gated behind `Features::DUAL_SOURCE_BLENDING`. |
-| Window + input            | `winit`                                  | Only serious cross-platform option.                                                                                                         |
-| VT state machine          | `libghostty-vt` via FFI                  | Battle-tested, handles DEC 2026, mouse, Kitty keyboard, iTerm OSC, selection. Don't reinvent.                                               |
-| PTY                       | `portable-pty`                           | Cross-plat, correct ConPTY on Windows.                                                                                                      |
-| Font discovery            | `fontdb` (via cosmic-text)               | fontconfig / CoreText / DirectWrite backed.                                                                                                 |
-| Shaping                   | `cosmic-text` (rustybuzz + unicode-bidi) | BiDi, graphemes, per-font features.                                                                                                         |
-| Rasterization             | `swash` (via `SwashCache`)               | COLR v0/v1, SVG, CBDT.                                                                                                                      |
-| Atlas packing             | `etagere`                                | Shelf-bin with deallocation (alacritty's row-packer cannot evict).                                                                          |
-| Procedural glyphs         | `tiny-skia`                              | Software vector rasterizer for box-drawing / Powerline sprites [PLANNED: [M3][m3]].                                                         |
-| Layout (modals/box model) | `taffy`                                  | Flexbox + Grid for floating UI [PLANNED: [M6][m6]].                                                                                         |
-| Animation                 | Deadline scheduler [IMPLEMENTED]         | `ControlFlow::WaitUntil(min(next_due))` across cursor blink / SGR blink / bell / Kitty animation — idle terminal draws nothing.             |
-| Config                    | `toml` + `serde` + `notify`              | Hot-reload with targeted invalidation.                                                                                                      |
-| Logging                   | `log` + `env_logger`                     | Standard facade; level via `RUST_LOG`.                                                                                                      |
+| Problem                   | Component                                             | Why                                                                                                                                                                 |
+| ------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GPU API                   | `wgpu`                                                | One abstraction for Metal/Vulkan/DX12/GL4/WebGPU. Dual-source blending (for LCD subpixel AA) gated behind `Features::DUAL_SOURCE_BLENDING`.                         |
+| Window + input            | `winit`                                               | Only serious cross-platform option.                                                                                                                                 |
+| VT state machine          | `libghostty-vt` via FFI                               | Battle-tested, handles DEC 2026, mouse, Kitty keyboard, iTerm OSC, selection. Don't reinvent.                                                                       |
+| PTY                       | `portable-pty`                                        | Cross-plat, correct ConPTY on Windows.                                                                                                                              |
+| Font discovery            | `fontdb` (via cosmic-text)                            | fontconfig / CoreText / DirectWrite backed.                                                                                                                         |
+| Shaping                   | `cosmic-text` (rustybuzz + unicode-bidi)              | BiDi, graphemes, per-font features.                                                                                                                                 |
+| Rasterization             | `swash` (via `SwashCache`)                            | COLR v0/v1, SVG, CBDT.                                                                                                                                              |
+| Atlas packing             | `etagere`                                             | Shelf-bin with deallocation (alacritty's row-packer cannot evict).                                                                                                  |
+| Procedural glyphs         | `tiny-skia`                                           | Software vector rasterizer; box-drawing (U+2500–U+257F) and block elements (U+2580–U+259F) shipped, Powerline sprites pending [partial: [M3][m3]].                  |
+| Layout (modals/box model) | `taffy`                                               | Flexbox + Grid for floating UI [PLANNED: [M6][m6]].                                                                                                                 |
+| Animation                 | Deadline scheduler [IMPLEMENTED]                      | `ControlFlow::WaitUntil(min(next_due))` across cursor blink / SGR blink / bell / Kitty animation — idle terminal draws nothing.                                     |
+| Config                    | `toml` + `serde` + `notify`                           | Hot-reload with targeted invalidation.                                                                                                                              |
+| Logging                   | `tracing` + `tracing-subscriber` + `tracing-appender` | Structured events + spans; `EnvFilter` honors `RUST_LOG`; non-blocking daily-rolling file at `~/Library/Logs/seance/` (macOS) or `$XDG_STATE_HOME/seance/` (Linux). |
 
 **Deliberately avoided:** `fontdue` (no COLRv1/SVG), `glyphon` (locks layout),
 `vello`/`wgpu_glyph` (wrong abstraction level for terminals), hand-rolled VT
@@ -413,3 +413,33 @@ parsers (tarpit — every terminal team regrets them).
 For threading-model rationale (Ghostty / Alacritty / WezTerm side-by-side), see
 [`docs/threading.md`](./threading.md). Source citations into each upstream tree
 live there, not here.
+
+---
+
+## Logging & instrumentation
+
+- **Facade**: `tracing`. Call sites use
+  `tracing::{trace,debug,info,warn,error}!` with capture syntax (`{var}`).
+  Prefer structured fields (`err = %err`) when the value is a typed error.
+- **Subscriber**: configured once in `seance-app::main` via a `Registry` with
+  two layers — stdout `fmt::layer` (so `cargo run` prints logs to the parent
+  terminal) and a `tracing_appender::rolling::daily` writer wrapped in
+  `non_blocking`. The `WorkerGuard` is held in `main` so the appender flushes on
+  shutdown.
+- **Filter**: `EnvFilter` honors `RUST_LOG`. Default when unset:
+  `seance=info,wgpu=warn,wgpu_core=warn,wgpu_hal=warn,winit=warn,cosmic_text=warn,naga=warn,notify=warn`.
+- **Spans on hot paths**: per-frame `render::frame`, `gpu::submit`; per-tick
+  `vt::tick`, `vt::read_pty`; per-wake `mux::refresh`. All at `trace`/`debug`
+  level via `trace_span!("...").entered()` — statically filtered out under
+  default config so cost is a load+branch.
+- **Spans on event handlers**:
+  `#[tracing::instrument(level = "info", skip_all)]` on `reload_config`,
+  `reload_theme`, `on_theme_file_changed`.
+- **Log file**: `~/Library/Logs/seance/seance.log.YYYY-MM-DD` (macOS) or
+  `$XDG_STATE_HOME/seance/seance.log.YYYY-MM-DD` (Linux, fallback
+  `~/.local/state/seance/`). Directory is created on startup; failures degrade
+  silently to stderr-only.
+- **Level conventions**: `info` is reserved for once-per-event lifecycle —
+  startup banner, window created, pane spawned/exited, shutdown. Recoverable
+  failures use `warn`; channel-closed and cleanup noise during teardown use
+  `debug`; per-frame and per-PTY-read events use `trace`.

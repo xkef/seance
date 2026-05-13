@@ -22,7 +22,8 @@ use seance_frame::{CellView, CellVisitor, FrameSource};
 use seance_protocol::frame::{CellColor, DirtySnapshot};
 
 use super::atlas::{AtlasEntry, GlyphAtlas};
-use super::backend::{FontAttrs, GlyphFormat, GlyphId, ShapedGlyph, TextBackend};
+use super::backend::{CellMetrics, FontAttrs, GlyphFormat, GlyphId, ShapedGlyph, TextBackend};
+use super::procedural;
 use super::shape_cache::ShapeCache;
 
 /// GPU instance record (32 bytes, matches the WGSL vertex buffer).
@@ -38,6 +39,8 @@ pub struct CellText {
 }
 
 const _: () = assert!(size_of::<CellText>() == 32);
+
+const TEXT_FLAG_MIN_CONTRAST: u32 = 1 << 16;
 
 pub struct FrameInfo {
     pub cell_width: f32,
@@ -64,6 +67,7 @@ pub struct BuildFrameConfig<'a> {
 }
 
 type GlyphSlots = HashMap<GlyphId, AtlasEntry, FxBuildHasher>;
+type ProceduralSlots = HashMap<char, AtlasEntry, FxBuildHasher>;
 
 /// Foreground alpha applied to faint cells (SGR 2). Other attributes are
 /// represented at full opacity.
@@ -85,6 +89,20 @@ struct CellSlot {
     byte_offset: u32,
     col: u16,
     fg: [u8; 4],
+    min_contrast: bool,
+}
+
+/// A single grid cell that bypassed shaping because its grapheme is a
+/// procedurally-rasterized codepoint (box-drawing, block elements). Buffered
+/// during the visitor pass and emitted as `CellText` records alongside the
+/// shape-run output.
+#[derive(Debug, Clone, Copy)]
+struct ProceduralCell {
+    row: u16,
+    col: u16,
+    codepoint: char,
+    fg: [u8; 4],
+    min_contrast: bool,
 }
 
 /// A contiguous group of cells on the same row sharing one [`FontAttrs`],
@@ -114,11 +132,12 @@ impl ShapeRun {
         }
     }
 
-    fn push_cell(&mut self, col: u16, fg: [u8; 4], text: &str) {
+    fn push_cell(&mut self, col: u16, fg: [u8; 4], min_contrast: bool, text: &str) {
         self.slots.push(CellSlot {
             byte_offset: self.text.len() as u32,
             col,
             fg,
+            min_contrast,
         });
         self.text.push_str(text);
     }
@@ -150,10 +169,17 @@ pub struct CellBuilder {
     /// Stable map from backend-issued `GlyphId` to its atlas slot. Survives
     /// across frames; cleared by [`Self::reset_glyphs`].
     glyph_slots: GlyphSlots,
+    /// Atlas slot per procedural codepoint (box-drawing / block elements).
+    /// Keyed by `char` because procedural rasterization is metric-stable —
+    /// the same codepoint rasterizes the same bitmap at every call for a
+    /// given `CellMetrics`. Cleared whenever the cell size changes, via
+    /// [`Self::reset_glyphs`].
+    procedural_slots: ProceduralSlots,
     shape_cache: ShapeCache,
     bg_cells: Vec<[u8; 4]>,
     text_cells: Vec<CellText>,
     runs: Vec<ShapeRun>,
+    procedural_cells: Vec<ProceduralCell>,
     shape_scratch: Vec<ShapedGlyph>,
     last_frame: Option<FrameInfo>,
     last_dirty: DirtySnapshot,
@@ -164,10 +190,12 @@ impl CellBuilder {
         Self {
             atlas: GlyphAtlas::new(),
             glyph_slots: HashMap::with_hasher(FxBuildHasher),
+            procedural_slots: HashMap::with_hasher(FxBuildHasher),
             shape_cache: ShapeCache::new(),
             bg_cells: Vec::new(),
             text_cells: Vec::new(),
             runs: Vec::new(),
+            procedural_cells: Vec::new(),
             shape_scratch: Vec::new(),
             last_frame: None,
             // First frame must be a full upload — there's nothing on the GPU
@@ -208,6 +236,7 @@ impl CellBuilder {
             config.theme,
             &mut self.bg_cells,
             &mut self.runs,
+            &mut self.procedural_cells,
         );
 
         self.text_cells.clear();
@@ -218,6 +247,13 @@ impl CellBuilder {
             &mut self.glyph_slots,
             &mut self.shape_cache,
             &mut self.shape_scratch,
+            &mut self.text_cells,
+        );
+        emit_procedural_cells(
+            &self.procedural_cells,
+            backend.metrics(),
+            &mut self.atlas,
+            &mut self.procedural_slots,
             &mut self.text_cells,
         );
 
@@ -244,9 +280,13 @@ impl CellBuilder {
     /// active features. Family is implicit backend state and not in the
     /// cache key, so swapping families without resetting returns stale glyph
     /// IDs.
+    ///
+    /// Procedural slots are also dropped because their bitmaps are sized to
+    /// the current `CellMetrics`; a font-size change resizes the cell.
     pub fn reset_glyphs(&mut self) {
         self.atlas.reset();
         self.glyph_slots.clear();
+        self.procedural_slots.clear();
         self.shape_cache.clear();
     }
 
@@ -318,13 +358,16 @@ fn resolve_color(theme: &Theme, color: &CellColor) -> Option<[u8; 3]> {
 
 /// VT-aware pass: walk every cell, write its bg into `bg_cells`, and
 /// accumulate non-empty cells into [`ShapeRun`]s grouped by row, attrs, and
-/// column contiguity.
+/// column contiguity. Cells whose grapheme is a single procedural codepoint
+/// (box-drawing, block elements) bypass shaping and land in `procedural_cells`
+/// instead.
 fn walk_grid_into_runs(
     source: &mut dyn FrameSource,
     geom: &FrameGeometry,
     theme: &Theme,
     bg_cells: &mut Vec<[u8; 4]>,
     runs: &mut Vec<ShapeRun>,
+    procedural_cells: &mut Vec<ProceduralCell>,
 ) {
     bg_cells.clear();
     bg_cells.resize(
@@ -332,10 +375,12 @@ fn walk_grid_into_runs(
         [0, 0, 0, 0],
     );
     runs.clear();
+    procedural_cells.clear();
 
     let mut visitor = RunBuilder {
         bg_cells,
         runs,
+        procedural_cells,
         open: None,
         theme,
         cols: geom.grid_cols,
@@ -371,13 +416,17 @@ fn shape_runs(
                 continue;
             };
             let slot = run.slot_for_cluster(glyph.cluster);
+            let mut atlas_and_flags = u32::from(entry.is_color);
+            if slot.min_contrast {
+                atlas_and_flags |= TEXT_FLAG_MIN_CONTRAST;
+            }
             out.push(CellText {
                 glyph_pos: entry.pos,
                 glyph_size: entry.size,
                 bearings: [entry.bearing_x as i16, entry.bearing_y as i16],
                 grid_pos: [slot.col, run.row],
                 color: slot.fg,
-                atlas_and_flags: u32::from(entry.is_color),
+                atlas_and_flags,
             });
         }
     }
@@ -430,6 +479,7 @@ fn ensure_glyph_slot(
 struct RunBuilder<'a> {
     bg_cells: &'a mut Vec<[u8; 4]>,
     runs: &'a mut Vec<ShapeRun>,
+    procedural_cells: &'a mut Vec<ProceduralCell>,
     open: Option<ShapeRun>,
     theme: &'a Theme,
     cols: u16,
@@ -454,6 +504,7 @@ impl CellVisitor for RunBuilder<'_> {
         let idx = row as usize * self.cols as usize + col as usize;
 
         let theme_bg = [self.theme.bg[0], self.theme.bg[1], self.theme.bg[2]];
+        let min_contrast = matches!(view.fg, CellColor::Default) && !view.attrs.inverse;
         let mut fg_rgb = resolve_color(self.theme, &view.fg).unwrap_or(self.theme.fg);
         let mut bg_rgb = resolve_color(self.theme, &view.bg).unwrap_or(theme_bg);
         if view.attrs.inverse {
@@ -471,6 +522,23 @@ impl CellVisitor for RunBuilder<'_> {
 
         let alpha = if view.attrs.faint { FAINT_ALPHA } else { 255 };
         let fg = [fg_rgb[0], fg_rgb[1], fg_rgb[2], alpha];
+
+        // Procedural codepoints (box-drawing, block elements) bypass shaping
+        // and rasterize directly into the grayscale atlas. They always break
+        // any open shape run because they don't participate in cluster
+        // composition with neighbouring cells.
+        if let Some(c) = procedural_codepoint(view.text) {
+            self.flush();
+            self.procedural_cells.push(ProceduralCell {
+                row,
+                col,
+                codepoint: c,
+                fg,
+                min_contrast,
+            });
+            return;
+        }
+
         let attrs = FontAttrs {
             bold: view.attrs.bold,
             italic: view.attrs.italic,
@@ -489,7 +557,69 @@ impl CellVisitor for RunBuilder<'_> {
         self.open
             .as_mut()
             .expect("open run set above")
-            .push_cell(col, fg, view.text);
+            .push_cell(col, fg, min_contrast, view.text);
+    }
+}
+
+/// If `text` is a single-codepoint grapheme that has a procedural renderer,
+/// return that codepoint; otherwise `None`. Bold/italic attrs are ignored
+/// because box-drawing characters render identically under any style.
+fn procedural_codepoint(text: &str) -> Option<char> {
+    let mut chars = text.chars();
+    let c = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+    if procedural::supports(c) {
+        Some(c)
+    } else {
+        None
+    }
+}
+
+/// Rasterize each unique procedural codepoint once into the grayscale atlas,
+/// then emit one [`CellText`] per buffered procedural cell anchored at its
+/// grid position.
+fn emit_procedural_cells(
+    cells: &[ProceduralCell],
+    metrics: &CellMetrics,
+    atlas: &mut GlyphAtlas,
+    slots: &mut ProceduralSlots,
+    out: &mut Vec<CellText>,
+) {
+    for cell in cells {
+        let entry = match slots.get(&cell.codepoint) {
+            Some(e) => *e,
+            None => {
+                let Some(rast) = procedural::rasterize(cell.codepoint, metrics) else {
+                    continue;
+                };
+                let Some(entry) = atlas.insert(
+                    &rast.data,
+                    rast.width,
+                    rast.height,
+                    rast.bearing_x,
+                    rast.bearing_y,
+                    matches!(rast.format, GlyphFormat::Color),
+                ) else {
+                    continue;
+                };
+                slots.insert(cell.codepoint, entry);
+                entry
+            }
+        };
+        let mut atlas_and_flags = u32::from(entry.is_color);
+        if cell.min_contrast {
+            atlas_and_flags |= TEXT_FLAG_MIN_CONTRAST;
+        }
+        out.push(CellText {
+            glyph_pos: entry.pos,
+            glyph_size: entry.size,
+            bearings: [entry.bearing_x as i16, entry.bearing_y as i16],
+            grid_pos: [cell.col, cell.row],
+            color: cell.fg,
+            atlas_and_flags,
+        });
     }
 }
 
@@ -626,6 +756,18 @@ mod tests {
         cells: &[FakeCell<'_>],
         theme: &Theme,
     ) -> (Vec<[u8; 4]>, Vec<ShapeRun>) {
+        let (bg, runs, _) = collect_runs_with_procedural(cols, rows, cells, theme);
+        (bg, runs)
+    }
+
+    /// Variant that also returns the procedural-cell buffer so the
+    /// box-drawing interception tests can observe it.
+    fn collect_runs_with_procedural(
+        cols: u16,
+        rows: u16,
+        cells: &[FakeCell<'_>],
+        theme: &Theme,
+    ) -> (Vec<[u8; 4]>, Vec<ShapeRun>, Vec<ProceduralCell>) {
         let mut source = FakeFrame::new(cols, rows, cells);
         let geom = FrameGeometry {
             cell_width: 10.0,
@@ -636,8 +778,16 @@ mod tests {
         };
         let mut bg = Vec::new();
         let mut runs = Vec::new();
-        walk_grid_into_runs(&mut source, &geom, theme, &mut bg, &mut runs);
-        (bg, runs)
+        let mut procedural = Vec::new();
+        walk_grid_into_runs(
+            &mut source,
+            &geom,
+            theme,
+            &mut bg,
+            &mut runs,
+            &mut procedural,
+        );
+        (bg, runs, procedural)
     }
 
     fn plain() -> CellAttrs {
@@ -749,6 +899,30 @@ mod tests {
 
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].slots[0].fg, [0, 205, 205, FAINT_ALPHA]);
+    }
+
+    #[test]
+    fn walk_grid_into_runs_marks_only_default_fg_for_min_contrast() {
+        let theme = Theme::blank();
+        let cells = [
+            ("d", CellColor::Default, CellColor::Default, plain()),
+            ("p", CellColor::Palette(1), CellColor::Default, plain()),
+            ("r", CellColor::Rgb(10, 20, 30), CellColor::Default, plain()),
+            (
+                "i",
+                CellColor::Default,
+                CellColor::Palette(2),
+                CellAttrs {
+                    inverse: true,
+                    ..CellAttrs::default()
+                },
+            ),
+        ];
+        let (_bg, runs) = collect_runs(4, 1, &cells, &theme);
+
+        assert_eq!(runs.len(), 1);
+        let flags: Vec<bool> = runs[0].slots.iter().map(|s| s.min_contrast).collect();
+        assert_eq!(flags, vec![true, false, false, false]);
     }
 
     #[test]
@@ -880,9 +1054,9 @@ mod tests {
         // Three cells "a", "é" (2 bytes), "b" → text "aéb",
         // slots at byte_offset [0, 1, 3].
         let mut run = ShapeRun::new(0, FontAttrs::default());
-        run.push_cell(0, [1, 1, 1, 255], "a");
-        run.push_cell(1, [2, 2, 2, 255], "é");
-        run.push_cell(2, [3, 3, 3, 255], "b");
+        run.push_cell(0, [1, 1, 1, 255], true, "a");
+        run.push_cell(1, [2, 2, 2, 255], true, "é");
+        run.push_cell(2, [3, 3, 3, 255], true, "b");
 
         assert_eq!(run.slot_for_cluster(0).col, 0);
         assert_eq!(run.slot_for_cluster(1).col, 1);
@@ -1034,6 +1208,27 @@ mod tests {
         builder.build_frame(&mut source, &mut backend, build_config(&theme));
         let cols: Vec<u16> = builder.text_cells().iter().map(|c| c.grid_pos[0]).collect();
         assert_eq!(cols, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn min_contrast_flag_only_set_for_default_foreground_glyphs() {
+        let theme = Theme::blank();
+        let cells = [
+            ("D", CellColor::Default, CellColor::Default, plain()),
+            ("P", CellColor::Palette(1), CellColor::Default, plain()),
+            ("R", CellColor::Rgb(10, 20, 30), CellColor::Default, plain()),
+        ];
+        let mut source = FakeFrame::new(3, 1, &cells);
+        let mut backend = distributing_backend();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        let flags: Vec<bool> = builder
+            .text_cells()
+            .iter()
+            .map(|c| c.atlas_and_flags & TEXT_FLAG_MIN_CONTRAST != 0)
+            .collect();
+        assert_eq!(flags, vec![true, false, false]);
     }
 
     /// Backend that returns a single ligature glyph at cluster 0 for "==".
@@ -1238,5 +1433,112 @@ mod tests {
             hit_rate >= 0.95,
             "warm hit rate {hit_rate:.4} < 0.95 (hits={frame2_hits}, lookups={frame2_lookups})"
         );
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // Procedural codepoint interception (issue #27)
+    // ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn box_drawing_cells_bypass_shape_runs_and_land_in_procedural_buffer() {
+        // ─ (U+2500) is procedural; the visitor should not include it in any
+        // shape run, but it should appear in the procedural-cell buffer.
+        let theme = Theme::blank();
+        let cells = [
+            ("a", CellColor::Default, CellColor::Default, plain()),
+            ("─", CellColor::Default, CellColor::Default, plain()),
+            ("b", CellColor::Default, CellColor::Default, plain()),
+        ];
+        let (_bg, runs, procedural) = collect_runs_with_procedural(3, 1, &cells, &theme);
+
+        assert_eq!(runs.len(), 2, "procedural cell must break the run");
+        assert_eq!(runs[0].text, "a");
+        assert_eq!(runs[1].text, "b");
+        assert_eq!(procedural.len(), 1);
+        assert_eq!(procedural[0].codepoint, '─');
+        assert_eq!(procedural[0].col, 1);
+        assert_eq!(procedural[0].row, 0);
+    }
+
+    #[test]
+    fn procedural_cells_emit_one_celltext_each_without_shaping() {
+        let theme = Theme::blank();
+        // ┌─┐ — three procedural codepoints, no shaping needed.
+        let cells = [
+            ("┌", CellColor::Default, CellColor::Default, plain()),
+            ("─", CellColor::Default, CellColor::Default, plain()),
+            ("┐", CellColor::Default, CellColor::Default, plain()),
+        ];
+        let mut source = FakeFrame::new(3, 1, &cells);
+        let mut backend = distributing_backend();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+
+        // No characters reach the shape backend.
+        assert_eq!(builder.shape_cache_stats().misses, 0);
+        // Each of the three cells produces a CellText anchored at its
+        // column.
+        let cols: Vec<u16> = builder.text_cells().iter().map(|c| c.grid_pos[0]).collect();
+        assert_eq!(cols, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn procedural_codepoint_is_rejected_when_paired_with_combining_mark() {
+        // A cell whose grapheme is more than one codepoint must not be
+        // claimed by the procedural pipeline, even if its first char is in
+        // the box-drawing range. (Combining marks attached to box-drawing
+        // are exotic but the safety net should hold.)
+        let theme = Theme::blank();
+        let combined = "─\u{0301}"; // ─ + combining acute
+        let cells = [(combined, CellColor::Default, CellColor::Default, plain())];
+        let (_bg, runs, procedural) = collect_runs_with_procedural(1, 1, &cells, &theme);
+
+        assert!(procedural.is_empty());
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].text, combined);
+    }
+
+    #[test]
+    fn procedural_pipeline_preserves_min_contrast_for_default_fg_only() {
+        let theme = Theme::blank();
+        let cells = [
+            ("─", CellColor::Default, CellColor::Default, plain()),
+            ("─", CellColor::Rgb(10, 20, 30), CellColor::Default, plain()),
+        ];
+        let (_bg, _runs, procedural) = collect_runs_with_procedural(2, 1, &cells, &theme);
+
+        assert_eq!(procedural.len(), 2);
+        assert!(procedural[0].min_contrast, "default fg gets min-contrast");
+        assert!(
+            !procedural[1].min_contrast,
+            "explicit RGB fg skips min-contrast"
+        );
+    }
+
+    #[test]
+    fn reset_glyphs_clears_procedural_atlas_slots() {
+        // After reset_glyphs (e.g. font-size change), a second frame must
+        // re-rasterize the procedural glyph because the bitmap was sized to
+        // the old metrics.
+        let theme = Theme::blank();
+        let cells = [("─", CellColor::Default, CellColor::Default, plain())];
+        let mut source = FakeFrame::new(1, 1, &cells);
+        let mut backend = distributing_backend();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        assert_eq!(builder.text_cells().len(), 1);
+        let first = builder.text_cells()[0];
+
+        builder.reset_glyphs();
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        assert_eq!(builder.text_cells().len(), 1);
+        let second = builder.text_cells()[0];
+
+        // The atlas was reset, so the same codepoint should be re-allocated
+        // and land at the start of the grayscale plane again.
+        assert_eq!(second.glyph_pos, first.glyph_pos);
+        assert_eq!(second.glyph_size, first.glyph_size);
     }
 }

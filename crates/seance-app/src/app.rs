@@ -98,6 +98,10 @@ impl App {
                 surface.renderer.update_frame(&mut source);
             }
         }
+        let selection = surface.selection_range();
+        let hovered_link = surface.hovered_link_range();
+        surface.render_inputs.selection = selection;
+        surface.render_inputs.hovered_link = hovered_link;
         // Prefer the VT-reported shape; fall back to the user's configured
         // default when the VT has no opinion. Refreshed every frame so that
         // hot-reload of `cursor.style` is picked up without extra wiring.
@@ -137,6 +141,22 @@ impl App {
         }
     }
 
+    /// Clear a flashed selection once its deadline has passed.
+    fn step_selection_flash(&mut self) {
+        let Some(surface) = self.surface.as_mut() else {
+            return;
+        };
+        if let Some(deadline) = surface.selection_dismiss_at
+            && Instant::now() >= deadline
+        {
+            surface.selection_dismiss_at = None;
+            if surface.has_selection() {
+                surface.clear_selection();
+            }
+            surface.mark_dirty();
+        }
+    }
+
     /// Earliest instant at which any animation source needs the next
     /// wake. `None` means the terminal is idle — `about_to_wait` will
     /// drop into `ControlFlow::Wait` and the OS suspends us until either
@@ -148,10 +168,15 @@ impl App {
         if surface.occluded {
             return None;
         }
-        if self.config.cursor.blink {
-            Some(surface.last_blink_edge + BLINK_HALF_PERIOD)
-        } else {
-            None
+        let blink = self
+            .config
+            .cursor
+            .blink
+            .then(|| surface.last_blink_edge + BLINK_HALF_PERIOD);
+        match (blink, surface.selection_dismiss_at) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(d), None) | (None, Some(d)) => Some(d),
+            (None, None) => None,
         }
     }
 }
@@ -183,6 +208,12 @@ impl ApplicationHandler<UserEvent> for App {
         );
 
         let size = window.inner_size();
+        tracing::info!(
+            width = size.width,
+            height = size.height,
+            scale = window.scale_factor(),
+            "window created",
+        );
         let theme = seance_config::load_theme(self.config.theme.as_deref());
         let renderer_config = RendererConfig {
             width: size.width,
@@ -206,9 +237,13 @@ impl ApplicationHandler<UserEvent> for App {
 
         let (cols, rows) = renderer.grid_size();
         let proxy = self.proxy.clone();
-        let mut mux = MuxClient::new(LocalDomain::new(move |event| {
-            let _ = proxy.send_event(UserEvent::Mux(event));
-        }));
+        let link_detector = link_detector_from_config(&self.config.links);
+        let mut mux = MuxClient::with_link_detector(
+            LocalDomain::new(move |event| {
+                let _ = proxy.send_event(UserEvent::Mux(event));
+            }),
+            link_detector,
+        );
         let active_pane = mux
             .spawn_pane(PaneSpawnOptions {
                 cols,
@@ -216,22 +251,16 @@ impl ApplicationHandler<UserEvent> for App {
                 pixel_width: size.width as u16,
                 pixel_height: size.height as u16,
                 initial_cursor_shape: mux_shape_from_config(self.config.cursor.style),
+                max_scrollback: self.config.scrollback.limit as usize,
             })
             .expect("failed to spawn local pane");
+        tracing::info!(pane = ?active_pane, cols, rows, "pane spawned");
 
         let render_inputs = RenderInputs {
             cursor_shape: self.config.cursor.style.into(),
             ..RenderInputs::default()
         };
-        let link_detector = link_detector_from_config(&self.config.links);
-        let mut surface = SurfaceState::new(
-            window,
-            renderer,
-            mux,
-            active_pane,
-            render_inputs,
-            link_detector,
-        );
+        let mut surface = SurfaceState::new(window, renderer, mux, active_pane, render_inputs);
         self.apply_terminal_theme_to(&mut surface, &theme);
         self.surface = Some(surface);
 
@@ -249,6 +278,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::ConfigFileChanged => self.reload_config(),
             UserEvent::ThemeFileChanged(path) => self.on_theme_file_changed(&path),
             UserEvent::Mux(MuxEvent::Wake) => {
+                let _span = tracing::debug_span!("mux::refresh").entered();
                 let mut should_exit = false;
                 if let Some(surface) = self.surface_mut() {
                     match surface.refresh_updates() {
@@ -260,7 +290,7 @@ impl ApplicationHandler<UserEvent> for App {
                                 surface.renderer.apply_image_cache_event(image_event);
                             }
                             for err in refresh.errors {
-                                log::warn!("pane error: {err}");
+                                tracing::warn!("pane error: {err}");
                             }
                             if frame_dirty || !image_events.is_empty() {
                                 surface.mark_dirty();
@@ -270,10 +300,11 @@ impl ApplicationHandler<UserEvent> for App {
                             }
                             should_exit = exited.contains(&surface.active_pane);
                         }
-                        Err(err) => log::warn!("mux refresh failed: {err}"),
+                        Err(err) => tracing::warn!("mux refresh failed: {err}"),
                     }
                 }
                 if should_exit {
+                    tracing::info!("pane closed; shutting down");
                     self.surface = None;
                     event_loop.exit();
                 }
@@ -289,6 +320,7 @@ impl ApplicationHandler<UserEvent> for App {
     ) {
         match event {
             WindowEvent::CloseRequested => {
+                tracing::info!("close requested; shutting down");
                 self.surface = None;
                 event_loop.exit();
             }
@@ -329,6 +361,7 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         }
         self.step_blink();
+        self.step_selection_flash();
         if let Some(surface) = self.surface.as_ref()
             && surface.content_dirty
             && !surface.occluded
@@ -365,7 +398,7 @@ pub(crate) fn mux_shape_from_config(style: seance_config::CursorStyle) -> MuxCur
 pub(crate) fn link_detector_from_config(config: &seance_config::LinksConfig) -> LinkDetector {
     let modifiers = link_modifiers_from_config(config.modifiers);
     LinkDetector::from_options(modifiers, config.url, config.paths).unwrap_or_else(|err| {
-        log::warn!("failed to compile link detector: {err}");
+        tracing::warn!("failed to compile link detector: {err}");
         LinkDetector::from_options(modifiers, false, false)
             .expect("disabled link detector should compile")
     })

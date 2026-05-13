@@ -83,24 +83,31 @@ pub(crate) fn extract_snapshot(
         let global_dirty = render_snapshot.dirty().ok();
         let mut dirty_rows = Vec::new();
 
-        let visible = render_snapshot.cursor_visible().unwrap_or(true);
-        let pos =
-            render_snapshot
-                .cursor_viewport()
-                .ok()
-                .flatten()
-                .map_or(GridPos::default(), |vp| GridPos {
+        // Cursor lives in the active screen, not the viewport. When the user
+        // scrolls into the scrollback `cursor_viewport()` returns `None` —
+        // suppress visibility so the bar/block/underline glyph doesn't get
+        // anchored to (0, 0). Matches ghostty's renderer/cursor.zig, which
+        // returns `null` from `style()` whenever `state.cursor.viewport` is
+        // null before considering mode/focus/blink.
+        let viewport_cursor = render_snapshot.cursor_viewport().ok().flatten();
+        let cursor_mode_visible = render_snapshot.cursor_visible().unwrap_or(true);
+        let (pos, wide) = viewport_cursor.map_or((GridPos::default(), false), |vp| {
+            (
+                GridPos {
                     col: vp.x,
                     row: vp.y,
-                });
+                },
+                vp.at_wide_tail,
+            )
+        });
         let shape = render_snapshot
             .cursor_visual_style()
             .ok()
             .and_then(map_cursor_shape);
         out.cursor = CursorInfo {
             pos,
-            visible,
-            wide: false,
+            visible: cursor_mode_visible && viewport_cursor.is_some(),
+            wide,
             shape,
         };
 

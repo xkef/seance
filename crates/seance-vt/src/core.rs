@@ -12,7 +12,7 @@ use crate::snapshot::{RowMeta, VtSnapshot};
 use crate::snapshot_extraction::{SnapshotExtraction, extract_snapshot};
 use crate::terminal::install_png_decoder_for_this_thread;
 
-pub(crate) const DEFAULT_MAX_SCROLLBACK: usize = 10_000;
+pub const DEFAULT_MAX_SCROLLBACK: usize = 10_000;
 pub(crate) const KITTY_IMAGE_STORAGE_LIMIT_BYTES: u64 = 320 * 1000 * 1000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +54,12 @@ pub(crate) struct VtCore {
     cell_height_px: u32,
     dirty: DirtyTracker,
     row_cache: Option<RowCache>,
+    // Cursor from the previously-extracted snapshot. `None` before the first
+    // extraction; from then on every snapshot updates it. Diffed against the
+    // current cursor so that cursor-only moves (CUP without cell changes) still
+    // dirty the affected rows — otherwise the renderer keeps painting the old
+    // position until something else dirties a row.
+    last_cursor: Option<CursorInfo>,
     force_full_next_snapshot: bool,
     pwd: Option<String>,
     osc_state: OscState,
@@ -99,6 +105,7 @@ impl VtCore {
             cell_height_px,
             dirty: DirtyTracker::default(),
             row_cache: None,
+            last_cursor: None,
             force_full_next_snapshot: false,
             pwd: None,
             osc_state: OscState::Ground,
@@ -260,11 +267,14 @@ impl VtCore {
             .map_or(DirtySnapshot::Full, |previous| previous.diff(&current));
         self.row_cache = Some(current);
 
+        let cursor_delta = cursor_dirty_delta(self.last_cursor, snapshot.cursor, snapshot.rows);
+        self.last_cursor = Some(snapshot.cursor);
+
         if self.force_full_next_snapshot || matches!(libghostty_delta, DirtySnapshot::Full) {
             self.force_full_next_snapshot = false;
             DirtySnapshot::Full
         } else {
-            row_delta
+            union_dirty([&row_delta, &cursor_delta])
         }
     }
 
@@ -497,6 +507,27 @@ impl DirtyTracker {
     }
 }
 
+fn cursor_dirty_delta(
+    previous: Option<CursorInfo>,
+    current: CursorInfo,
+    rows: u16,
+) -> DirtySnapshot {
+    let Some(previous) = previous else {
+        return DirtySnapshot::Clean;
+    };
+    if previous == current {
+        return DirtySnapshot::Clean;
+    }
+    let mut dirty = Vec::with_capacity(2);
+    if previous.visible && previous.pos.row < rows {
+        dirty.push(previous.pos.row);
+    }
+    if current.visible && current.pos.row < rows {
+        dirty.push(current.pos.row);
+    }
+    normalize_dirty(DirtySnapshot::Partial(dirty))
+}
+
 fn normalize_dirty(dirty: DirtySnapshot) -> DirtySnapshot {
     match dirty {
         DirtySnapshot::Partial(mut rows) => {
@@ -565,6 +596,7 @@ pub(crate) fn cursor_shape_sequence(shape: CursorShape) -> &'static [u8] {
 mod tests {
     use super::*;
     use crate::frame::{CellAttrs, CellColor};
+    use crate::selection::GridPos;
 
     fn core() -> VtCore {
         VtCore::new(VtCoreOptions {
@@ -655,6 +687,102 @@ mod tests {
         core.ack_rendered(still_full.generation);
         let clean = core.snapshot().unwrap();
         assert_eq!(clean.dirty, DirtySnapshot::Clean);
+    }
+
+    #[test]
+    fn cursor_only_move_marks_old_and_new_rows_dirty() {
+        let mut core = core();
+        let initial = core.snapshot().unwrap();
+        core.ack_rendered(initial.generation);
+
+        // CUP "ESC [ 3 ; 2 H" — move cursor to (row 3, col 2) 1-indexed, no cell changes.
+        core.feed(b"\x1b[3;2H");
+        let snapshot = core.snapshot().unwrap();
+        assert_eq!(snapshot.dirty, DirtySnapshot::Partial(vec![0, 2]));
+    }
+
+    #[test]
+    fn cursor_dirty_delta_clean_without_previous() {
+        let curr = CursorInfo {
+            pos: GridPos { col: 1, row: 2 },
+            visible: true,
+            wide: false,
+            shape: None,
+        };
+        assert_eq!(cursor_dirty_delta(None, curr, 24), DirtySnapshot::Clean);
+    }
+
+    #[test]
+    fn cursor_dirty_delta_clean_when_unchanged() {
+        let cursor = CursorInfo {
+            pos: GridPos { col: 1, row: 2 },
+            visible: true,
+            wide: false,
+            shape: None,
+        };
+        assert_eq!(
+            cursor_dirty_delta(Some(cursor), cursor, 24),
+            DirtySnapshot::Clean,
+        );
+    }
+
+    #[test]
+    fn cursor_dirty_delta_dirties_old_and_new_rows_on_move() {
+        let prev = CursorInfo {
+            pos: GridPos { col: 0, row: 4 },
+            visible: true,
+            wide: false,
+            shape: None,
+        };
+        let curr = CursorInfo {
+            pos: GridPos { col: 0, row: 7 },
+            ..prev
+        };
+        assert_eq!(
+            cursor_dirty_delta(Some(prev), curr, 24),
+            DirtySnapshot::Partial(vec![4, 7]),
+        );
+    }
+
+    #[test]
+    fn cursor_dirty_delta_skips_invisible_endpoints() {
+        let prev = CursorInfo {
+            pos: GridPos { col: 0, row: 4 },
+            visible: false,
+            wide: false,
+            shape: None,
+        };
+        let curr = CursorInfo {
+            pos: GridPos { col: 0, row: 7 },
+            visible: true,
+            wide: false,
+            shape: None,
+        };
+        // Only the now-visible row needs a redraw.
+        assert_eq!(
+            cursor_dirty_delta(Some(prev), curr, 24),
+            DirtySnapshot::Partial(vec![7]),
+        );
+    }
+
+    #[test]
+    fn cursor_dirty_delta_drops_out_of_bounds_rows() {
+        let prev = CursorInfo {
+            pos: GridPos { col: 0, row: 50 },
+            visible: true,
+            wide: false,
+            shape: None,
+        };
+        let curr = CursorInfo {
+            pos: GridPos { col: 0, row: 2 },
+            visible: true,
+            wide: false,
+            shape: None,
+        };
+        assert_eq!(
+            cursor_dirty_delta(Some(prev), curr, 24),
+            DirtySnapshot::Partial(vec![2]),
+        );
     }
 
     #[test]
