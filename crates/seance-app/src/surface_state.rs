@@ -324,7 +324,7 @@ impl SurfaceState {
                         return;
                     };
                     if let Ok(mut cb) = arboard::Clipboard::new()
-                        && let Err(err) = cb.set_text(text.to_owned())
+                        && let Err(err) = cb.set_text(text)
                     {
                         tracing::warn!("OSC 52 clipboard write failed: {err}");
                     }
