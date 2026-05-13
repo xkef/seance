@@ -65,6 +65,7 @@ raw-window-handle = "0.6"
 rustc-hash = "2"
 serde = { version = "1", features = ["derive"] }
 serde-big-array = "0.5"
+tiny-skia = "0.11"
 toml = "0.9"
 unicode-width = "0.2"
 wgpu = "29"

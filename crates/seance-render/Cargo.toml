@@ -17,6 +17,7 @@ bytemuck.workspace = true
 cosmic-text.workspace = true
 etagere.workspace = true
 rustc-hash.workspace = true
+tiny-skia.workspace = true
 tracing.workspace = true
 wgpu.workspace = true
 winit.workspace = true
