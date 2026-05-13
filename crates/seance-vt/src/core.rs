@@ -256,8 +256,8 @@ impl VtCore {
         // OSC 7 (current working directory) is consumed before the libghostty
         // parser sees the sequence; OSC 52 is intercepted here so the renderer
         // never tries to render escape bytes that should drive clipboard I/O.
-        if content.starts_with(b"7;") {
-            self.apply_osc7(&content[2..]);
+        if let Some(rest) = content.strip_prefix(b"7;") {
+            self.apply_osc7(rest);
             return;
         }
         if let Some(request) = parse_osc52(content) {
