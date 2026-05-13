@@ -27,6 +27,14 @@ const READ_CHUNK: usize = 16 * 1024;
 const MAX_READ_PER_TICK: usize = 256 * 1024;
 #[cfg(unix)]
 const PTY_KEY: usize = 0;
+/// Brief settle window applied once per `read_pty_batch` after the PTY drains.
+/// A typical shell emits a clear-screen and the prompt redraw as two adjacent
+/// writes; in release builds the actor often drains the first before the second
+/// lands, which paints the cleared-with-home-cursor frame for one vsync. Polling
+/// once for ~1 ms after `WouldBlock` lets that second write coalesce into the
+/// same snapshot.
+#[cfg(unix)]
+const PTY_READ_SETTLE: Duration = Duration::from_millis(1);
 
 /// Options used when spawning a VT session actor.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -544,6 +552,11 @@ mod unix_actor {
         fn raw_fd(&self) -> Option<RawFd> {
             None
         }
+        /// Block briefly waiting for the PTY to become readable again. Used to
+        /// coalesce close-following writes (see `PTY_READ_SETTLE`).
+        fn wait_for_more(&mut self, _timeout: Duration) -> bool {
+            false
+        }
     }
 
     struct PortablePtyAdapter {
@@ -629,6 +642,19 @@ mod unix_actor {
 
         fn raw_fd(&self) -> Option<RawFd> {
             Some(self.fd)
+        }
+
+        fn wait_for_more(&mut self, timeout: Duration) -> bool {
+            let mut pollfd = libc::pollfd {
+                fd: self.fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let timeout_ms = timeout.as_millis().clamp(1, i32::MAX as u128) as i32;
+            // SAFETY: pollfd is a single owned slot we initialized above; the
+            // PTY fd remains valid for the adapter's lifetime.
+            let r = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
+            r > 0 && (pollfd.revents & libc::POLLIN) != 0
         }
     }
 
@@ -865,6 +891,7 @@ mod unix_actor {
             let mut total = 0usize;
             let mut changed = false;
             let mut buf = [0u8; READ_CHUNK];
+            let mut settled = false;
 
             while total < MAX_READ_PER_TICK {
                 match self.pty.read(&mut buf) {
@@ -876,7 +903,12 @@ mod unix_actor {
                         self.drain_responses();
                     }
                     Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
-                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                        if !changed || settled || !self.pty.wait_for_more(PTY_READ_SETTLE) {
+                            break;
+                        }
+                        settled = true;
+                    }
                     Err(err) => return Err(err),
                 }
             }
@@ -967,6 +999,7 @@ mod unix_actor {
 
         enum ScriptRead {
             Data(Bytes),
+            WouldBlock,
             Eof,
         }
 
@@ -1004,6 +1037,7 @@ mod unix_actor {
                         }
                         Ok(n)
                     }
+                    Some(ScriptRead::WouldBlock) => Err(io::Error::from(io::ErrorKind::WouldBlock)),
                     Some(ScriptRead::Eof) => Ok(0),
                     None => Err(io::Error::from(io::ErrorKind::WouldBlock)),
                 }
@@ -1032,6 +1066,13 @@ mod unix_actor {
 
             fn kill_child(&mut self) {
                 self.killed = true;
+            }
+
+            fn wait_for_more(&mut self, _timeout: Duration) -> bool {
+                matches!(
+                    self.reads.front(),
+                    Some(ScriptRead::Data(_)) | Some(ScriptRead::Eof)
+                )
             }
         }
 
@@ -1178,6 +1219,49 @@ mod unix_actor {
         fn scripted_actor_reports_eof_deterministically() {
             let (_tx, mut actor, _slot, _pending, _events) = actor_with_script([ScriptRead::Eof]);
             assert!(matches!(actor.read_pty_batch(), Ok(ReadOutcome::Eof)));
+        }
+
+        #[test]
+        fn read_pty_batch_coalesces_split_writes_via_settle() {
+            // A WouldBlock between two data chunks models the kernel signaling
+            // readability after the shell's first write but before its second
+            // — the exact race that paints the cleared-with-home-cursor frame
+            // on Ctrl-L in release builds.
+            let (_tx, mut actor, slot, pending, events) = actor_with_script([
+                ScriptRead::Data(Bytes::from_static(b"\x1b[H\x1b[2J")),
+                ScriptRead::WouldBlock,
+                ScriptRead::Data(Bytes::from_static(b"$ ")),
+            ]);
+            clear_wake_state(&pending, &events);
+
+            assert!(matches!(actor.read_pty_batch(), Ok(ReadOutcome::Alive)));
+
+            assert_eq!(events.lock().unwrap().as_slice(), &[VtEvent::ContentDirty]);
+            let snapshot = slot.latest_snapshot().unwrap();
+            assert_eq!(snapshot.cell_text(&snapshot.cells[0]), "$");
+        }
+
+        #[test]
+        fn read_pty_batch_settles_at_most_once_per_batch() {
+            let (_tx, mut actor, slot, pending, events) = actor_with_script([
+                ScriptRead::Data(Bytes::from_static(b"a")),
+                ScriptRead::WouldBlock,
+                ScriptRead::Data(Bytes::from_static(b"b")),
+                ScriptRead::WouldBlock,
+                ScriptRead::Data(Bytes::from_static(b"c")),
+            ]);
+            clear_wake_state(&pending, &events);
+
+            assert!(matches!(actor.read_pty_batch(), Ok(ReadOutcome::Alive)));
+
+            let snapshot = slot.latest_snapshot().unwrap();
+            assert_eq!(snapshot.cell_text(&snapshot.cells[0]), "a");
+            assert_eq!(snapshot.cell_text(&snapshot.cells[1]), "b");
+            assert_ne!(snapshot.cell_text(&snapshot.cells[2]), "c");
+            assert!(
+                matches!(actor.pty.reads.front(), Some(ScriptRead::Data(_))),
+                "third chunk must remain queued for the next batch",
+            );
         }
     }
 }
