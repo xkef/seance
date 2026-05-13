@@ -8,6 +8,7 @@ use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, NamedKey};
+use winit::window::Fullscreen;
 
 use seance_input::{MouseAction, MouseEventInput, VtInput};
 
@@ -118,6 +119,16 @@ impl App {
             AppCommand::FontSizeReset => {
                 self.font_size = self.config.font.size;
                 self.apply_font_size();
+            }
+            AppCommand::ToggleFullscreen => {
+                if let Some(surface) = self.surface_mut() {
+                    let next = surface
+                        .window
+                        .fullscreen()
+                        .is_none()
+                        .then_some(Fullscreen::Borderless(None));
+                    surface.window.set_fullscreen(next);
+                }
             }
         }
     }
