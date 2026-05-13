@@ -11,7 +11,7 @@ use seance_protocol::identity::{
 use seance_protocol::image_cache::{ImageCacheEvent, ImageFormat, ImagePayload};
 use seance_protocol::limits::MAX_RETAINED_PANE_UPDATES;
 use seance_protocol::mux::PaneUpdate;
-use seance_vt::{ClipboardRequest, VtEvent, VtSessionHandle, spawn_vt_session};
+use seance_vt::{VtEvent, VtSessionHandle, spawn_vt_session};
 
 use crate::{
     Domain, DomainEvent, MuxEvent, PaneError, PaneFrameHistory, PaneSpawnOptions, SpawnError,
