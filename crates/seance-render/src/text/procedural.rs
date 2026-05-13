@@ -1,5 +1,6 @@
 //! Procedural rasterization of Unicode box-drawing and block-element
-//! codepoints (U+2500–U+259F).
+//! codepoints (U+2500–U+259F) and Powerline separator triangles
+//! (U+E0B0–U+E0B3).
 //!
 //! Fonts ship inconsistent metrics for these glyphs, so monospace alignment
 //! breaks at non-integer font sizes — long horizontal lines split into pieces,
@@ -14,7 +15,8 @@
 //! grapheme is a single codepoint in [`supports`] bypasses shaping.
 
 use tiny_skia::{
-    BlendMode, FillRule, LineCap, Paint, PathBuilder, Pixmap, Rect, Stroke as SkStroke, Transform,
+    BlendMode, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Rect, Stroke as SkStroke,
+    Transform,
 };
 
 use super::backend::{CellMetrics, GlyphFormat, RasterizedGlyph};
@@ -107,9 +109,27 @@ enum BlockEdge {
     Right,
 }
 
+/// One of the four Powerline separator triangles. The Filled variants fill
+/// the half of the cell whose vertical edge sits on the indicated side, with
+/// the apex on the opposite mid-edge. The Thin variants draw only the
+/// hypotenuse as a stroke.
+#[derive(Clone, Copy)]
+enum PowerlineTriangle {
+    /// U+E0B0 — solid rightward triangle. Vertical edge at x = 0, apex at
+    /// (cell_width, cell_height / 2).
+    RightFilled,
+    /// U+E0B1 — outline rightward triangle (hypotenuse only).
+    RightThin,
+    /// U+E0B2 — solid leftward triangle (mirror of `RightFilled`).
+    LeftFilled,
+    /// U+E0B3 — outline leftward triangle (mirror of `RightThin`).
+    LeftThin,
+}
+
 #[derive(Clone, Copy)]
 enum RenderKind {
     Box(Strokes),
+    Powerline(PowerlineTriangle),
     Arc(ArcCorner),
     Diagonal(Diagonal),
     Quadrant(QuadrantMask),
@@ -127,10 +147,22 @@ enum RenderKind {
 
 fn lookup(c: char) -> Option<RenderKind> {
     let cp = c as u32;
-    if !(0x2500..=0x259F).contains(&cp) {
-        return None;
+    match cp {
+        0x2500..=0x259F => lookup_in_range(cp),
+        0xE0B0..=0xE0B3 => lookup_powerline(cp),
+        _ => None,
     }
-    lookup_in_range(cp)
+}
+
+fn lookup_powerline(cp: u32) -> Option<RenderKind> {
+    let kind = match cp {
+        0xE0B0 => PowerlineTriangle::RightFilled,
+        0xE0B1 => PowerlineTriangle::RightThin,
+        0xE0B2 => PowerlineTriangle::LeftFilled,
+        0xE0B3 => PowerlineTriangle::LeftThin,
+        _ => return None,
+    };
+    Some(RenderKind::Powerline(kind))
 }
 
 fn lookup_in_range(cp: u32) -> Option<RenderKind> {
@@ -375,6 +407,7 @@ fn white_paint() -> Paint<'static> {
 fn draw(kind: RenderKind, pixmap: &mut Pixmap, w: u32, h: u32) {
     match kind {
         RenderKind::Box(strokes) => draw_box(strokes, pixmap, w, h),
+        RenderKind::Powerline(triangle) => draw_powerline(triangle, pixmap, w, h),
         RenderKind::Arc(corner) => draw_arc(corner, pixmap, w, h),
         RenderKind::Diagonal(kind) => draw_diagonal(kind, pixmap, w, h),
         RenderKind::Quadrant(mask) => draw_quadrants(mask, pixmap, w, h),
@@ -540,6 +573,51 @@ fn draw_arc(corner: ArcCorner, pixmap: &mut Pixmap, w: u32, h: u32) {
 
     stroke_line(pixmap, stub_v.0, stub_v.1, stub_v.2, stub_v.3, light);
     stroke_line(pixmap, stub_h.0, stub_h.1, stub_h.2, stub_h.3, light);
+}
+
+fn draw_powerline(triangle: PowerlineTriangle, pixmap: &mut Pixmap, w: u32, h: u32) {
+    let wf = w as f32;
+    let hf = h as f32;
+    let mid_y = hf / 2.0;
+    let mut pb = PathBuilder::new();
+    match triangle {
+        PowerlineTriangle::RightFilled | PowerlineTriangle::RightThin => {
+            pb.move_to(0.0, 0.0);
+            pb.line_to(wf, mid_y);
+            pb.line_to(0.0, hf);
+        }
+        PowerlineTriangle::LeftFilled | PowerlineTriangle::LeftThin => {
+            pb.move_to(wf, 0.0);
+            pb.line_to(0.0, mid_y);
+            pb.line_to(wf, hf);
+        }
+    }
+    let filled = matches!(
+        triangle,
+        PowerlineTriangle::RightFilled | PowerlineTriangle::LeftFilled
+    );
+    if filled {
+        pb.close();
+        let Some(path) = pb.finish() else { return };
+        pixmap.fill_path(
+            &path,
+            &white_paint(),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    } else {
+        let Some(path) = pb.finish() else { return };
+        // Round join keeps the apex from spiking out via miter at the
+        // acute angle the two segments form.
+        let stroke = SkStroke {
+            width: light_width(h),
+            line_cap: LineCap::Butt,
+            line_join: LineJoin::Round,
+            ..SkStroke::default()
+        };
+        pixmap.stroke_path(&path, &white_paint(), &stroke, Transform::identity(), None);
+    }
 }
 
 fn draw_diagonal(kind: Diagonal, pixmap: &mut Pixmap, w: u32, h: u32) {
@@ -756,5 +834,122 @@ mod tests {
         assert!(rasterize('a', &m).is_none());
         // Dashed variants live in U+2504..U+250B; not in the registry yet.
         assert!(rasterize('\u{2504}', &m).is_none());
+        // Powerline PUA codepoints adjacent to the supported set
+        // (U+E0B0..=U+E0B3) — these neighbors are not registered.
+        assert!(rasterize('\u{E0AF}', &m).is_none());
+        assert!(rasterize('\u{E0B4}', &m).is_none());
+    }
+
+    #[test]
+    fn supports_powerline_triangle_codepoints() {
+        for cp in [0xE0B0u32, 0xE0B1, 0xE0B2, 0xE0B3] {
+            let c = char::from_u32(cp).unwrap();
+            assert!(supports(c), "expected procedural support for U+{cp:04X}");
+        }
+    }
+
+    #[test]
+    fn powerline_right_filled_paints_solid_left_edge() {
+        // U+E0B0's defining feature: the left column of pixels carries
+        // ink — that's the seam that has to meet the previous segment
+        // flush. A font reporting bearing_x > 0 used to break this.
+        // Skip the y = 0 and y = h-1 corner rows: those touch the
+        // triangle at a single vertex, so anti-aliased coverage there
+        // is platform-dependent and not the property we're testing.
+        let m = metrics(12, 24);
+        let g = rasterize('\u{E0B0}', &m).unwrap();
+        let w = g.width as usize;
+        let h = g.height as usize;
+        for row in 1..h - 1 {
+            let alpha = g.data[row * w];
+            assert!(
+                alpha > 0,
+                "expected ink at left edge row {row}, got {alpha}"
+            );
+        }
+        // Apex sits at the right-mid edge.
+        let mid = h / 2;
+        assert!(g.data[mid * w + (w - 1)] > 0);
+        // Deep right-side interior pixels (far from the hypotenuse) are
+        // outside the triangle entirely — well-defined zero.
+        assert_eq!(g.data[w - 2], 0, "(w-2, 0) is clearly outside");
+        assert_eq!(
+            g.data[(h - 1) * w + (w - 2)],
+            0,
+            "(w-2, h-1) is clearly outside"
+        );
+    }
+
+    #[test]
+    fn powerline_left_filled_mirrors_right_filled_geometry() {
+        // At mid-height both variants fill the entire row (the apex of
+        // one and the vertical edge of the other share that scanline),
+        // so the mirror property has to be probed at a row where the
+        // triangle is a sliver. At y = 1 with a 12×24 cell, RightFilled
+        // occupies a left-edge sliver and LeftFilled occupies a right-
+        // edge sliver — they're complements there.
+        let m = metrics(12, 24);
+        let right = rasterize('\u{E0B0}', &m).unwrap();
+        let left = rasterize('\u{E0B2}', &m).unwrap();
+        let w = right.width as usize;
+        let h = right.height as usize;
+        let mid = h / 2;
+
+        // Apexes point opposite ways.
+        assert!(
+            right.data[mid * w + (w - 1)] > 0,
+            "right-filled apex at right-mid edge"
+        );
+        assert!(left.data[mid * w] > 0, "left-filled apex at left-mid edge");
+
+        // y = 1 sliver: left column is inside RightFilled, outside
+        // LeftFilled.
+        assert!(right.data[w] > 0, "right-filled left sliver at y=1");
+        assert_eq!(left.data[w], 0, "left-filled has no left ink at y=1");
+
+        // And mirrored: right column is inside LeftFilled, outside
+        // RightFilled.
+        assert!(
+            left.data[w + (w - 1)] > 0,
+            "left-filled right sliver at y=1"
+        );
+        assert_eq!(
+            right.data[w + (w - 1)],
+            0,
+            "right-filled has no right ink at y=1"
+        );
+    }
+
+    #[test]
+    fn powerline_thin_variant_leaves_interior_empty() {
+        // The thin variants draw only the hypotenuse. A pixel deep in
+        // the lower-left interior (far from any stroke) must stay
+        // unmarked; otherwise the triangle has been accidentally
+        // filled.
+        let m = metrics(16, 32);
+        let g = rasterize('\u{E0B1}', &m).unwrap();
+        let w = g.width as usize;
+        let h = g.height as usize;
+        // Pixel (1, h-8) sits well inside the lower-left region —
+        // distance from the hypotenuse y + x = h is ≈ 5 px, comfortably
+        // outside the ~3 px stroke.
+        assert_eq!(
+            g.data[(h - 8) * w + 1],
+            0,
+            "thin variant should leave deep interior clear"
+        );
+    }
+
+    #[test]
+    fn powerline_rasterize_returns_full_cell_dimensions() {
+        // bearing_x = 0 and size = cell are what make the sprite snap to
+        // the cell boundary. Verify that the metrics flow through.
+        let m = metrics(10, 20);
+        let g = rasterize('\u{E0B0}', &m).unwrap();
+        assert_eq!(g.width, 10);
+        assert_eq!(g.height, 20);
+        assert_eq!(g.bearing_x, 0);
+        assert_eq!(g.bearing_y, 16);
+        assert_eq!(g.format, GlyphFormat::Alpha);
     }
 }
