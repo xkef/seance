@@ -850,52 +850,74 @@ mod tests {
 
     #[test]
     fn powerline_right_filled_paints_solid_left_edge() {
-        // U+E0B0's defining feature: the entire left edge of the cell is
+        // U+E0B0's defining feature: the left column of pixels carries
         // ink — that's the seam that has to meet the previous segment
         // flush. A font reporting bearing_x > 0 used to break this.
+        // Skip the y = 0 and y = h-1 corner rows: those touch the
+        // triangle at a single vertex, so anti-aliased coverage there
+        // is platform-dependent and not the property we're testing.
         let m = metrics(12, 24);
         let g = rasterize('\u{E0B0}', &m).unwrap();
         let w = g.width as usize;
         let h = g.height as usize;
-        for row in 0..h {
+        for row in 1..h - 1 {
             let alpha = g.data[row * w];
             assert!(
                 alpha > 0,
                 "expected ink at left edge row {row}, got {alpha}"
             );
         }
-        // Apex of the triangle sits at the right edge, mid-height.
+        // Apex sits at the right-mid edge.
         let mid = h / 2;
         assert!(g.data[mid * w + (w - 1)] > 0);
-        // Corners on the right edge are outside the triangle.
-        assert_eq!(g.data[w - 1], 0);
-        assert_eq!(g.data[(h - 1) * w + (w - 1)], 0);
+        // Deep right-side interior pixels (far from the hypotenuse) are
+        // outside the triangle entirely — well-defined zero.
+        assert_eq!(g.data[w - 2], 0, "(w-2, 0) is clearly outside");
+        assert_eq!(
+            g.data[(h - 1) * w + (w - 2)],
+            0,
+            "(w-2, h-1) is clearly outside"
+        );
     }
 
     #[test]
     fn powerline_left_filled_mirrors_right_filled_geometry() {
-        // tiny-skia rasterizes the path-on-edge case slightly
-        // differently at x = 0 vs x = w (the LeftFilled triangle's
-        // vertical edge sits on the right cell boundary), so an exact
-        // per-pixel mirror isn't guaranteed. Verify the geometric
-        // signature instead: the apex pixel of each variant points the
-        // opposite way.
+        // At mid-height both variants fill the entire row (the apex of
+        // one and the vertical edge of the other share that scanline),
+        // so the mirror property has to be probed at a row where the
+        // triangle is a sliver. At y = 1 with a 12×24 cell, RightFilled
+        // occupies a left-edge sliver and LeftFilled occupies a right-
+        // edge sliver — they're complements there.
         let m = metrics(12, 24);
         let right = rasterize('\u{E0B0}', &m).unwrap();
         let left = rasterize('\u{E0B2}', &m).unwrap();
         let w = right.width as usize;
         let h = right.height as usize;
         let mid = h / 2;
+
+        // Apexes point opposite ways.
         assert!(
             right.data[mid * w + (w - 1)] > 0,
             "right-filled apex at right-mid edge"
         );
         assert!(left.data[mid * w] > 0, "left-filled apex at left-mid edge");
-        // And the corners flip: right-filled has solid left column, the
-        // left-filled has solid right column.
-        assert!(right.data[0] > 0, "right-filled top-left corner");
-        assert_eq!(left.data[0], 0, "left-filled top-left corner empty");
-        assert!(left.data[w - 1] > 0, "left-filled top-right corner solid");
+
+        // y = 1 sliver: left column is inside RightFilled, outside
+        // LeftFilled.
+        assert!(right.data[w] > 0, "right-filled left sliver at y=1");
+        assert_eq!(left.data[w], 0, "left-filled has no left ink at y=1");
+
+        // And mirrored: right column is inside LeftFilled, outside
+        // RightFilled.
+        assert!(
+            left.data[w + (w - 1)] > 0,
+            "left-filled right sliver at y=1"
+        );
+        assert_eq!(
+            right.data[w + (w - 1)],
+            0,
+            "right-filled has no right ink at y=1"
+        );
     }
 
     #[test]
