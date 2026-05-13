@@ -13,4 +13,5 @@ pub enum AppCommand {
     SelectAll,
     FontSizeDelta(i8),
     FontSizeReset,
+    ToggleFullscreen,
 }
