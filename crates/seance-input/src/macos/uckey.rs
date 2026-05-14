@@ -136,9 +136,13 @@ impl UcKey {
 }
 
 fn carbon_mod_byte(mods: &Modifiers) -> u32 {
-    let mut byte = CARBON_OPTION;
-    if mods.state().shift_key() {
+    let state = mods.state();
+    let mut byte = 0;
+    if state.shift_key() {
         byte |= CARBON_SHIFT;
+    }
+    if state.alt_key() {
+        byte |= CARBON_OPTION;
     }
     byte
 }

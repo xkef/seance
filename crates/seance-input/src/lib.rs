@@ -324,9 +324,20 @@ impl InputHandler {
 
         #[cfg(target_os = "macos")]
         let composed = {
-            let alt_held = modifiers.state().alt_key();
+            let state = modifiers.state();
+            let alt_held = state.alt_key();
             let right = macos::uckey::right_option_held(modifiers);
             if composer_side(self.option_as_alt, alt_held, right) {
+                self.uckey.translate(code, modifiers)
+            } else if !alt_held
+                && !state.control_key()
+                && !state.super_key()
+                && event.text.as_deref().is_none_or(str::is_empty)
+            {
+                // Dead-key recovery: bare `^` and Shift+`^` (grave) on ISO
+                // layouts come through winit with empty text because
+                // NSTextInputClient buffers the composition. UCKeyTranslate
+                // with the no-dead-keys mask resolves the glyph synchronously.
                 self.uckey.translate(code, modifiers)
             } else {
                 None
