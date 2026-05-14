@@ -56,6 +56,9 @@ jobs:
       - name: Setup macOS sysroot
         run: tools/setup-sysroot.sh
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: "false"
+          key: no-cargo-bin
       - run: cargo build --workspace --all-targets
 
   clippy:
@@ -75,6 +78,9 @@ jobs:
       - name: Setup macOS sysroot
         run: tools/setup-sysroot.sh
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: "false"
+          key: no-cargo-bin
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
@@ -92,6 +98,9 @@ jobs:
       - name: Setup macOS sysroot
         run: tools/setup-sysroot.sh
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: "false"
+          key: no-cargo-bin
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
