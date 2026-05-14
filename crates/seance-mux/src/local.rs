@@ -69,6 +69,9 @@ impl Domain for LocalDomain {
         let vt = spawn_vt_session(options.into(), move |event| {
             let local_event = match event {
                 VtEvent::ContentDirty => LocalDomainEvent::ContentDirty { pane: pane_ref },
+                VtEvent::ClipboardActivity => {
+                    LocalDomainEvent::ClipboardActivity { pane: pane_ref }
+                }
                 VtEvent::Exited => LocalDomainEvent::Exited { pane: pane_ref },
             };
             let _ = pending_tx.send(local_event);
@@ -83,6 +86,13 @@ impl Domain for LocalDomain {
         while let Ok(event) = self.pending_rx.try_recv() {
             match event {
                 LocalDomainEvent::ContentDirty { .. } => {}
+                LocalDomainEvent::ClipboardActivity { pane } => {
+                    if let Some(local) = self.panes.get(&pane) {
+                        for request in local.vt.drain_clipboard_requests() {
+                            sink(DomainEvent::ClipboardRequest { pane, request });
+                        }
+                    }
+                }
                 LocalDomainEvent::Exited { pane } => {
                     if let Some(local) = self.panes.get_mut(&pane) {
                         local.exited = true;
@@ -219,6 +229,7 @@ fn image_digest(width: u32, height: u32, rgba: &[u8]) -> [u8; 32] {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LocalDomainEvent {
     ContentDirty { pane: PaneRef },
+    ClipboardActivity { pane: PaneRef },
     Exited { pane: PaneRef },
 }
 

@@ -13,9 +13,11 @@ use winit::dpi::PhysicalSize;
 use winit::event::Modifiers;
 use winit::window::{CursorIcon, Window};
 
+use seance_config::ClipboardPolicy;
 use seance_mux::{
-    ClientRefresh, CursorShape as MuxCursorShape, DetectedLink, GridPos, LinkModifiers, LinkTarget,
-    LocalDomain, MuxClient, PaneRef, Resize, TerminalModes, ThemeColors,
+    ClientRefresh, ClipboardRequest, CursorShape as MuxCursorShape, DetectedLink, GridPos,
+    LinkModifiers, LinkTarget, LocalDomain, MuxClient, PaneRef, Resize, TerminalModes, ThemeColors,
+    encode_osc52_reply,
 };
 use seance_render::{HoveredLinkRange, RenderInputs, TerminalRenderer};
 
@@ -299,5 +301,66 @@ impl SurfaceState {
             bytes.extend_from_slice(b"\x1b[201~");
         }
         self.write_to_pty(bytes.freeze());
+    }
+
+    /// Honor an OSC 52 clipboard request from the active pane, gated by the
+    /// user's `clipboard.{read,write}` policy. Writes go directly to the OS
+    /// clipboard; reads round-trip through arboard and produce an OSC 52
+    /// reply that is queued back to the PTY.
+    pub(crate) fn handle_clipboard_request(
+        &mut self,
+        request: ClipboardRequest,
+        read_policy: ClipboardPolicy,
+        write_policy: ClipboardPolicy,
+    ) {
+        match request {
+            ClipboardRequest::Write(data) => match write_policy {
+                ClipboardPolicy::Allow => {
+                    let Ok(text) = std::str::from_utf8(&data) else {
+                        tracing::warn!(
+                            "OSC 52 write payload was not valid UTF-8; dropping {} bytes",
+                            data.len(),
+                        );
+                        return;
+                    };
+                    if let Ok(mut cb) = arboard::Clipboard::new()
+                        && let Err(err) = cb.set_text(text)
+                    {
+                        tracing::warn!("OSC 52 clipboard write failed: {err}");
+                    }
+                }
+                ClipboardPolicy::Ask => {
+                    // The confirm-overlay modal lives behind the M3 UI work
+                    // (#6). Until that lands, fall back to deny so an
+                    // unprompted application can't silently rewrite the
+                    // system clipboard.
+                    tracing::info!(
+                        "OSC 52 write denied: clipboard.write = \"ask\" and no prompt UI yet; \
+                         set clipboard.write = \"allow\" in config.toml to permit",
+                    );
+                }
+                ClipboardPolicy::Deny => {
+                    tracing::debug!("OSC 52 write denied by clipboard.write policy");
+                }
+            },
+            ClipboardRequest::Read => match read_policy {
+                ClipboardPolicy::Allow => {
+                    let Ok(mut cb) = arboard::Clipboard::new() else {
+                        return;
+                    };
+                    let text = cb.get_text().unwrap_or_default();
+                    self.write_to_pty(encode_osc52_reply(text.as_bytes()));
+                }
+                ClipboardPolicy::Ask => {
+                    tracing::info!(
+                        "OSC 52 read denied: clipboard.read = \"ask\" and no prompt UI yet; \
+                         set clipboard.read = \"allow\" in config.toml to permit",
+                    );
+                }
+                ClipboardPolicy::Deny => {
+                    tracing::debug!("OSC 52 read denied by clipboard.read policy");
+                }
+            },
+        }
     }
 }

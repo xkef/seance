@@ -5,6 +5,7 @@
 //! [`VtSnapshot`] values through [`SnapshotFrameSource`]. [`spawn_vt_session`]
 //! starts the Unix IO actor that owns VT + PTY.
 
+mod clipboard;
 mod core;
 mod frame;
 mod kitty_graphics;
@@ -18,6 +19,7 @@ mod terminal;
 #[doc(hidden)]
 pub mod test_support;
 
+pub use clipboard::{ClipboardRequest, encode_osc52_reply};
 pub use core::{DEFAULT_MAX_SCROLLBACK, VtCoreError};
 pub use frame::{
     CellAttrs, CellColor, CellView, CellVisitor, CursorInfo, CursorShape, DirtySnapshot,

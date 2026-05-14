@@ -15,6 +15,7 @@ use bytes::{Buf, Bytes};
 
 pub use seance_protocol::frame::{Resize, ThemeColors};
 
+use crate::clipboard::ClipboardRequest;
 use crate::core::VtCoreError;
 use crate::frame::CursorShape;
 use crate::snapshot::VtSnapshot;
@@ -61,9 +62,17 @@ impl Default for VtSessionOptions {
 }
 
 /// Public events emitted by the VT actor.
+///
+/// All variants are pure wake-up signals — actual payloads (snapshots,
+/// clipboard requests) live in side-channels so the event itself can stay
+/// `Copy + Eq` for cheap deduplication.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VtEvent {
     ContentDirty,
+    /// One or more OSC 52 clipboard requests have been queued by the VT
+    /// thread. The consumer should drain them via
+    /// [`VtSessionHandle::drain_clipboard_requests`].
+    ClipboardActivity,
     Exited,
 }
 
@@ -173,12 +182,40 @@ impl std::error::Error for VtSessionError {
     }
 }
 
+/// Cross-thread queue for OSC 52 clipboard requests parsed by the actor. The
+/// actor pushes, the UI thread drains. The shared mutex is fine here because
+/// pushes happen at byte-feed rate (rare) and drains happen on the UI thread
+/// at event-loop rate.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ClipboardQueue {
+    inner: Arc<Mutex<VecDeque<ClipboardRequest>>>,
+}
+
+impl ClipboardQueue {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn push_many(&self, requests: impl IntoIterator<Item = ClipboardRequest>) -> bool {
+        let mut guard = self.inner.lock().expect("clipboard queue poisoned");
+        let before = guard.len();
+        guard.extend(requests);
+        guard.len() > before
+    }
+
+    fn drain(&self) -> Vec<ClipboardRequest> {
+        let mut guard = self.inner.lock().expect("clipboard queue poisoned");
+        guard.drain(..).collect()
+    }
+}
+
 /// Handle used by the UI thread to command a VT actor and read snapshots.
 pub struct VtSessionHandle {
     commands: mpsc::Sender<VtCommand>,
     poller: Arc<polling::Poller>,
     slot: SnapshotSlot,
     content_dirty_pending: Arc<AtomicBool>,
+    clipboard: ClipboardQueue,
     join: Option<JoinHandle<()>>,
 }
 
@@ -189,6 +226,14 @@ impl VtSessionHandle {
 
     pub fn clear_content_dirty_pending(&self) {
         self.content_dirty_pending.store(false, Ordering::SeqCst);
+    }
+
+    /// Drain and return any OSC 52 clipboard requests parsed by the actor.
+    /// Returns an empty vec when nothing is pending — callers wake on
+    /// [`VtEvent::ClipboardActivity`] but should treat that signal as a
+    /// hint and tolerate spurious drains.
+    pub fn drain_clipboard_requests(&self) -> Vec<ClipboardRequest> {
+        self.clipboard.drain()
     }
 
     pub fn write(&self, bytes: Bytes) -> Result<(), VtSessionError> {
@@ -460,6 +505,7 @@ impl SyncOutputGate {
 struct ContentNotifier<F> {
     slot: SnapshotSlot,
     content_dirty_pending: Arc<AtomicBool>,
+    clipboard: ClipboardQueue,
     event_sink: F,
 }
 
@@ -471,6 +517,15 @@ where
         self.slot.publish(snapshot);
         if !self.content_dirty_pending.swap(true, Ordering::SeqCst) {
             (self.event_sink)(VtEvent::ContentDirty);
+        }
+    }
+
+    fn forward_clipboard(&self, requests: Vec<ClipboardRequest>) {
+        if requests.is_empty() {
+            return;
+        }
+        if self.clipboard.push_many(requests) {
+            (self.event_sink)(VtEvent::ClipboardActivity);
         }
     }
 
@@ -501,11 +556,13 @@ mod unix_actor {
         let (command_tx, command_rx) = mpsc::channel();
         let slot = SnapshotSlot::new();
         let content_dirty_pending = Arc::new(AtomicBool::new(false));
+        let clipboard = ClipboardQueue::new();
         let (init_tx, init_rx) = mpsc::sync_channel(1);
 
         let thread_poller = Arc::clone(&poller);
         let thread_slot = slot.clone();
         let thread_pending = Arc::clone(&content_dirty_pending);
+        let thread_clipboard = clipboard.clone();
 
         let join = thread::Builder::new()
             .name("seance-vt-actor".into())
@@ -513,6 +570,7 @@ mod unix_actor {
                 let notifier = ContentNotifier {
                     slot: thread_slot,
                     content_dirty_pending: thread_pending,
+                    clipboard: thread_clipboard,
                     event_sink,
                 };
                 match VtActor::new(options, command_rx, thread_poller, notifier) {
@@ -532,6 +590,7 @@ mod unix_actor {
                 poller,
                 slot,
                 content_dirty_pending,
+                clipboard,
                 join: Some(join),
             }),
             Ok(Err(err)) => {
@@ -927,6 +986,8 @@ mod unix_actor {
             for bytes in self.core.drain_responses() {
                 self.pending_writes.push(bytes);
             }
+            self.notifier
+                .forward_clipboard(self.core.drain_clipboard_requests());
         }
 
         /// Publish a snapshot only if the parse produced visible content
@@ -995,6 +1056,7 @@ mod unix_actor {
             SnapshotSlot,
             Arc<AtomicBool>,
             Arc<Mutex<Vec<VtEvent>>>,
+            ClipboardQueue,
         );
 
         enum ScriptRead {
@@ -1081,11 +1143,13 @@ mod unix_actor {
             let (tx, rx) = mpsc::channel();
             let slot = SnapshotSlot::new();
             let pending = Arc::new(AtomicBool::new(false));
+            let clipboard = ClipboardQueue::new();
             let events = Arc::new(Mutex::new(Vec::new()));
             let sink_events = Arc::clone(&events);
             let notifier = ContentNotifier {
                 slot: slot.clone(),
                 content_dirty_pending: Arc::clone(&pending),
+                clipboard: clipboard.clone(),
                 event_sink: Box::new(move |event| sink_events.lock().unwrap().push(event))
                     as TestSink,
             };
@@ -1104,7 +1168,7 @@ mod unix_actor {
                 notifier,
             )
             .expect("scripted actor should construct");
-            (tx, actor, slot, pending, events)
+            (tx, actor, slot, pending, events, clipboard)
         }
 
         fn clear_wake_state(pending: &AtomicBool, events: &Mutex<Vec<VtEvent>>) {
@@ -1114,14 +1178,14 @@ mod unix_actor {
 
         #[test]
         fn scripted_actor_publishes_initial_snapshot() {
-            let (_tx, _actor, slot, _pending, events) = actor_with_script([]);
+            let (_tx, _actor, slot, _pending, events, _clip) = actor_with_script([]);
             assert!(slot.latest_snapshot().is_some());
             assert_eq!(events.lock().unwrap().as_slice(), &[VtEvent::ContentDirty]);
         }
 
         #[test]
         fn scripted_actor_preserves_write_order() {
-            let (tx, mut actor, _slot, _pending, _events) = actor_with_script([]);
+            let (tx, mut actor, _slot, _pending, _events, _clip) = actor_with_script([]);
             tx.send(VtCommand::Write(Bytes::from_static(b"a"))).unwrap();
             tx.send(VtCommand::Write(Bytes::from_static(b"bc")))
                 .unwrap();
@@ -1134,7 +1198,7 @@ mod unix_actor {
 
         #[test]
         fn scripted_actor_reads_pty_bytes_into_vt_core() {
-            let (_tx, mut actor, slot, pending, events) = actor_with_script([]);
+            let (_tx, mut actor, slot, pending, events, _clip) = actor_with_script([]);
             clear_wake_state(&pending, &events);
             actor.pty.push_read(b"hi");
 
@@ -1148,7 +1212,7 @@ mod unix_actor {
 
         #[test]
         fn scripted_actor_applies_visible_commands_without_reordering() {
-            let (tx, mut actor, slot, pending, events) = actor_with_script([]);
+            let (tx, mut actor, slot, pending, events, _clip) = actor_with_script([]);
             clear_wake_state(&pending, &events);
             tx.send(VtCommand::Resize {
                 cols: 10,
@@ -1179,7 +1243,7 @@ mod unix_actor {
 
         #[test]
         fn scripted_actor_ack_does_not_publish() {
-            let (tx, mut actor, slot, pending, events) = actor_with_script([]);
+            let (tx, mut actor, slot, pending, events, _clip) = actor_with_script([]);
             let generation = slot.latest_snapshot().unwrap().generation;
             clear_wake_state(&pending, &events);
             tx.send(VtCommand::AckRendered(generation)).unwrap();
@@ -1192,7 +1256,7 @@ mod unix_actor {
 
         #[test]
         fn dirty_rows_survive_actor_publication_until_render_ack() {
-            let (tx, mut actor, slot, pending, events) = actor_with_script([]);
+            let (tx, mut actor, slot, pending, events, _clip) = actor_with_script([]);
             let initial = slot.latest_snapshot().unwrap();
             tx.send(VtCommand::AckRendered(initial.generation)).unwrap();
             assert!(!actor.drain_and_apply_commands());
@@ -1217,7 +1281,8 @@ mod unix_actor {
 
         #[test]
         fn scripted_actor_reports_eof_deterministically() {
-            let (_tx, mut actor, _slot, _pending, _events) = actor_with_script([ScriptRead::Eof]);
+            let (_tx, mut actor, _slot, _pending, _events, _clip) =
+                actor_with_script([ScriptRead::Eof]);
             assert!(matches!(actor.read_pty_batch(), Ok(ReadOutcome::Eof)));
         }
 
@@ -1227,7 +1292,7 @@ mod unix_actor {
             // readability after the shell's first write but before its second
             // — the exact race that paints the cleared-with-home-cursor frame
             // on Ctrl-L in release builds.
-            let (_tx, mut actor, slot, pending, events) = actor_with_script([
+            let (_tx, mut actor, slot, pending, events, _clip) = actor_with_script([
                 ScriptRead::Data(Bytes::from_static(b"\x1b[H\x1b[2J")),
                 ScriptRead::WouldBlock,
                 ScriptRead::Data(Bytes::from_static(b"$ ")),
@@ -1243,7 +1308,7 @@ mod unix_actor {
 
         #[test]
         fn read_pty_batch_settles_at_most_once_per_batch() {
-            let (_tx, mut actor, slot, pending, events) = actor_with_script([
+            let (_tx, mut actor, slot, pending, events, _clip) = actor_with_script([
                 ScriptRead::Data(Bytes::from_static(b"a")),
                 ScriptRead::WouldBlock,
                 ScriptRead::Data(Bytes::from_static(b"b")),
@@ -1262,6 +1327,34 @@ mod unix_actor {
                 matches!(actor.pty.reads.front(), Some(ScriptRead::Data(_))),
                 "third chunk must remain queued for the next batch",
             );
+        }
+
+        #[test]
+        fn osc52_write_surfaces_clipboard_request_and_wakes() {
+            let (_tx, mut actor, _slot, pending, events, clipboard) = actor_with_script([]);
+            clear_wake_state(&pending, &events);
+            // OSC 52 ; c ; aGVsbG8= BEL  → set clipboard to "hello"
+            actor.pty.push_read(b"\x1b]52;c;aGVsbG8=\x07");
+
+            assert!(matches!(actor.read_pty_batch(), Ok(ReadOutcome::Alive)));
+
+            let requests = clipboard.drain();
+            assert_eq!(
+                requests,
+                vec![ClipboardRequest::Write(Bytes::from_static(b"hello"))],
+            );
+            assert!(events.lock().unwrap().contains(&VtEvent::ClipboardActivity),);
+        }
+
+        #[test]
+        fn osc52_read_request_surfaces_distinct_variant() {
+            let (_tx, mut actor, _slot, pending, events, clipboard) = actor_with_script([]);
+            clear_wake_state(&pending, &events);
+            actor.pty.push_read(b"\x1b]52;c;?\x07");
+
+            assert!(matches!(actor.read_pty_batch(), Ok(ReadOutcome::Alive)));
+
+            assert_eq!(clipboard.drain(), vec![ClipboardRequest::Read]);
         }
     }
 }
@@ -1316,6 +1409,7 @@ mod tests {
         let notifier = ContentNotifier {
             slot: slot.clone(),
             content_dirty_pending: Arc::clone(&pending),
+            clipboard: ClipboardQueue::new(),
             event_sink: move |event| sink_events.lock().unwrap().push(event),
         };
 
@@ -1478,6 +1572,7 @@ mod tests {
             poller,
             slot: SnapshotSlot::new(),
             content_dirty_pending: Arc::new(AtomicBool::new(false)),
+            clipboard: ClipboardQueue::new(),
             join: Some(join),
         };
 

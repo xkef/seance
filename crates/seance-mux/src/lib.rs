@@ -30,6 +30,7 @@ pub use seance_protocol::frame::{
 pub use seance_protocol::identity::{DomainId, ImageId, ImageKey, PaneRef};
 pub use seance_protocol::mux::LineContent;
 pub use seance_protocol::transport::{InProcessTransport, TransportFrame};
+pub use seance_vt::{ClipboardRequest, encode_osc52_reply};
 
 #[cfg(test)]
 mod tests;

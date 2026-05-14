@@ -123,8 +123,14 @@ seance-render-test -> seance-vt, seance-protocol, seance-frame
   rebuild still walks the full grid pending shape cache (#21).
 - **DEC 2026 synchronized output** [IMPLEMENTED] — VT Actor publication gate
   with a 150 ms watchdog.
-- **OSC 52 clipboard** [PLANNED: [M3][m3]] — read/write with paste-protection
-  prompt.
+- **OSC 52 clipboard** [IMPLEMENTED] — VT Core parses
+  `OSC 52 ; <sel> ; <base64|?> ST`, emits `ClipboardRequest::{Write, Read}`
+  through the VT actor, and the App layer
+  (`SurfaceState::handle_clipboard_request`) routes them through `arboard`,
+  echoing reads back via an OSC 52 reply. Gated by
+  `clipboard.{read,write} = "allow" | "ask" | "deny"`, both default `deny`;
+  users opt in by setting `allow` (or `ask` once the M3 confirm-overlay UI
+  ships).
 - **Kitty graphics protocol** [IMPLEMENTED] — transmission, decode (PNG and raw
   24/32-bit), per-image cache with 320 MB storage cap, placement resolution.
   Virtual placeholders (U+10EEEE), animation, and iTerm2 inline images remain

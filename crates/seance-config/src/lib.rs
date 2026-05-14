@@ -13,7 +13,7 @@ pub mod theme;
 
 pub use diff::ConfigDiff;
 pub use schema::{
-    ClipboardConfig, Config, CursorConfig, CursorStyle, FontConfig, InputConfig,
+    ClipboardConfig, ClipboardPolicy, Config, CursorConfig, CursorStyle, FontConfig, InputConfig,
     LinkModifiersConfig, LinksConfig, MacosOptionAsAlt, MouseConfig, ScrollbackConfig,
     WindowConfig,
 };
@@ -173,10 +173,32 @@ mod tests {
     #[test]
     fn clipboard_defaults_match_spec() {
         let cfg = Config::default();
-        assert!(cfg.clipboard.read);
-        assert!(cfg.clipboard.write);
+        // Both default to deny — users opt in to OSC 52 explicitly. See the
+        // `ClipboardPolicy` doc-comment for the `ask` upgrade path.
+        assert_eq!(cfg.clipboard.read, ClipboardPolicy::Deny);
+        assert_eq!(cfg.clipboard.write, ClipboardPolicy::Deny);
         assert!(cfg.clipboard.paste_protection);
         assert!(!cfg.clipboard.copy_on_select);
+    }
+
+    #[test]
+    fn clipboard_policy_parses_each_variant() {
+        for (raw, want) in [
+            ("allow", ClipboardPolicy::Allow),
+            ("ask", ClipboardPolicy::Ask),
+            ("deny", ClipboardPolicy::Deny),
+        ] {
+            let src = format!(
+                r#"
+                [clipboard]
+                read = "{raw}"
+                write = "{raw}"
+                "#,
+            );
+            let cfg: Config = toml::from_str(&src).unwrap();
+            assert_eq!(cfg.clipboard.read, want);
+            assert_eq!(cfg.clipboard.write, want);
+        }
     }
 
     #[test]
