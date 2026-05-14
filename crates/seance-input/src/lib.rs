@@ -133,6 +133,12 @@ fn map_mouse_button(button: MouseButton) -> mouse::Button {
 pub struct InputHandler {
     key_encoder: key::Encoder<'static>,
     mouse_encoder: mouse::Encoder<'static>,
+    /// Last size pushed to `mouse_encoder` via `set_size`. Tracked here
+    /// because the libghostty wrapper resets the encoder's last-cell
+    /// motion dedup state on every `set_size` call — even when the
+    /// value is unchanged — so we must skip the call when nothing has
+    /// actually changed.
+    mouse_size: Option<MouseSize>,
     option_as_alt: OptionAsAlt,
     #[cfg(target_os = "macos")]
     uckey: macos::uckey::UcKey,
@@ -145,9 +151,17 @@ impl Default for InputHandler {
         // xterm/Ghostty defaults). Without this, the encoder drops the ALT
         // bit and just emits the un-prefixed character.
         key_encoder.set_alt_esc_prefix(true);
+        let mut mouse_encoder = mouse::Encoder::new().expect("mouse encoder");
+        // Dedup motion to one report per cell change. Without this, every
+        // sub-pixel cursor jitter during a held button forwards a motion
+        // byte; tmux then reads `Press → Motion → Release` for what was a
+        // simple click and counts it as a drag, breaking the multi-click
+        // detector that drives `TripleClick1Pane` / copy-mode entry.
+        mouse_encoder.set_track_last_cell(true);
         Self {
             key_encoder,
-            mouse_encoder: mouse::Encoder::new().expect("mouse encoder"),
+            mouse_encoder,
+            mouse_size: None,
             option_as_alt: OptionAsAlt::default(),
             #[cfg(target_os = "macos")]
             uckey: macos::uckey::UcKey::new(),
@@ -275,16 +289,19 @@ impl InputHandler {
         } else {
             mouse::Format::X10
         });
-        self.mouse_encoder.set_size(mouse::EncoderSize {
-            screen_width: input.size.screen_width,
-            screen_height: input.size.screen_height,
-            cell_width: input.size.cell_width.max(1),
-            cell_height: input.size.cell_height.max(1),
-            padding_top: input.size.padding_top,
-            padding_bottom: input.size.padding_bottom,
-            padding_left: input.size.padding_left,
-            padding_right: input.size.padding_right,
-        });
+        if self.mouse_size != Some(input.size) {
+            self.mouse_encoder.set_size(mouse::EncoderSize {
+                screen_width: input.size.screen_width,
+                screen_height: input.size.screen_height,
+                cell_width: input.size.cell_width.max(1),
+                cell_height: input.size.cell_height.max(1),
+                padding_top: input.size.padding_top,
+                padding_bottom: input.size.padding_bottom,
+                padding_left: input.size.padding_left,
+                padding_right: input.size.padding_right,
+            });
+            self.mouse_size = Some(input.size);
+        }
         self.mouse_encoder
             .set_any_button_pressed(input.any_button_pressed);
 
@@ -507,6 +524,21 @@ mod tests {
             modes(MouseTracking::Button, true),
         );
         assert!(out.is_some());
+    }
+
+    #[test]
+    fn motion_at_same_cell_dedupes() {
+        let mut h = InputHandler::new();
+        let m = modes(MouseTracking::Button, true);
+        // Seed the encoder's last_cell with a Press at (0,0).
+        h.encode_mouse_event(input(MouseAction::Press, Some(MouseButton::Left), true), m)
+            .expect("press should encode and seed last_cell");
+        // A subsequent Motion at the same cell must not emit bytes —
+        // tmux's multi-click detector breaks if Press → Motion → Release
+        // arrives for every click of a triple-click.
+        let dup =
+            h.encode_mouse_event(input(MouseAction::Motion, Some(MouseButton::Left), true), m);
+        assert!(dup.is_none(), "motion at the same cell should dedup");
     }
 
     #[test]
