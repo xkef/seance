@@ -5,13 +5,13 @@
 //! clipboard, font size) are matched upstream before reaching here.
 
 mod keymap;
+#[cfg(target_os = "macos")]
+mod macos;
 
 use libghostty_vt::{key, mouse};
 use seance_protocol::frame::{MouseSize, MouseTracking, TerminalModes};
 use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton};
-use winit::keyboard::{Key, PhysicalKey};
-#[cfg(target_os = "macos")]
-use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+use winit::keyboard::PhysicalKey;
 
 /// Result of encoding a VT-bound key event.
 #[derive(Debug)]
@@ -50,6 +50,22 @@ impl OptionAsAlt {
             Self::Right => key::OptionAsAlt::Right,
             Self::Both => key::OptionAsAlt::True,
         }
+    }
+}
+
+/// Returns true when an Option-modified press should resolve through the
+/// macOS text composer (and therefore through `UCKeyTranslate` for dead
+/// keys) rather than emit an ESC-prefix. Composer side is the *opposite*
+/// of whatever side the configured policy treats as Alt.
+fn composer_side(policy: OptionAsAlt, alt_held: bool, right_option_held: bool) -> bool {
+    if !alt_held {
+        return false;
+    }
+    match policy {
+        OptionAsAlt::None => true,
+        OptionAsAlt::Left => right_option_held,
+        OptionAsAlt::Right => !right_option_held,
+        OptionAsAlt::Both => false,
     }
 }
 
@@ -117,6 +133,9 @@ fn map_mouse_button(button: MouseButton) -> mouse::Button {
 pub struct InputHandler {
     key_encoder: key::Encoder<'static>,
     mouse_encoder: mouse::Encoder<'static>,
+    option_as_alt: OptionAsAlt,
+    #[cfg(target_os = "macos")]
+    uckey: macos::uckey::UcKey,
 }
 
 impl Default for InputHandler {
@@ -129,6 +148,9 @@ impl Default for InputHandler {
         Self {
             key_encoder,
             mouse_encoder: mouse::Encoder::new().expect("mouse encoder"),
+            option_as_alt: OptionAsAlt::default(),
+            #[cfg(target_os = "macos")]
+            uckey: macos::uckey::UcKey::new(),
         }
     }
 }
@@ -142,6 +164,7 @@ impl InputHandler {
     /// with the `ALT_SIDE` bit on each event's mods) to decide whether to
     /// emit `ESC`-prefix for Option+key or pass the composed text through.
     pub fn set_option_as_alt(&mut self, mode: OptionAsAlt) {
+        self.option_as_alt = mode;
         self.key_encoder
             .set_macos_option_as_alt(mode.to_libghostty());
     }
@@ -299,11 +322,39 @@ impl InputHandler {
             return Vec::new();
         };
 
+        #[cfg(target_os = "macos")]
+        let composed = {
+            let state = modifiers.state();
+            let alt_held = state.alt_key();
+            let right = macos::uckey::right_option_held(modifiers);
+            if composer_side(self.option_as_alt, alt_held, right) {
+                self.uckey.translate(code, modifiers)
+            } else if !alt_held
+                && !state.control_key()
+                && !state.super_key()
+                && event.text.as_deref().is_none_or(str::is_empty)
+            {
+                // Dead-key recovery: bare `^` and Shift+`^` (grave) on ISO
+                // layouts come through winit with empty text because
+                // NSTextInputClient buffers the composition. UCKeyTranslate
+                // with the no-dead-keys mask resolves the glyph synchronously.
+                self.uckey.translate(code, modifiers)
+            } else {
+                None
+            }
+        };
+        #[cfg(not(target_os = "macos"))]
+        let composed: Option<String> = None;
+
         key_event
             .set_key(gk)
             .set_action(keymap::map_action(event.state))
             .set_mods(keymap::map_mods(modifiers));
-        if let Some(text) = event.text.as_deref().filter(|t| is_safe_encoder_text(t)) {
+        let utf8 = composed
+            .as_deref()
+            .or(event.text.as_deref())
+            .filter(|t| is_safe_encoder_text(t));
+        if let Some(text) = utf8 {
             key_event.set_utf8(Some(text));
         }
 
@@ -311,18 +362,10 @@ impl InputHandler {
         let _ = self.key_encoder.encode_to_vec(&key_event, &mut buf);
 
         if tracing::enabled!(tracing::Level::TRACE) {
-            let logical = match &event.logical_key {
-                Key::Character(s) => Some(s.as_str()),
-                _ => None,
-            };
-            #[cfg(target_os = "macos")]
-            let all_mods = event.text_with_all_modifiers();
-            #[cfg(not(target_os = "macos"))]
-            let all_mods: Option<&str> = None;
             tracing::trace!(
-                "encode_key: code={code:?} text={:?} logical={logical:?} all_mods={all_mods:?} \
-                 mods={:?} -> {buf:02x?}",
+                "encode_key: code={code:?} text={:?} composed={:?} mods={:?} -> {buf:02x?}",
                 event.text.as_deref(),
+                composed.as_deref(),
                 key_event.mods(),
             );
         }
@@ -586,5 +629,42 @@ mod tests {
             h.encode_alt_scroll(0, alt_scroll_modes(true, true, false))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn composer_side_short_circuits_without_alt() {
+        for policy in [
+            OptionAsAlt::None,
+            OptionAsAlt::Left,
+            OptionAsAlt::Right,
+            OptionAsAlt::Both,
+        ] {
+            assert!(!composer_side(policy, false, false));
+            assert!(!composer_side(policy, false, true));
+        }
+    }
+
+    #[test]
+    fn composer_side_policy_none_always_composes_when_alt_held() {
+        assert!(composer_side(OptionAsAlt::None, true, false));
+        assert!(composer_side(OptionAsAlt::None, true, true));
+    }
+
+    #[test]
+    fn composer_side_policy_both_never_composes() {
+        assert!(!composer_side(OptionAsAlt::Both, true, false));
+        assert!(!composer_side(OptionAsAlt::Both, true, true));
+    }
+
+    #[test]
+    fn composer_side_policy_left_composes_only_when_right_held() {
+        assert!(!composer_side(OptionAsAlt::Left, true, false));
+        assert!(composer_side(OptionAsAlt::Left, true, true));
+    }
+
+    #[test]
+    fn composer_side_policy_right_composes_only_when_left_held() {
+        assert!(composer_side(OptionAsAlt::Right, true, false));
+        assert!(!composer_side(OptionAsAlt::Right, true, true));
     }
 }
