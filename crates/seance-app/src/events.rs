@@ -7,7 +7,6 @@ use bytes::Bytes;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton};
 use winit::event_loop::ActiveEventLoop;
-use winit::keyboard::{Key, NamedKey};
 use winit::window::Fullscreen;
 
 use seance_input::{MouseAction, MouseEventInput, VtInput};
@@ -51,19 +50,6 @@ impl App {
                 surface.mark_dirty();
             }
             self.execute_app_command(event_loop, cmd);
-            return;
-        }
-
-        // Bare Enter on an active local selection: copy + flash + dismiss
-        // instead of forwarding to the PTY. Modified Enter (Ctrl/Shift/etc.)
-        // still forwards normally so existing shortcuts keep working.
-        if event.state == ElementState::Pressed
-            && matches!(event.logical_key, Key::Named(NamedKey::Enter))
-            && modifiers.state().is_empty()
-            && let Some(surface) = self.surface_mut()
-            && surface.has_selection()
-        {
-            surface.flash_copy_selection(SELECTION_FLASH);
             return;
         }
 
@@ -170,11 +156,15 @@ impl App {
         // the user is holding Shift to force local selection. The encoder
         // itself filters X10/Normal and the no-button-held case under 1002.
         if modes.mouse_tracking.reports_motion() && !shift_held {
+            // libghostty's encoder drops button-event (DECSET 1002)
+            // motion when `button` is `None`, so we must forward the
+            // button currently held to keep drag bytes flowing. tmux
+            // relies on this drag stream to resize panes.
             let input = MouseEventInput {
                 action: MouseAction::Motion,
-                button: None,
+                button: surface.mouse.drag_button,
                 position_px: clamp_position(position),
-                any_button_pressed: surface.mouse.is_down,
+                any_button_pressed: surface.mouse.drag_button.is_some(),
                 mods: surface.modifiers,
                 size: surface.renderer.mouse_size(),
             };
@@ -208,12 +198,22 @@ impl App {
                 ElementState::Pressed => MouseAction::Press,
                 ElementState::Released => MouseAction::Release,
             };
-            // Update `is_down` BEFORE encoding so that any-button-pressed
+            // Update drag state BEFORE encoding so that any-button-pressed
             // reflects the post-event state when reporting under DECSET
             // 1002 motion (xterm reports drag bytes carrying the held
             // button, and the very first motion after press needs the
             // bit set).
-            surface.mouse.is_down = state == ElementState::Pressed;
+            match state {
+                ElementState::Pressed => {
+                    surface.mouse.drag_button = Some(button);
+                }
+                ElementState::Released => {
+                    if surface.mouse.drag_button == Some(button) {
+                        surface.mouse.drag_button = None;
+                    }
+                }
+            }
+            surface.mouse.is_down = surface.mouse.drag_button.is_some();
             let input = MouseEventInput {
                 action,
                 button: Some(button),
