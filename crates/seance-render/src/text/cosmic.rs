@@ -366,7 +366,7 @@ fn cell_metrics_from_face(
         .unwrap_or(base_cell_height)
         .max(1) as f32;
     let baseline_from_bottom =
-        (face.face_baseline_from_bottom - (cell_height - face.face_height) / 2.0).round();
+        (face.face_baseline_from_bottom + (cell_height - face.face_height) / 2.0).round();
     let baseline = (cell_height - baseline_from_bottom).clamp(0.0, cell_height);
 
     CellMetrics {
@@ -459,7 +459,11 @@ mod tests {
 
         assert_eq!(metrics.cell_width, 9.0);
         assert_eq!(metrics.cell_height, 22.0);
-        assert_eq!(metrics.baseline, 10.0);
+        // Face baseline sits at 18.2 - 14.0 = 4.2 from the top of the face.
+        // Centering shifts it down by half the extra cell height
+        // ((22 - 18.2)/2 = 1.9), so the cell baseline is at 4.2 + 1.9 = 6.1
+        // — rounded through baseline_from_bottom = 16 to land at 22 - 16 = 6.
+        assert_eq!(metrics.baseline, 6.0);
     }
 
     #[test]
