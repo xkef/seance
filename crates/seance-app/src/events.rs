@@ -7,7 +7,6 @@ use bytes::Bytes;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton};
 use winit::event_loop::ActiveEventLoop;
-use winit::keyboard::{Key, NamedKey};
 use winit::window::Fullscreen;
 
 use seance_input::{MouseAction, MouseEventInput, VtInput};
@@ -51,19 +50,6 @@ impl App {
                 surface.mark_dirty();
             }
             self.execute_app_command(event_loop, cmd);
-            return;
-        }
-
-        // Bare Enter on an active local selection: copy + flash + dismiss
-        // instead of forwarding to the PTY. Modified Enter (Ctrl/Shift/etc.)
-        // still forwards normally so existing shortcuts keep working.
-        if event.state == ElementState::Pressed
-            && matches!(event.logical_key, Key::Named(NamedKey::Enter))
-            && modifiers.state().is_empty()
-            && let Some(surface) = self.surface_mut()
-            && surface.has_selection()
-        {
-            surface.flash_copy_selection(SELECTION_FLASH);
             return;
         }
 
