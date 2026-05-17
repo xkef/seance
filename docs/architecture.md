@@ -12,13 +12,14 @@ Epic index:
 - **[M3][m3]** — Visual fidelity (procedural glyphs, WCAG contrast, clipboard)
 - **[M4][m4]** — Z-layer architecture refactor
 - **[M5][m5]** — Image protocols (Kitty graphics residuals, animation, iTerm2)
-- **[M6][m6]** — Multiplexing (`seance-mux` crate, tabs, splits, floating
+- **[M6][m6]** — Multiplexing (`seance-mux-client` crate, tabs, splits, floating
   modals)
 - **[M7][m7]** — Custom shaders (Shadertoy-compatible post-pass)
 - **[M8][m8]** — Lua scripting + widget system
 - **[M9][m9]** — Release pipeline & distribution (Homebrew, AUR, apt)
 - **[M10][m10]** — Agent Plane (in-PTY control, UI ownership, coordination)
 - **[M11][m11]** — Test harness (layered, LLM-readable)
+- **[M12][m12]** — Client/server multi-domain (Local / Unix / SSH / TLS)
 
 [m1]: https://github.com/xkef/seance/issues/4
 [m2]: https://github.com/xkef/seance/issues/5
@@ -31,6 +32,7 @@ Epic index:
 [m9]: https://github.com/xkef/seance/issues/152
 [m10]: https://github.com/xkef/seance/issues/194
 [m11]: https://github.com/xkef/seance/issues/201
+[m12]: https://github.com/xkef/seance/issues/221
 
 ---
 
@@ -76,29 +78,37 @@ Epic index:
 
 ## Crate structure
 
-| Crate                | Owns                                                   | Status           |
-| -------------------- | ------------------------------------------------------ | ---------------- |
-| `seance-app`         | winit event loop, `App`, renderer/redraw driver        | [IMPLEMENTED]    |
-| `seance-protocol`    | owned protocol/frame data, transport frame codec       | [IMPLEMENTED/M6] |
-| `seance-frame`       | render-facing frame traits and borrowed adapters       | [IMPLEMENTED/M6] |
-| `seance-input`       | winit → VT key/mouse encoding (via libghostty-vt)      | [IMPLEMENTED]    |
-| `seance-render`      | font pipeline, GPU pipelines, GlyphAtlas, image cache  | [IMPLEMENTED]    |
-| `seance-vt`          | VT Core, PTY actor, snapshot/command API               | [IMPLEMENTED/M2] |
-| `seance-config`      | TOML config + theme files, hot-reload, diffing         | [IMPLEMENTED]    |
-| `seance-mux`         | Mux Client, Domain adapters, Pane View materialization | [IMPLEMENTED/M6] |
-| `seance-bench`       | criterion benches for hot paths                        | [IMPLEMENTED]    |
-| `seance-render-test` | render-harness fixtures (L1 logic, L4 frame snapshot)  | [IMPLEMENTED]    |
+| Crate                | Owns                                                                                                                            | Status               |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| `seance-app`         | winit event loop, `App`, renderer/redraw driver, in-process server bootstrap                                                    | [IMPLEMENTED]        |
+| `seance-protocol`    | wire protocol, owned frame data, transport codec, identities, clipboard data                                                    | [IMPLEMENTED/M6+M12] |
+| `seance-frame`       | render-facing `FrameSource` trait and borrowed visitor types                                                                    | [IMPLEMENTED/M6]     |
+| `seance-input`       | winit → VT key/mouse encoding (via libghostty-vt)                                                                               | [IMPLEMENTED]        |
+| `seance-render`      | font pipeline, GPU pipelines, GlyphAtlas, image cache                                                                           | [IMPLEMENTED]        |
+| `seance-vt`          | VT Core, PTY actor, snapshot/command API                                                                                        | [IMPLEMENTED/M2]     |
+| `seance-config`      | TOML config + theme files, hot-reload, diffing                                                                                  | [IMPLEMENTED]        |
+| `seance-mux-client`  | Client-side: `Domain` trait, `MuxClient`/`PaneView`, `ProtocolDomain`. No VT dependency.                                        | [IMPLEMENTED/M6+M12] |
+| `seance-mux-server`  | Server-side: `LocalDomain` (owns VTs via `seance-vt`) + `serve()` protocol dispatch + `spawn_local_server` in-process bootstrap | [IMPLEMENTED/M12]    |
+| `seance-bench`       | frame-time benches for renderer hot paths                                                                                       | [IMPLEMENTED]        |
+| `seance-render-test` | render-harness fixtures (L1 logic, L4 frame snapshot)                                                                           | [IMPLEMENTED]        |
 
 Current dependency direction:
 
 ```text
-seance-app -> seance-mux, seance-render, seance-input, seance-config
-seance-mux -> seance-vt, seance-protocol, seance-frame
-seance-vt -> seance-protocol, seance-frame
-seance-render -> seance-protocol, seance-frame
-seance-input -> seance-protocol
-seance-render-test -> seance-vt, seance-protocol, seance-frame
+seance-app         -> seance-mux-client, seance-mux-server, seance-render,
+                      seance-input, seance-config
+seance-mux-client         -> seance-protocol, seance-frame
+seance-mux-server  -> seance-mux-client, seance-protocol, seance-vt
+seance-vt          -> seance-protocol, seance-frame
+seance-render      -> seance-protocol, seance-frame, seance-config
+seance-input       -> seance-protocol
+seance-render-test -> seance-mux-client, seance-protocol, seance-frame, seance-vt
 ```
+
+`seance-mux-client` deliberately omits any `seance-vt` edge: a protocol-only
+client (in-process today, a remote thin client under [M12][m12] tomorrow) builds
+without libghostty linked. The local-mode binary pairs `seance-mux-client`
+(frontend) with `seance-mux-server` (backend) over an `InProcessTransport`.
 
 ---
 
@@ -236,8 +246,8 @@ Deadline-scheduled (`cf4a1b1`, #24): `ControlFlow::WaitUntil(next_due)` across
 all animation sources — cursor blink, SGR blink, bell, Kitty GIF frames,
 custom-shader animation. Idle terminal = 0 fps. Modelled on WezTerm's
 `has_animation` pattern. PTY wakes are out-of-band via `EventLoopProxy`, fed by
-pane-scoped `MuxEvent` values from `seance-mux`; the UI then asks the Mux Client
-to drain ordered Domain events into Pane Views.
+pane-scoped `MuxEvent` values from `seance-mux-client`; the UI then asks the Mux
+Client to drain ordered Domain events into Pane Views.
 
 ### Threading model
 
@@ -259,17 +269,30 @@ and the renderer-thread revisit metric: see
 
 ---
 
-## Multiplexing model [IMPLEMENTED/M6 + PLANNED: [M6][m6]]
+## Multiplexing model [IMPLEMENTED/M6+M12 + PLANNED: [M6][m6], [M12][m12]]
 
-Phase 1 `seance-mux` is implemented as `MuxClient` over one implicit local pane.
-`LocalDomain` owns the VT Actor and server-side Pane Update history; `PaneView`
-materializes ordered Frame Deltas and owns selection/view state. This keeps
-`seance-app` from depending on `seance-vt`.
+The frontend (renderer, input, window — everything in `seance-app` plus
+`seance-render` and `seance-input`) communicates with the VT-owning backend only
+through the wire protocol in `seance-protocol`. In local mode that protocol runs
+over an `InProcessTransport` between two threads of the same process; remote
+modes ([M12][m12]) swap the transport, not the contract.
 
-Full #45 mux topology remains planned:
+- Frontend: `MuxClient<ProtocolDomain<Transport>>`. Sends `ClientMessage`s,
+  applies `ServerMessage`s into per-pane `PaneView`s, exposes `PaneHandle`
+  operations to the app layer.
+- Backend: `LocalDomain` owns the VT Actor and per-pane replay history;
+  `seance-mux-server::serve` drains `ClientMessage`s, dispatches each to the
+  Domain, and pushes `DomainEvent`s back as `ServerMessage`s.
+- Bootstrap: `seance-mux-server::spawn_local_server` pairs a fresh `LocalDomain`
+  with an `InProcessTransport`, runs `serve` on a background thread, and returns
+  the client end the frontend hands to `ProtocolDomain`. The `wake` closure
+  passed in is what fires `EventLoopProxy::send_event(UserEvent::Mux(Wake))`
+  whenever the server emits a frame.
+
+Full #45 mux topology remains planned (multi-pane / tab / split UX):
 
 ```
-Domain (trait)                       ← LocalDomain wraps portable-pty
+Domain (trait)                       ← LocalDomain or any remote Domain
   └─ Window
        └─ Tab
             └─ SplitTree = Leaf(Pane) | Split(dir, ratio, left, right)
@@ -289,15 +312,26 @@ into one framebuffer** — no render-target-per-pane.
 - IME preedit: winit `Ime::Preedit` → shape inline at cursor column,
   `RenderLayer::ImePreedit`.
 
-The `Domain` trait is the seam remote transports
-([#221](https://github.com/xkef/seance/issues/221)) attach to. `LocalDomain` is
-the production adapter today; `ProtocolDomain` is a client-side Mux Protocol
-adapter over a `Transport`. Unix socket, SSH, TLS, multi-client attach, full
-tabs, splits, and multi-window UX remain planned. The renderer-facing accessor
-is a Pane View `FrameSource`, not `Pane::vt()`, so remote panes (where the VT
-lives on the other end) satisfy the same interface as local panes. The protocol
-shape for that future work is canonicalized in
-[`docs/protocol.md`](./protocol.md).
+### Domain seam ([M12][m12])
+
+Constraints carried forward from #221 so phases 2–5 don't redesign:
+
+- No process-local handles (`&File`, `&Pty`) in trait return types.
+  [IMPLEMENTED]
+- `PaneRef` carries a `DomainId` so two `Domain` instances mint non-overlapping
+  IDs. [IMPLEMENTED]
+- Renderer-facing access is `PaneView::frame_source()`, not `Pane::vt()`. Remote
+  panes (where the VT lives on the other end) satisfy the same `FrameSource`
+  interface as local panes. [IMPLEMENTED]
+- `Domain::spawn_pane` may evolve to a future or callback form once a non-local
+  transport that can't be synchronously round-tripped lands. Today it is
+  synchronous, blocking on the `ClientMessage::SpawnPane` →
+  `ServerMessage::Topology` round-trip via `ProtocolDomain`'s in-flight request
+  table. [PLANNED: [M12][m12] Phase 2]
+
+Phase 2 (`UnixDomain`) becomes "add a Unix-socket `Transport` impl and a
+`seance-mux-server` daemon binary"; no client refactor is required. The protocol
+shape is canonicalized in [`docs/protocol.md`](./protocol.md).
 
 ---
 
@@ -312,53 +346,20 @@ palette.
 
 ### Target [PLANNED: [M1][m1]]
 
-```toml
-# ~/.config/seance/config.toml
-[font]
-family = "JetBrainsMono Nerd Font"
-size = 14.0
-features = ["calt"]
-min_contrast = 1.0
-adjust_cell_height = 1.20
+`~/.config/seance/config.toml` (or `$XDG_CONFIG_HOME/seance/config.toml`) with
+sections `[font]`, `[window]`, `[cursor]`, `[clipboard]`, `[scrollback]`,
+`[mouse]`, `[input]`, `[[keybind]]`, `[renderer]`, plus a top-level
+`theme = "<name>"` that resolves against `~/.config/seance/themes/`.
 
-[window]
-padding_x = 12
-padding_y = 0
-decoration = true
-background_opacity = 1.0
+Canonical schema:
+[`seance_config::Config`](../crates/seance-config/src/schema.rs) and its
+sub-structs (`FontConfig`, `WindowConfig`, `ClipboardConfig`, …). Theme files
+ship Catppuccin / Gruvbox / Tokyo Night / Solarized.
 
-[cursor]
-style = "bar"            # block | bar | underline
-blink = false
-
-[clipboard]
-read = "ask"             # ask | allow | deny
-write = "allow"
-paste_protection = true
-copy_on_select = true
-
-[scrollback]
-limit = 50000
-
-[mouse]
-hide_while_typing = true
-
-[input]
-macos_option_as_alt = "none"  # or "left" / "right" / "both"
-
-[[keybind]]
-key = "ctrl+shift+c"; action = "copy"
-
-[renderer]
-custom_shaders = []
-custom_shader_animation = "focused"
-
-theme = "Catppuccin Frappe"  # resolves ~/.config/seance/themes/Catppuccin Frappe.toml
-```
-
-Theme files ship Catppuccin / Gruvbox / Tokyo Night / Solarized. Hot-reload via
-`notify` with targeted invalidation (theme → repaint; font → clear glyph + shape
-caches; keybind → rebuild action table).
+Hot-reload via `notify` classifies each change through
+[`ConfigDiff`](../crates/seance-config/src/diff.rs) and targets the right
+invalidation: theme → repaint; font → clear glyph + shape caches; keybind →
+rebuild action table.
 
 ---
 
@@ -424,28 +425,9 @@ live there, not here.
 
 ## Logging & instrumentation
 
-- **Facade**: `tracing`. Call sites use
-  `tracing::{trace,debug,info,warn,error}!` with capture syntax (`{var}`).
-  Prefer structured fields (`err = %err`) when the value is a typed error.
-- **Subscriber**: configured once in `seance-app::main` via a `Registry` with
-  two layers — stdout `fmt::layer` (so `cargo run` prints logs to the parent
-  terminal) and a `tracing_appender::rolling::daily` writer wrapped in
-  `non_blocking`. The `WorkerGuard` is held in `main` so the appender flushes on
-  shutdown.
-- **Filter**: `EnvFilter` honors `RUST_LOG`. Default when unset:
-  `seance=info,wgpu=warn,wgpu_core=warn,wgpu_hal=warn,winit=warn,cosmic_text=warn,naga=warn,notify=warn`.
-- **Spans on hot paths**: per-frame `render::frame`, `gpu::submit`; per-tick
-  `vt::tick`, `vt::read_pty`; per-wake `mux::refresh`. All at `trace`/`debug`
-  level via `trace_span!("...").entered()` — statically filtered out under
-  default config so cost is a load+branch.
-- **Spans on event handlers**:
-  `#[tracing::instrument(level = "info", skip_all)]` on `reload_config`,
-  `reload_theme`, `on_theme_file_changed`.
-- **Log file**: `~/Library/Logs/seance/seance.log.YYYY-MM-DD` (macOS) or
-  `$XDG_STATE_HOME/seance/seance.log.YYYY-MM-DD` (Linux, fallback
-  `~/.local/state/seance/`). Directory is created on startup; failures degrade
-  silently to stderr-only.
-- **Level conventions**: `info` is reserved for once-per-event lifecycle —
-  startup banner, window created, pane spawned/exited, shutdown. Recoverable
-  failures use `warn`; channel-closed and cleanup noise during teardown use
-  `debug`; per-frame and per-PTY-read events use `trace`.
+`tracing` facade; `EnvFilter` honors `RUST_LOG`. Stdout layer plus a
+non-blocking daily-rolling file at `~/Library/Logs/seance/` (macOS) or
+`$XDG_STATE_HOME/seance/` with `~/.local/state/seance/` fallback (Linux).
+Subscriber setup and the default filter live in
+[`crates/seance-app/src/main.rs`](../crates/seance-app/src/main.rs) — that file
+is the source of truth for span placement and level conventions.

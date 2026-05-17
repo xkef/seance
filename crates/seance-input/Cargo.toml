@@ -4,7 +4,19 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Input handling and modal key system for seance"
+description = """
+Input translation for seance.
+
+Converts winit keyboard and mouse events into VT escape sequences via
+libghostty-vt's encoder. Handles macOS dead-key composition (so
+`option+e` produces `é`, not `ESC e`) and the `macos_option_as_alt`
+policy that distinguishes left vs right Option for partial alt-key
+behavior.
+
+Mouse motion, clicks, and wheel ticks emit SGR 1006 plus the legacy
+fallback sequences when the VT requests them via the `TerminalModes` the
+app passes in each frame.
+"""
 
 [dependencies]
 # internal

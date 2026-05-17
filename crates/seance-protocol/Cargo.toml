@@ -4,10 +4,26 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Transport-neutral protocol and owned frame data for seance"
+description = """
+Wire-level protocol for seance's mux.
+
+Owned data only — nothing here borrows from libghostty, wgpu, or winit.
+Every type is safe to serialize via postcard, send across any
+`Transport` (in-process today, Unix/SSH/TLS in M12), and reassemble on
+another machine.
+
+Modules: `identity` (opaque newtype IDs — `DomainId`, `PaneRef`,
+`ImageKey`, …), `frame` (owned `VtSnapshot`, `FrameDelta`, cursor and
+cell types), `mux` (`ClientMessage`/`ServerMessage` enums, capability
+negotiation, `PaneUpdate`), `transport` (length-prefixed postcard
+envelopes + `InProcessTransport` for tests), `image_cache` (Kitty
+graphics events), `clipboard` (OSC 52 request data), `limits` (byte
+caps and history bounds).
+"""
 
 [dependencies]
 # external
+bytes.workspace = true
 postcard.workspace = true
 serde.workspace = true
 serde-big-array.workspace = true

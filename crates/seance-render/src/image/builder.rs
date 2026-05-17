@@ -156,7 +156,7 @@ impl PlacementVisitor for PlacementCollector<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use seance_protocol::identity::{ImageId, PaneEpoch, PaneId};
+    use seance_protocol::identity::{DomainId, ImageId, PaneEpoch, PaneId};
 
     fn frame_info() -> FrameInfo {
         FrameInfo {
@@ -196,6 +196,7 @@ mod tests {
     #[test]
     fn placement_collector_uses_pane_scoped_image_keys() {
         let pane = PaneRef {
+            domain: DomainId(1),
             pane_id: PaneId(2),
             epoch: PaneEpoch(1),
         };

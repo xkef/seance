@@ -10,23 +10,11 @@
 //! selector onto the OS clipboard — the host platforms we target (macOS,
 //! Wayland with arboard fallbacks) only expose a single clipboard, and tmux
 //! / vim drivers always send `c` anyway.
+//!
+//! The decoded [`ClipboardRequest`] data type and the `encode_osc52_reply`
+//! helper live in [`seance_protocol::clipboard`]; only the parser is here.
 
-use bytes::Bytes;
-
-/// A clipboard request decoded from an OSC 52 sequence. The VT layer parses
-/// the bytes; the application owns the OS clipboard (`arboard`) and is
-/// responsible for honoring or denying the request based on user config.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ClipboardRequest {
-    /// `OSC 52 ; <sel> ; <base64> ST` — set the clipboard contents.
-    /// `data` is the decoded UTF-8 byte stream (callers should re-validate
-    /// before treating it as text).
-    Write(Bytes),
-    /// `OSC 52 ; <sel> ; ? ST` — query the clipboard. The application is
-    /// expected to reply with another OSC 52 sequence carrying the encoded
-    /// contents (see [`encode_osc52_reply`]).
-    Read,
-}
+pub use seance_protocol::clipboard::{ClipboardRequest, encode_osc52_reply};
 
 /// Parse the body of an OSC 52 command (i.e. the bytes between `OSC 52 ;` and
 /// the terminator). Returns `None` for malformed payloads — silently dropping
@@ -40,54 +28,7 @@ pub(crate) fn parse_osc52(content: &[u8]) -> Option<ClipboardRequest> {
         return Some(ClipboardRequest::Read);
     }
     let decoded = base64_decode(payload)?;
-    Some(ClipboardRequest::Write(Bytes::from(decoded)))
-}
-
-/// Build an `ESC ] 52 ; c ; <base64> ESC \\` reply for the contents of the
-/// system clipboard. xterm uses the same selector the application asked
-/// for; we always answer with `c` since seance collapses every selector
-/// onto the single OS clipboard anyway.
-pub fn encode_osc52_reply(payload: &[u8]) -> Bytes {
-    let mut out = Vec::with_capacity(payload.len() * 4 / 3 + 8);
-    out.extend_from_slice(b"\x1b]52;c;");
-    base64_encode_into(payload, &mut out);
-    out.extend_from_slice(b"\x1b\\");
-    Bytes::from(out)
-}
-
-const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-fn base64_encode_into(input: &[u8], out: &mut Vec<u8>) {
-    let mut chunks = input.chunks_exact(3);
-    for chunk in &mut chunks {
-        let b0 = chunk[0];
-        let b1 = chunk[1];
-        let b2 = chunk[2];
-        out.push(ALPHABET[(b0 >> 2) as usize]);
-        out.push(ALPHABET[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize]);
-        out.push(ALPHABET[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize]);
-        out.push(ALPHABET[(b2 & 0x3f) as usize]);
-    }
-    let remainder = chunks.remainder();
-    match remainder.len() {
-        0 => {}
-        1 => {
-            let b0 = remainder[0];
-            out.push(ALPHABET[(b0 >> 2) as usize]);
-            out.push(ALPHABET[((b0 & 0x03) << 4) as usize]);
-            out.push(b'=');
-            out.push(b'=');
-        }
-        2 => {
-            let b0 = remainder[0];
-            let b1 = remainder[1];
-            out.push(ALPHABET[(b0 >> 2) as usize]);
-            out.push(ALPHABET[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize]);
-            out.push(ALPHABET[((b1 & 0x0f) << 2) as usize]);
-            out.push(b'=');
-        }
-        _ => unreachable!(),
-    }
+    Some(ClipboardRequest::Write(decoded))
 }
 
 fn base64_decode(input: &[u8]) -> Option<Vec<u8>> {
@@ -155,19 +96,19 @@ mod tests {
     #[test]
     fn parses_write_with_clipboard_selector() {
         let req = parse_osc52(b"52;c;aGVsbG8=").expect("parse");
-        assert_eq!(req, ClipboardRequest::Write(Bytes::from_static(b"hello")));
+        assert_eq!(req, ClipboardRequest::Write(b"hello".to_vec()));
     }
 
     #[test]
     fn parses_write_with_multiple_selectors() {
         let req = parse_osc52(b"52;cps;aGVsbG8=").expect("parse");
-        assert_eq!(req, ClipboardRequest::Write(Bytes::from_static(b"hello")));
+        assert_eq!(req, ClipboardRequest::Write(b"hello".to_vec()));
     }
 
     #[test]
     fn parses_write_with_empty_selector() {
         let req = parse_osc52(b"52;;aGVsbG8=").expect("parse");
-        assert_eq!(req, ClipboardRequest::Write(Bytes::from_static(b"hello")));
+        assert_eq!(req, ClipboardRequest::Write(b"hello".to_vec()));
     }
 
     #[test]
@@ -209,16 +150,13 @@ mod tests {
             let mut osc = Vec::from(b"52;c;");
             osc.extend_from_slice(body);
             let req = parse_osc52(&osc).expect("parse encoded reply");
-            assert_eq!(
-                req,
-                ClipboardRequest::Write(Bytes::copy_from_slice(payload))
-            );
+            assert_eq!(req, ClipboardRequest::Write(payload.to_vec()));
         }
     }
 
     #[test]
     fn decodes_folded_base64_payload() {
         let req = parse_osc52(b"52;c;aGVs\nbG8=").expect("parse");
-        assert_eq!(req, ClipboardRequest::Write(Bytes::from_static(b"hello")));
+        assert_eq!(req, ClipboardRequest::Write(b"hello".to_vec()));
     }
 }

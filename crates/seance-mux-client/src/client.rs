@@ -9,6 +9,16 @@ use crate::{
     PaneError, PaneFrame, PaneSpawnOptions, PaneView, SpawnError,
 };
 
+/// Client-side state of the mux: owns the active [`Domain`] and a
+/// [`PaneView`] per pane, applies updates drained from the Domain, and
+/// is the entry point for selection, link detection, and frame
+/// retrieval.
+///
+/// The Domain type parameter `D` lets the host pick the transport in
+/// scope: `MuxClient<ProtocolDomain<InProcessTransport>>` for local
+/// mode, `MuxClient<ProtocolDomain<UnixDomainTransport>>` for a future
+/// daemon client, etc. The client never reaches past the Domain trait —
+/// all VT/PTY ownership lives on the server side.
 pub struct MuxClient<D> {
     domain: D,
     link_detector: LinkDetector,
@@ -112,6 +122,12 @@ impl<D: Domain> MuxClient<D> {
         Ok(pane)
     }
 
+    /// Canonical drain entry point: pull every event the Domain has
+    /// queued since the last call, apply frame updates to the relevant
+    /// [`PaneView`]s, and return a [`ClientRefresh`] summarizing what
+    /// the host now needs to react to (mark surface dirty, route
+    /// clipboard requests, log pane exits, etc.). Called from the
+    /// `UserEvent::Mux(Wake)` handler in the winit event loop.
     pub fn refresh_updates(&mut self) -> Result<ClientRefresh, PaneError> {
         let mut events = Vec::new();
         self.domain.drain_events(&mut |event| events.push(event))?;

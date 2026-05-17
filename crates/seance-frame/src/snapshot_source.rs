@@ -90,7 +90,7 @@ mod tests {
     use seance_protocol::frame::{
         CellAttrs, CellColor, CursorShape, PlacementSnapshot, SnapshotImage,
     };
-    use seance_protocol::identity::{PaneEpoch, PaneId};
+    use seance_protocol::identity::{DomainId, PaneEpoch, PaneId};
 
     fn snapshot_with_cells(cols: u16, rows: u16, texts: &[&str]) -> VtSnapshot {
         let mut snapshot = VtSnapshot::empty(cols, rows);
@@ -193,6 +193,7 @@ mod tests {
         assert_eq!(source.pane_ref(), PaneRef::LOCAL);
 
         let pane = PaneRef {
+            domain: DomainId(1),
             pane_id: PaneId(7),
             epoch: PaneEpoch(3),
         };

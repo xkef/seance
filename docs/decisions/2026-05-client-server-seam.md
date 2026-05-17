@@ -34,8 +34,8 @@ differently, keep it client-side.
 Target dependency direction:
 
 ```text
-seance-app -> seance-mux, seance-render, seance-input, seance-config
-seance-mux -> seance-vt, seance-protocol, seance-frame
+seance-app -> seance-mux-client, seance-render, seance-input, seance-config
+seance-mux-client -> seance-vt, seance-protocol, seance-frame
 seance-vt -> seance-protocol, seance-frame
 seance-render -> seance-protocol, seance-frame
 seance-input -> seance-protocol
@@ -49,9 +49,9 @@ Crate responsibilities:
   `seance-vt` dependency.
 - `seance-frame`: `FrameSource`, visitors, `SnapshotFrameSource`, and borrowed
   non-serializable render views.
-- `seance-mux`: local pane facade, pane-update materialization, selection/view
-  state, replay history, and app-facing commands. It owns the local
-  `VtSessionHandle` internally.
+- `seance-mux-client`: local pane facade, pane-update materialization,
+  selection/view state, replay history, and app-facing commands. It owns the
+  local `VtSessionHandle` internally.
 - `seance-vt`: VT Core, PTY actor, local actor commands/events, and libghostty
   integration.
 
@@ -93,9 +93,9 @@ and rewrites every `SnapshotCell.text_start`.
 ## Replay and pull lines
 
 `PaneUpdate { pane, seq, image_events, frame }` is the ordered update unit.
-`seance-mux` keeps a per-pane history ring plus latest-full fallback. First
-attach sends current topology/full state. Resume with retained `last_seen_seq`
-replays updates; missing history sends resync/full reset.
+`seance-mux-client` keeps a per-pane history ring plus latest-full fallback.
+First attach sends current topology/full state. Resume with retained
+`last_seen_seq` replays updates; missing history sends resync/full reset.
 
 The primary render path is push-based pane updates. The protocol also reserves
 `GetLines { range, since_seq }` / `Lines` for bounded scrollback or viewport
@@ -138,8 +138,8 @@ per-user/per-machine state. Nothing persists what can be recomputed.
 In scope:
 
 - `seance-protocol` and `seance-frame`
-- local `seance-mux` single-pane adapter
-- `seance-app` rewired through `seance-mux`
+- local `seance-mux-client` single-pane adapter
+- `seance-app` rewired through `seance-mux-client`
 - protocol codec/schema tests
 - frame-delta application tests
 - mux history/replay tests

@@ -771,10 +771,7 @@ mod tests {
         let mut core = core();
         core.feed(b"\x1b]52;c;aGVsbG8=\x07");
         let requests = core.drain_clipboard_requests();
-        assert_eq!(
-            requests,
-            vec![ClipboardRequest::Write(Bytes::from_static(b"hello"))],
-        );
+        assert_eq!(requests, vec![ClipboardRequest::Write(b"hello".to_vec())],);
     }
 
     #[test]

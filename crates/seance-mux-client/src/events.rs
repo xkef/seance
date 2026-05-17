@@ -1,7 +1,7 @@
+use seance_protocol::clipboard::ClipboardRequest;
 use seance_protocol::identity::PaneRef;
 use seance_protocol::image_cache::ImageCacheEvent;
 use seance_protocol::mux::PaneUpdate;
-use seance_vt::ClipboardRequest;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MuxEvent {

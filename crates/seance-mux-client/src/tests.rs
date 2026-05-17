@@ -6,7 +6,9 @@ use seance_protocol::frame::{
     CellAttrs, CellColor, CursorInfo, DirtySnapshot, FrameDelta, RowDelta, TerminalModes,
     VtSnapshot,
 };
-use seance_protocol::identity::{ImageId, ImageKey, PaneEpoch, PaneId, PaneRef, ServerSeq};
+use seance_protocol::identity::{
+    DomainId, ImageId, ImageKey, PaneEpoch, PaneId, PaneRef, ServerSeq,
+};
 use seance_protocol::image_cache::{ImageCacheEvent, ImageFormat, ImagePayload};
 use seance_protocol::mux::{ClientMessage, MessageKind, PaneUpdate, ServerMessage};
 use seance_protocol::transport::{
@@ -21,6 +23,7 @@ use crate::{
 
 fn pane_ref() -> PaneRef {
     PaneRef {
+        domain: DomainId(1),
         pane_id: PaneId(1),
         epoch: PaneEpoch(1),
     }
@@ -386,18 +389,84 @@ fn frame_history_resyncs_when_update_fell_out_of_ring() {
 }
 
 #[test]
-fn protocol_spawn_uses_spawn_message_kind() {
+fn protocol_spawn_round_trips_through_topology_reply() {
+    use seance_protocol::mux::{DomainInfo, PaneInfo, TabInfo, Topology, WindowInfo};
+    use seance_protocol::transport::{
+        decode_client_frame_with_request, encode_server_frame_with_request,
+    };
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
     let (client_transport, server_transport) = InProcessTransport::pair();
+    let (sent_tx, sent_rx) = mpsc::channel();
+
+    // Tiny inline "server" thread: read one SpawnPane, ack with Topology
+    // tagged with the originating RequestId.
+    let server_thread = thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Some(frame) = server_transport.try_recv().unwrap() {
+                let (request_id, message) = decode_client_frame_with_request(&frame).unwrap();
+                if let ClientMessage::SpawnPane { domain, cols, rows } = message {
+                    let pane = PaneRef {
+                        domain,
+                        pane_id: PaneId(42),
+                        epoch: PaneEpoch(1),
+                    };
+                    sent_tx.send(pane).unwrap();
+                    let topology = Topology {
+                        domains: vec![DomainInfo {
+                            domain_id: domain,
+                            name: "test".into(),
+                        }],
+                        windows: vec![WindowInfo {
+                            window_id: Default::default(),
+                            domain_id: domain,
+                        }],
+                        tabs: vec![TabInfo {
+                            tab_id: Default::default(),
+                            window_id: Default::default(),
+                        }],
+                        panes: vec![PaneInfo {
+                            pane,
+                            tab_id: Default::default(),
+                            cols,
+                            rows,
+                            title: String::new(),
+                        }],
+                    };
+                    let response = encode_server_frame_with_request(
+                        ServerMessage::Topology(topology),
+                        request_id,
+                    )
+                    .unwrap();
+                    server_transport.send(response).unwrap();
+                    return;
+                }
+                panic!("expected SpawnPane; got {:?}", message.kind());
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!("test server timed out waiting for SpawnPane");
+            }
+            thread::sleep(Duration::from_micros(100));
+        }
+    });
+
     let mut domain = ProtocolDomain::new(client_transport);
-
-    let err = domain.spawn_pane(PaneSpawnOptions::default()).unwrap_err();
+    let pane = domain
+        .spawn_pane(PaneSpawnOptions::default())
+        .expect("spawn should succeed via Topology reply");
+    let expected = sent_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(pane, expected);
     assert_eq!(
-        err.to_string(),
-        "protocol pane spawn awaits server topology"
+        MessageKind::ClientSpawnPane,
+        ClientMessage::SpawnPane {
+            domain: pane.domain,
+            cols: 0,
+            rows: 0,
+        }
+        .kind()
     );
-
-    let frame = server_transport.try_recv().unwrap().unwrap();
-    let message = decode_client_frame(&frame).unwrap();
-    assert!(matches!(message, ClientMessage::SpawnPane { .. }));
-    assert_eq!(MessageKind::ClientSpawnPane, message.kind());
+    server_thread.join().unwrap();
 }
