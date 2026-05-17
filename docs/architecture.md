@@ -207,23 +207,31 @@ bg_cells SSBO / atlas textures + sampler):
 
 ### Target layer stack [PLANNED: [M4][m4]]
 
-`RenderLayer` enum backed by per-layer triple vertex buffers, sorted CPU-side,
-no depth buffer:
+A dynamic `i32`-keyed layer schedule, sorted CPU-side, no depth buffer — not a
+closed enum. Layers are created on demand (`layer_for_z(z)`) and kept sorted by
+z-index; the renderer enumerates no product features. Two axes:
+
+- **Layer = open `i32` z.** Well-known positions are `const` (`Z_MAIN = 0`, a
+  `Z_WINDOW_BG` band below it); new overlays (status/tab bar, command palette,
+  IME preedit, split borders) pick their own z and the renderer stays agnostic.
+  Mirrors WezTerm's `layer_for_zindex` (a sorted `Vec` created on demand),
+  adapted to seance's heterogeneous draw ops.
+- **Sub-role = fixed within-layer order**, `Below → Content → Above`.
+
+The terminal cell content is the reference plane, not a single z, so the three
+Kitty `PlacementLayer` bands live as sub-roles of the `Z_MAIN` layer rather than
+as separate layers; a Kitty image at z=-1 thus draws after `cell_bg` and before
+text. Within a band, placements keep their raw-`i32`-z sort. Draw order at
+`Z_MAIN`:
 
 ```
-Layer 0  BgImage
-Layer 1  BgFill
-Layer 2  KittyUnder        ← Kitty graphics z < min
-Layer 3  CellBg             ← fullscreen tri + cells_bg SSBO
-Layer 4  KittyMid           ← Kitty graphics 0 > z >= min
-Layer 5  CellText           ← glyphs + sprite underlines + cursor glyph
-Layer 6  KittyOver          ← Kitty graphics z >= 0
-Layer 7  CursorOver         ← cursor-over-text sprite
-Layer 8  Selection          ← selection rect overlay
-Layer 9  StatusBar/TabBar   ← [PLANNED: M4/M6]
-Layer 10 Modal              ← command palette, char select [PLANNED: M6]
-Layer 11 ImePreedit         ← inline IME composition [PLANNED: M6]
+SubRole::Below     bg_color fill → Kitty below-bg → cell_bg SSBO → Kitty below-text
+SubRole::Content   cell_text (glyphs + sprite underlines + cursor glyph)
+SubRole::Above     Kitty above-text → cursor-over-text → selection overlay
 ```
+
+Stacked window backgrounds sit at negative z; floating UI at positive z — each a
+`layer_for_z(z)` call, no type edits.
 
 ### Offscreen post-pass infrastructure [PLANNED: [M4][m4] + [M7][m7]]
 
