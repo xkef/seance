@@ -4,7 +4,7 @@
 //! no fonts, no snapshots. Each test names one observable VT
 //! behavior; a failure points at the specific invariant that regressed.
 
-use seance_mux::{LinkDetector, LinkModifiers, LinkSource, LinkTarget};
+use seance_mux_client::{LinkDetector, LinkModifiers, LinkSource, LinkTarget};
 use seance_protocol::frame::GridPos;
 use seance_vt::test_support::HeadlessTerminal;
 

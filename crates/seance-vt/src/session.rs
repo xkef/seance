@@ -1339,10 +1339,7 @@ mod unix_actor {
             assert!(matches!(actor.read_pty_batch(), Ok(ReadOutcome::Alive)));
 
             let requests = clipboard.drain();
-            assert_eq!(
-                requests,
-                vec![ClipboardRequest::Write(Bytes::from_static(b"hello"))],
-            );
+            assert_eq!(requests, vec![ClipboardRequest::Write(b"hello".to_vec())],);
             assert!(events.lock().unwrap().contains(&VtEvent::ClipboardActivity),);
         }
 

@@ -4,7 +4,20 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "GPU-accelerated text rendering for seance (cosmic-text + wgpu)"
+description = """
+GPU-accelerated rendering pipeline for seance.
+
+Drives cosmic-text shaping (rustybuzz + bidi), a two-plane glyph atlas
+(grayscale R8 + color RGBA8) packed by etagere, and image compositing
+through a single wgpu render pass. Consumes any
+`seance_frame::FrameSource`, so local panes, remote panes received over
+the wire, and headless test fixtures all use the same render path.
+
+A 256-bucket LRU shape cache keeps the hot path off the shaper;
+procedural sprites (box-drawing, blocks) are rasterized via tiny-skia
+before cosmic-text shaping; rendering wakes only on dirty content plus
+animation deadlines so an idle terminal draws zero frames.
+"""
 
 [dependencies]
 # internal

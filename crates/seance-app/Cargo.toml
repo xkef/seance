@@ -4,7 +4,17 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "seance terminal multiplexer application"
+description = """
+Top-level seance binary.
+
+Owns the winit event loop, surface lifecycle, hot-reload of config and
+themes, and platform glue (macOS Metal layer configuration, dead-key
+composition, log directory resolution). Bootstraps the in-process mux
+server on a background thread and drives a
+`MuxClient<ProtocolDomain<InProcessTransport>>` so every operation
+crosses the wire protocol even in local mode — the same architecture
+that lights up M12's remote transports.
+"""
 
 [[bin]]
 name = "seance"
@@ -14,7 +24,8 @@ path = "src/main.rs"
 # internal
 seance-config.workspace = true
 seance-input.workspace = true
-seance-mux.workspace = true
+seance-mux-client.workspace = true
+seance-mux-server.workspace = true
 seance-render.workspace = true
 
 # external

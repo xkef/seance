@@ -25,7 +25,7 @@ around it.
 | VT parser (`vt_write`) | VT Core on the actor thread only                          |
 | libghostty ownership   | VT Core owns `Terminal`, `RenderState`, and Kitty setup   |
 | UI read path           | UI reads mux materialized pane snapshots only             |
-| UI write path          | `seance-mux::Pane` commands over local VT session         |
+| UI write path          | `seance-mux-client::Pane` commands over local VT session  |
 | Dirty reset            | render-generation acknowledgement after successful render |
 | Wake from IO           | pane-scoped mux event after snapshot publish              |
 | DEC 2026 sync output   | VT Actor suppresses publishes while sync mode is active   |
@@ -53,8 +53,8 @@ The UI thread never owns, locks, borrows, moves, or references:
 - raw references into libghostty state
 
 The only shared VT data is séance-owned, immutable snapshot data. Phase 1 adds
-`seance-mux` between the app and `seance-vt`; the mux materializes ordered pane
-updates but does not share live VT state.
+`seance-mux-client` between the app and `seance-vt`; the mux materializes
+ordered pane updates but does not share live VT state.
 
 ```
 ┌─ UI thread (winit + wgpu) ───────────────┐   ┌─ VT Actor thread ───────────────┐
@@ -65,7 +65,7 @@ updates but does not share live VT state.
 │ acks presented snapshot generation       │   │ owns PTY master/reader/writer    │
 │ encodes input using snapshot modes       │   │ nonblocking poll loop            │
 │                                          │   │ handles VtCommand                │
-│ seance-mux::Pane ─── VtCommand ─────────▶│   │ publishes to SnapshotSlot        │
+│ seance-mux-client::Pane ─── VtCommand ─────────▶│   │ publishes to SnapshotSlot        │
 │ EventLoopProxy ◀──── MuxEvent ───────────│   │ dedupes ContentDirty wakes       │
 └──────────────────────────────────────────┘   └────────────────────────────────┘
 ```
@@ -266,7 +266,7 @@ cleared on snapshot publication.
 
 ## Mux protocol seam
 
-`seance-mux` is the app-facing mux layer. `LocalDomain` owns the
+`seance-mux-client` is the app-facing mux layer. `LocalDomain` owns the
 `VtSessionHandle`, stamps a `PaneRef` onto local events, and produces ordered
 Pane Updates. `MuxClient` materializes `FrameDelta` values into client-side Pane
 Views and exposes app-facing Pane Handles. `seance-app` no longer imports
@@ -537,9 +537,9 @@ renderer-side theme reload can repaint from the same snapshot.
 The app-side OS-window bundle is `SurfaceState`. The name `Window` is reserved
 for the future mux domain (`Window -> Tab -> SplitTree -> Pane`).
 
-`SurfaceState` contains a `seance_mux::Pane` even while v1 has one pane per
-surface. The pane owns the local VT handle internally, the latest materialized
-snapshot, pane-update history, and selection/view state.
+`SurfaceState` contains a `seance_mux_client::Pane` even while v1 has one pane
+per surface. The pane owns the local VT handle internally, the latest
+materialized snapshot, pane-update history, and selection/view state.
 
 ### Reads vs commands
 
@@ -549,7 +549,7 @@ UI reads only through pane-view accessors:
 - selection text for copy
 - frame source for rendering
 
-UI mutates the terminal only through `seance_mux::Pane` commands:
+UI mutates the terminal only through `seance_mux_client::Pane` commands:
 
 - write
 - resize

@@ -3,8 +3,8 @@
 //! Theme files are plain text, one `key = value` per line, `#` comments.
 //! Ghostty permits a broader config grammar (conditionals, lists) but
 //! theme files in the wild — including all 486 bundled themes — use only
-//! the keys enumerated in [`Key`]. Unknown keys are skipped with a warn
-//! log so unexpected input degrades rather than erroring.
+//! a fixed key set. Unknown keys are skipped with a warn log so
+//! unexpected input degrades rather than erroring.
 //!
 //! Color values are `#RRGGBB` or `#RGB` hex. The bundled set uses
 //! `#RRGGBB` exclusively; X11 color names and the `cell-foreground` /

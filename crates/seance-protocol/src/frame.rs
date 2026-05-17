@@ -244,8 +244,9 @@ impl VtSnapshot {
     /// Inclusive `(start, end)` range of the word containing `(row, col)`.
     /// Returns `None` if the cell is empty/whitespace, or out of bounds.
     /// A "word" extends across consecutive cells whose text contains at
-    /// least one [`is_word_char`] character — covers identifiers, paths,
-    /// and URLs while breaking on whitespace and most punctuation.
+    /// least one word character (alphanumeric, `_`, `-`, `.`, `/`, `:`) —
+    /// covers identifiers, paths, and URLs while breaking on whitespace
+    /// and most punctuation.
     pub fn word_range_at(&self, row: u16, col: u16) -> Option<(GridPos, GridPos)> {
         if row >= self.rows || col >= self.cols {
             return None;

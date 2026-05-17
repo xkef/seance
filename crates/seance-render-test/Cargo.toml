@@ -4,13 +4,24 @@ version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Layered test harness for the seance renderer (Phase A)"
+description = """
+Layered test harness for the seance renderer.
+
+Phase A: Layer 1 (pure logic via `HeadlessTerminal`) plus Layer 4
+(snapshot-of-frame via insta). Later phases add font raster (L2),
+shaper (L3), headless wgpu render (L5), pixel PNG goldens (L6),
+property/fuzz (L8), and benches (L9).
+
+Drives the real `seance-vt` VT core through a PTY-less
+`HeadlessTerminal` seam so test failures reflect actual VT and
+snapshot-extraction behavior, not stubs.
+"""
 publish = false
 
 [dependencies]
 # internal
 seance-frame.workspace = true
-seance-mux.workspace = true
+seance-mux-client.workspace = true
 seance-protocol.workspace = true
 seance-vt.workspace = true
 

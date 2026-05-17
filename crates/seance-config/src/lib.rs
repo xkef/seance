@@ -24,9 +24,9 @@ use std::{env, fs};
 
 pub const CONFIG_FILENAME: &str = "config.toml";
 
-/// Errors surfaced by [`try_load`] / [`try_load_from`]. Used by the hot-reload
-/// path (#13) so a bad edit can be rejected instead of silently replaced with
-/// defaults.
+/// Errors surfaced by [`try_load_from`]. Used by the hot-reload path
+/// (#13) so a bad edit can be rejected instead of silently replaced
+/// with defaults.
 #[derive(Debug)]
 pub enum ConfigError {
     Io(PathBuf, std::io::Error),

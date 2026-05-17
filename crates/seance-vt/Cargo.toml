@@ -4,7 +4,19 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "VT emulator wrapper, PTY, and selection for seance"
+description = """
+VT engine for seance.
+
+Wraps libghostty-vt (state machine) and portable-pty (shell spawner)
+behind a Unix IO actor. The actor owns the libghostty Terminal and PTY
+on one thread and publishes immutable `VtSnapshot` values for the UI
+thread to consume.
+
+Implements DEC 2026 synchronized output (150 ms watchdog), OSC 52
+clipboard parsing, Kitty graphics (PNG + raw 24/32-bit, 320 MB cache
+cap), and dirty-row tracking with render-acknowledgment so the renderer
+only repaints rows that actually changed.
+"""
 
 [dependencies]
 # internal

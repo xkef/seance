@@ -23,12 +23,6 @@ impl fmt::Display for SpawnError {
 
 impl std::error::Error for SpawnError {}
 
-impl From<seance_vt::SpawnError> for SpawnError {
-    fn from(value: seance_vt::SpawnError) -> Self {
-        Self::new(value.to_string())
-    }
-}
-
 impl From<PaneError> for SpawnError {
     fn from(value: PaneError) -> Self {
         Self::new(value.to_string())
@@ -55,12 +49,6 @@ impl fmt::Display for PaneError {
 }
 
 impl std::error::Error for PaneError {}
-
-impl From<seance_vt::VtSessionError> for PaneError {
-    fn from(value: seance_vt::VtSessionError) -> Self {
-        Self::new(value.to_string())
-    }
-}
 
 impl From<TransportError> for PaneError {
     fn from(value: TransportError) -> Self {
