@@ -110,6 +110,10 @@ impl<T: Transport> Domain for ProtocolDomain<T> {
                 domain: self.domain,
                 cols: options.cols,
                 rows: options.rows,
+                pixel_width: options.pixel_width,
+                pixel_height: options.pixel_height,
+                initial_cursor_shape: options.initial_cursor_shape,
+                max_scrollback: options.max_scrollback as u64,
             },
             request_id,
         )?;

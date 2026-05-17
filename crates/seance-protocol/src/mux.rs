@@ -103,6 +103,13 @@ pub enum ClientMessage {
         domain: DomainId,
         cols: u16,
         rows: u16,
+        pixel_width: u16,
+        pixel_height: u16,
+        initial_cursor_shape: CursorShape,
+        /// `usize` on the application side; sent as `u64` so the wire stays
+        /// architecture-independent. Server clamps to `usize::MAX` on the
+        /// receive side.
+        max_scrollback: u64,
     },
     ClosePane {
         pane: PaneRef,
