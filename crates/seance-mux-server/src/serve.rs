@@ -181,11 +181,18 @@ where
             domain: _,
             cols,
             rows,
+            pixel_width,
+            pixel_height,
+            initial_cursor_shape,
+            max_scrollback,
         } => {
             let options = PaneSpawnOptions {
                 cols,
                 rows,
-                ..PaneSpawnOptions::default()
+                pixel_width,
+                pixel_height,
+                initial_cursor_shape,
+                max_scrollback: usize::try_from(max_scrollback).unwrap_or(usize::MAX),
             };
             match domain.spawn_pane(options) {
                 Ok(pane_ref) => {

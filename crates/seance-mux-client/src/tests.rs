@@ -408,13 +408,34 @@ fn protocol_spawn_round_trips_through_topology_reply() {
         loop {
             if let Some(frame) = server_transport.try_recv().unwrap() {
                 let (request_id, message) = decode_client_frame_with_request(&frame).unwrap();
-                if let ClientMessage::SpawnPane { domain, cols, rows } = message {
+                if let ClientMessage::SpawnPane {
+                    domain,
+                    cols,
+                    rows,
+                    pixel_width,
+                    pixel_height,
+                    initial_cursor_shape,
+                    max_scrollback,
+                } = message
+                {
+                    // Echo every field back through the channel so the test
+                    // can assert nothing was silently dropped on the wire.
                     let pane = PaneRef {
                         domain,
                         pane_id: PaneId(42),
                         epoch: PaneEpoch(1),
                     };
-                    sent_tx.send(pane).unwrap();
+                    sent_tx
+                        .send((
+                            pane,
+                            cols,
+                            rows,
+                            pixel_width,
+                            pixel_height,
+                            initial_cursor_shape,
+                            max_scrollback,
+                        ))
+                        .unwrap();
                     let topology = Topology {
                         domains: vec![DomainInfo {
                             domain_id: domain,
@@ -454,17 +475,46 @@ fn protocol_spawn_round_trips_through_topology_reply() {
     });
 
     let mut domain = ProtocolDomain::new(client_transport);
+    // Use non-default values across every field so a regression that drops
+    // any of them on the wire surfaces as an assertion mismatch, not a
+    // silently-accepted default.
+    let options = PaneSpawnOptions {
+        cols: 132,
+        rows: 43,
+        pixel_width: 1320,
+        pixel_height: 688,
+        initial_cursor_shape: CursorShape::Bar,
+        max_scrollback: 75_000,
+    };
     let pane = domain
-        .spawn_pane(PaneSpawnOptions::default())
+        .spawn_pane(options.clone())
         .expect("spawn should succeed via Topology reply");
-    let expected = sent_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    assert_eq!(pane, expected);
+    let (
+        expected_pane,
+        cols,
+        rows,
+        pixel_width,
+        pixel_height,
+        initial_cursor_shape,
+        max_scrollback,
+    ) = sent_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert_eq!(pane, expected_pane);
+    assert_eq!(cols, options.cols);
+    assert_eq!(rows, options.rows);
+    assert_eq!(pixel_width, options.pixel_width);
+    assert_eq!(pixel_height, options.pixel_height);
+    assert_eq!(initial_cursor_shape, options.initial_cursor_shape);
+    assert_eq!(max_scrollback, options.max_scrollback as u64);
     assert_eq!(
         MessageKind::ClientSpawnPane,
         ClientMessage::SpawnPane {
             domain: pane.domain,
             cols: 0,
             rows: 0,
+            pixel_width: 0,
+            pixel_height: 0,
+            initial_cursor_shape: CursorShape::Block,
+            max_scrollback: 0,
         }
         .kind()
     );
