@@ -1,0 +1,37 @@
+[package]
+name = "seance-mux-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = """
+Client-side mux for seance.
+
+The frontend (renderer, input, window) interacts with terminals through
+a `Domain` — an opaque seam that can be either an in-process
+`LocalDomain` (from `seance-mux-server`) paired over
+`InProcessTransport`, or a remote `Domain` over a future Unix/SSH/TLS
+transport (M12). This crate carries no `seance-vt` dependency;
+everything goes through the wire protocol in `seance-protocol`.
+
+Provides `MuxClient` (manages the active `Domain` and per-pane
+`PaneView`s), `ProtocolDomain` (the wire-talking `Domain` impl with
+request-response correlation for pane spawn), and link detection
+(URL/path regex with configurable activation modifiers).
+"""
+
+[dependencies]
+# internal
+seance-frame.workspace = true
+seance-protocol.workspace = true
+
+# external
+bytes.workspace = true
+fancy-regex.workspace = true
+
+[dev-dependencies]
+# external
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true

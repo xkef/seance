@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::clipboard::ClipboardRequest;
 use crate::frame::{CursorShape, FrameDelta, LineRange, Resize, RowDelta, ThemeColors};
 use crate::identity::{
     DomainId, ImageKey, PaneRef, ServerId, ServerSeq, SessionId, TabId, WindowId,
@@ -16,6 +17,10 @@ pub const MIN_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(1);
 )]
 pub struct ProtocolVersion(pub u16);
 
+/// Optional protocol features a client/server negotiates at handshake.
+/// Both sides advertise the set they support in [`Hello`] / [`ServerHello`];
+/// only the intersection is active on the connection. New capabilities
+/// are added without bumping [`ProtocolVersion`] when backwards-compatible.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Capability {
     Zstd,
@@ -81,6 +86,12 @@ pub struct ProtocolErrorPayload {
     pub pane: Option<PaneRef>,
 }
 
+/// Every message a client can send.
+///
+/// Most variants are fire-and-forget — the only one that requires a
+/// response is [`ClientMessage::SpawnPane`], which the server answers
+/// with a [`ServerMessage::Topology`] tagged with the originating
+/// [`RequestId`].
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClientMessage {
@@ -92,6 +103,13 @@ pub enum ClientMessage {
         domain: DomainId,
         cols: u16,
         rows: u16,
+        pixel_width: u16,
+        pixel_height: u16,
+        initial_cursor_shape: CursorShape,
+        /// `usize` on the application side; sent as `u64` so the wire stays
+        /// architecture-independent. Server clamps to `usize::MAX` on the
+        /// receive side.
+        max_scrollback: u64,
     },
     ClosePane {
         pane: PaneRef,
@@ -162,6 +180,12 @@ impl ClientMessage {
     }
 }
 
+/// Every message the server can send.
+///
+/// Frames are ordered per-pane (a client never sees update N+1 before
+/// update N for the same pane). Cross-pane ordering is not guaranteed.
+/// Direct responses to a client request carry the originating
+/// [`RequestId`]; spontaneous server pushes use [`RequestId::PUSH`].
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ServerMessage {
@@ -172,6 +196,10 @@ pub enum ServerMessage {
     PaneExited {
         pane: PaneRef,
         exit_status: Option<i32>,
+    },
+    PaneClipboardRequest {
+        pane: PaneRef,
+        request: ClipboardRequest,
     },
     ResyncRequired {
         pane: PaneRef,
@@ -191,6 +219,7 @@ impl ServerMessage {
             Self::Topology(_) => MessageKind::ServerTopology,
             Self::PaneUpdate(_) => MessageKind::ServerPaneUpdate,
             Self::PaneExited { .. } => MessageKind::ServerPaneExited,
+            Self::PaneClipboardRequest { .. } => MessageKind::ServerPaneClipboardRequest,
             Self::ResyncRequired { .. } => MessageKind::ServerResyncRequired,
             Self::Pong { .. } => MessageKind::ServerPong,
             Self::Lines(_) => MessageKind::ServerLines,
@@ -243,6 +272,10 @@ pub struct PaneInfo {
     pub title: String,
 }
 
+/// The atomic server unit. `image_events` apply before the `frame`
+/// (when both are present) so that a frame referencing a freshly
+/// uploaded image never lands before that image is in the client's
+/// cache.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneUpdate {
     pub pane: PaneRef,
@@ -251,6 +284,10 @@ pub struct PaneUpdate {
     pub frame: Option<FrameDelta>,
 }
 
+/// Stable u16 tags for every [`ClientMessage`] / [`ServerMessage`]
+/// variant. Client-direction tags are 1..=15; server-direction tags are
+/// 1001..=1099. Wire-stable across releases — never renumber, only add
+/// new variants with the next free id in the appropriate range.
 #[repr(u16)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MessageKind {
@@ -277,6 +314,7 @@ pub enum MessageKind {
     ServerResyncRequired = 1006,
     ServerPong = 1007,
     ServerLines = 1008,
+    ServerPaneClipboardRequest = 1009,
 }
 
 impl TryFrom<u16> for MessageKind {
@@ -307,6 +345,7 @@ impl TryFrom<u16> for MessageKind {
             1006 => Self::ServerResyncRequired,
             1007 => Self::ServerPong,
             1008 => Self::ServerLines,
+            1009 => Self::ServerPaneClipboardRequest,
             other => return Err(CodecError::UnknownMessage(other)),
         };
         Ok(kind)
@@ -330,12 +369,13 @@ mod tests {
         CellAttrs, CellColor, CursorInfo, DirtySnapshot, GridPos, PlacementSnapshot, RowMeta,
         SnapshotImage, VtSnapshot,
     };
-    use crate::identity::{ImageId, PaneEpoch, PaneId};
+    use crate::identity::{DomainId, ImageId, PaneEpoch, PaneId};
     use crate::image_cache::{ImageFormat, ImagePayload, ImagePutChunk};
     use crate::transport::{RequestId, decode_payload, encode_payload};
 
     fn pane() -> PaneRef {
         PaneRef {
+            domain: DomainId(1),
             pane_id: PaneId(9),
             epoch: PaneEpoch(1),
         }

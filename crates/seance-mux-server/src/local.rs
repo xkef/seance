@@ -2,6 +2,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, mpsc};
 
 use bytes::Bytes;
+use seance_mux_client::{
+    Domain, DomainEvent, MuxEvent, PaneError, PaneFrameHistory, PaneSpawnOptions, SpawnError,
+};
 use seance_protocol::frame::{
     CursorShape, FrameDelta, Resize, SnapshotImage, ThemeColors, VtSnapshot,
 };
@@ -11,14 +14,18 @@ use seance_protocol::identity::{
 use seance_protocol::image_cache::{ImageCacheEvent, ImageFormat, ImagePayload};
 use seance_protocol::limits::MAX_RETAINED_PANE_UPDATES;
 use seance_protocol::mux::PaneUpdate;
-use seance_vt::{VtEvent, VtSessionHandle, spawn_vt_session};
-
-use crate::{
-    Domain, DomainEvent, MuxEvent, PaneError, PaneFrameHistory, PaneSpawnOptions, SpawnError,
-};
+use seance_vt::{VtEvent, VtSessionHandle, VtSessionOptions, spawn_vt_session};
 
 type EventSink = Arc<Mutex<Box<dyn Fn(MuxEvent) + Send>>>;
 
+/// In-process [`Domain`] impl that owns real PTYs through `seance-vt`.
+///
+/// Each spawned pane runs on a dedicated VT actor thread; LocalDomain
+/// aggregates their events on a single mpsc and republishes them as
+/// [`DomainEvent`]s when [`Domain::drain_events`] is called. Pane IDs are
+/// minted from a per-domain counter, namespaced by the `DomainId` this
+/// instance was constructed with so multiple `LocalDomain`s coexist without
+/// collisions.
 pub struct LocalDomain {
     domain: ProtocolDomainId,
     next_pane_id: u64,
@@ -29,13 +36,26 @@ pub struct LocalDomain {
 }
 
 impl LocalDomain {
+    /// Construct a LocalDomain with the default `DomainId(1)`. `event_sink`
+    /// is called whenever a VT actor produces an event that the host event
+    /// loop should react to (typically a wake on the winit proxy).
     pub fn new<F>(event_sink: F) -> Self
+    where
+        F: Fn(MuxEvent) + Send + 'static,
+    {
+        Self::with_domain(ProtocolDomainId(1), event_sink)
+    }
+
+    /// Construct a LocalDomain with an explicit `DomainId`. Use when more
+    /// than one Domain instance lives in the same process and you need pane
+    /// IDs to remain unambiguous when serialized on the wire.
+    pub fn with_domain<F>(domain: ProtocolDomainId, event_sink: F) -> Self
     where
         F: Fn(MuxEvent) + Send + 'static,
     {
         let (pending_tx, pending_rx) = mpsc::channel();
         Self {
-            domain: ProtocolDomainId(1),
+            domain,
             next_pane_id: 1,
             panes: HashMap::new(),
             pending_tx,
@@ -44,8 +64,16 @@ impl LocalDomain {
         }
     }
 
+    /// The replay window for `pane`, bounded by
+    /// [`seance_protocol::limits::MAX_RETAINED_PANE_UPDATES`]. Used by the
+    /// serve loop to answer client resync requests.
     pub fn history(&self, pane: PaneRef) -> Option<&PaneFrameHistory> {
         self.panes.get(&pane).map(|pane| &pane.history)
+    }
+
+    /// The `DomainId` this LocalDomain mints PaneRefs under.
+    pub fn domain_id(&self) -> ProtocolDomainId {
+        self.domain
     }
 
     fn pane_mut(&mut self, pane: PaneRef) -> Result<&mut LocalPane, PaneError> {
@@ -57,8 +85,8 @@ impl LocalDomain {
 
 impl Domain for LocalDomain {
     fn spawn_pane(&mut self, options: PaneSpawnOptions) -> Result<PaneRef, SpawnError> {
-        let _domain = self.domain;
         let pane_ref = PaneRef {
+            domain: self.domain,
             pane_id: PaneId(self.next_pane_id),
             epoch: PaneEpoch(1),
         };
@@ -66,7 +94,7 @@ impl Domain for LocalDomain {
 
         let pending_tx = self.pending_tx.clone();
         let event_sink = Arc::clone(&self.event_sink);
-        let vt = spawn_vt_session(options.into(), move |event| {
+        let vt = spawn_vt_session(vt_options_from(&options), move |event| {
             let local_event = match event {
                 VtEvent::ContentDirty => LocalDomainEvent::ContentDirty { pane: pane_ref },
                 VtEvent::ClipboardActivity => {
@@ -76,7 +104,8 @@ impl Domain for LocalDomain {
             };
             let _ = pending_tx.send(local_event);
             emit_mux_event(&event_sink, MuxEvent::Wake);
-        })?;
+        })
+        .map_err(|err| SpawnError::new(err.to_string()))?;
 
         self.panes.insert(pane_ref, LocalPane::new(pane_ref, vt));
         Ok(pane_ref)
@@ -140,39 +169,45 @@ impl Domain for LocalDomain {
     }
 
     fn write(&mut self, pane: PaneRef, bytes: Bytes) -> Result<(), PaneError> {
-        self.pane_mut(pane)?.vt.write(bytes).map_err(Into::into)
+        self.pane_mut(pane)?
+            .vt
+            .write(bytes)
+            .map_err(vt_err_to_pane_err)
     }
 
     fn resize(&mut self, pane: PaneRef, resize: Resize) -> Result<(), PaneError> {
-        self.pane_mut(pane)?.vt.resize(resize).map_err(Into::into)
+        self.pane_mut(pane)?
+            .vt
+            .resize(resize)
+            .map_err(vt_err_to_pane_err)
     }
 
     fn scroll_lines(&mut self, pane: PaneRef, delta: i32) -> Result<(), PaneError> {
         self.pane_mut(pane)?
             .vt
             .scroll_lines(delta)
-            .map_err(Into::into)
+            .map_err(vt_err_to_pane_err)
     }
 
     fn set_theme_colors(&mut self, pane: PaneRef, colors: ThemeColors) -> Result<(), PaneError> {
         self.pane_mut(pane)?
             .vt
             .set_theme_colors(colors)
-            .map_err(Into::into)
+            .map_err(vt_err_to_pane_err)
     }
 
     fn set_cursor_shape(&mut self, pane: PaneRef, shape: CursorShape) -> Result<(), PaneError> {
         self.pane_mut(pane)?
             .vt
             .set_cursor_shape(shape)
-            .map_err(Into::into)
+            .map_err(vt_err_to_pane_err)
     }
 
     fn ack_presented(&mut self, pane: PaneRef, generation: u64) -> Result<(), PaneError> {
         self.pane_mut(pane)?
             .vt
             .ack_rendered(generation)
-            .map_err(Into::into)
+            .map_err(vt_err_to_pane_err)
     }
 }
 
@@ -180,6 +215,21 @@ fn emit_mux_event(sink: &EventSink, event: MuxEvent) {
     if let Ok(sink) = sink.lock() {
         sink(event);
     }
+}
+
+fn vt_options_from(options: &PaneSpawnOptions) -> VtSessionOptions {
+    VtSessionOptions {
+        cols: options.cols,
+        rows: options.rows,
+        pixel_width: options.pixel_width,
+        pixel_height: options.pixel_height,
+        initial_cursor_shape: options.initial_cursor_shape,
+        max_scrollback: options.max_scrollback,
+    }
+}
+
+fn vt_err_to_pane_err(err: seance_vt::VtSessionError) -> PaneError {
+    PaneError::new(err.to_string())
 }
 
 pub(crate) fn snapshot_without_image_payloads(snapshot: &VtSnapshot) -> VtSnapshot {
@@ -267,6 +317,7 @@ mod tests {
 
     fn pane_ref() -> PaneRef {
         PaneRef {
+            domain: ProtocolDomainId(1),
             pane_id: PaneId(1),
             epoch: PaneEpoch(1),
         }
@@ -331,5 +382,15 @@ mod tests {
         assert_eq!(stripped.generation, snapshot.generation);
         assert_eq!(stripped.cells, snapshot.cells);
         assert_eq!(stripped.text, snapshot.text);
+    }
+
+    #[test]
+    fn pane_spawn_options_propagate_max_scrollback_to_vt() {
+        let options = PaneSpawnOptions {
+            max_scrollback: 12_345,
+            ..PaneSpawnOptions::default()
+        };
+        let vt = vt_options_from(&options);
+        assert_eq!(vt.max_scrollback, 12_345);
     }
 }

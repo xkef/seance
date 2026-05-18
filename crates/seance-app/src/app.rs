@@ -11,6 +11,7 @@
 //! - `reload.rs` — hot-reload config / theme files.
 
 use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
@@ -21,9 +22,9 @@ use winit::window::{Window, WindowId};
 
 use seance_config::Config;
 use seance_input::InputHandler;
-use seance_mux::{
-    CursorShape as MuxCursorShape, LinkDetector, LinkModifiers, LocalDomain, MuxClient, MuxEvent,
-    PaneSpawnOptions,
+use seance_mux_client::{
+    CursorShape as MuxCursorShape, LinkDetector, LinkModifiers, MuxClient, MuxEvent,
+    PaneSpawnOptions, ProtocolDomain,
 };
 use seance_render::{RenderInputs, RendererConfig, TerminalRenderer};
 
@@ -46,6 +47,10 @@ pub(crate) struct App {
     pub(crate) font_size: f32,
     proxy: EventLoopProxy<UserEvent>,
     watcher: Option<ConfigWatcher>,
+    /// Handle to the in-process mux-server thread that owns LocalDomain.
+    /// Dropping it (on `App` drop / shutdown) closes the InProcessTransport
+    /// which causes `serve` to return and the thread to exit cleanly.
+    _server_thread: Option<JoinHandle<()>>,
 }
 
 impl App {
@@ -63,6 +68,7 @@ impl App {
             font_size,
             proxy,
             watcher: None,
+            _server_thread: None,
         }
     }
 
@@ -238,12 +244,17 @@ impl ApplicationHandler<UserEvent> for App {
         let (cols, rows) = renderer.grid_size();
         let proxy = self.proxy.clone();
         let link_detector = link_detector_from_config(&self.config.links);
-        let mut mux = MuxClient::with_link_detector(
-            LocalDomain::new(move |event| {
-                let _ = proxy.send_event(UserEvent::Mux(event));
-            }),
-            link_detector,
-        );
+        // Local mode runs the wire protocol end-to-end: LocalDomain lives on
+        // a server thread (seance-mux-server), the frontend talks to it
+        // through ProtocolDomain<InProcessTransport>. Same shape as a future
+        // Unix/SSH/TLS client (M12) — the only thing that swaps is the
+        // Transport.
+        let (client_transport, server_thread) = seance_mux_server::spawn_local_server(move || {
+            let _ = proxy.send_event(UserEvent::Mux(MuxEvent::Wake));
+        });
+        self._server_thread = Some(server_thread);
+        let mut mux =
+            MuxClient::with_link_detector(ProtocolDomain::new(client_transport), link_detector);
         let active_pane = mux
             .spawn_pane(PaneSpawnOptions {
                 cols,

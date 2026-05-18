@@ -2494,7 +2494,8 @@ dependencies = [
  "raw-window-handle",
  "seance-config",
  "seance-input",
- "seance-mux",
+ "seance-mux-client",
+ "seance-mux-server",
  "seance-render",
  "tracing",
  "tracing-appender",
@@ -2538,7 +2539,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "seance-mux"
+name = "seance-mux-client"
 version = "0.1.0"
 dependencies = [
  "bytes",
@@ -2546,13 +2547,25 @@ dependencies = [
  "pretty_assertions",
  "seance-frame",
  "seance-protocol",
+]
+
+[[package]]
+name = "seance-mux-server"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "pretty_assertions",
+ "seance-mux-client",
+ "seance-protocol",
  "seance-vt",
+ "tracing",
 ]
 
 [[package]]
 name = "seance-protocol"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "postcard",
  "pretty_assertions",
  "proptest",
@@ -2586,7 +2599,7 @@ dependencies = [
  "rand_core 0.6.4",
  "rand_pcg",
  "seance-frame",
- "seance-mux",
+ "seance-mux-client",
  "seance-protocol",
  "seance-vt",
  "unicode-width",

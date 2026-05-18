@@ -1,0 +1,38 @@
+[package]
+name = "seance-mux-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = """
+Server-side mux for seance.
+
+`LocalDomain` wraps `seance-vt` VT sessions as a `Domain` impl: per-pane
+VT actor threads, snapshot deltas published as `PaneUpdate`s, clipboard
+requests forwarded as `DomainEvent`s.
+
+The `serve()` loop is the protocol-dispatch driver — translates inbound
+`ClientMessage`s to `Domain` method calls and outbound `DomainEvent`s to
+`ServerMessage` frames. `spawn_local_server` is the in-process
+bootstrap: it pairs `LocalDomain` with an `InProcessTransport`, runs
+`serve` on a dedicated thread, and returns the client end to hand to
+`ProtocolDomain`. The same `serve` loop will drive a cross-process
+daemon binary in M12 Phase 2 with only the `Transport` swapped.
+"""
+
+[dependencies]
+# internal
+seance-mux-client.workspace = true
+seance-protocol.workspace = true
+seance-vt.workspace = true
+
+# external
+bytes.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# external
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true

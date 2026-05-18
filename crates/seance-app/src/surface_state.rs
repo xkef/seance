@@ -14,19 +14,25 @@ use winit::event::Modifiers;
 use winit::window::{CursorIcon, Window};
 
 use seance_config::ClipboardPolicy;
-use seance_mux::{
+use seance_mux_client::{
     ClientRefresh, ClipboardRequest, CursorShape as MuxCursorShape, DetectedLink, GridPos,
-    LinkModifiers, LinkTarget, LocalDomain, MuxClient, PaneRef, Resize, TerminalModes, ThemeColors,
-    encode_osc52_reply,
+    InProcessTransport, LinkModifiers, LinkTarget, MuxClient, PaneRef, ProtocolDomain, Resize,
+    TerminalModes, ThemeColors, encode_osc52_reply,
 };
 use seance_render::{HoveredLinkRange, RenderInputs, TerminalRenderer};
 
 use crate::mouse::MouseState;
 
+/// The concrete Domain seance-app uses for local mode: a protocol client
+/// over an in-process transport paired with `seance-mux-server::serve` on
+/// a background thread. Remote Domains (M12) plug into the same `MuxClient`
+/// by swapping the type parameter, not by re-shaping `SurfaceState`.
+pub(crate) type AppDomain = ProtocolDomain<InProcessTransport>;
+
 pub(crate) struct SurfaceState {
     pub(crate) window: Arc<Window>,
     pub(crate) renderer: TerminalRenderer,
-    pub(crate) mux: MuxClient<LocalDomain>,
+    pub(crate) mux: MuxClient<AppDomain>,
     pub(crate) active_pane: PaneRef,
     pub(crate) render_inputs: RenderInputs,
     pub(crate) modifiers: Modifiers,
@@ -47,7 +53,7 @@ impl SurfaceState {
     pub(crate) fn new(
         window: Arc<Window>,
         renderer: TerminalRenderer,
-        mux: MuxClient<LocalDomain>,
+        mux: MuxClient<AppDomain>,
         active_pane: PaneRef,
         render_inputs: RenderInputs,
     ) -> Self {
@@ -79,7 +85,9 @@ impl SurfaceState {
         self.request_redraw();
     }
 
-    pub(crate) fn refresh_updates(&mut self) -> Result<ClientRefresh, seance_mux::PaneError> {
+    pub(crate) fn refresh_updates(
+        &mut self,
+    ) -> Result<ClientRefresh, seance_mux_client::PaneError> {
         self.mux.refresh_updates()
     }
 

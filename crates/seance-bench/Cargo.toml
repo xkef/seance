@@ -4,7 +4,14 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Frame-time bench harness for M2 perf work (CPU + headless GPU submit)"
+description = """
+Frame-time benches for the seance renderer.
+
+Measures CPU rebuild cost (cell builder, shape cache, glyph cache) and
+GPU submit cost in isolation via a headless wgpu adapter. Drives M2
+performance work — dirty-row text rebuild, atlas-upload batching,
+shape-cache sizing.
+"""
 publish = false
 
 [[bin]]

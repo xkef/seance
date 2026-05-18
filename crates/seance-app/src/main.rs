@@ -1,6 +1,16 @@
+//! seance binary entry point.
+//!
+//! Bootstraps configuration, the `tracing` subscriber, the winit event
+//! loop, and the [`App`] handler. Per-surface state (window, renderer,
+//! mux client, server thread) is built lazily in `App::resumed`. The mux
+//! client uses `seance_mux_client::ProtocolDomain` over an
+//! `seance_protocol::transport::InProcessTransport` paired with
+//! `seance-mux-server` on a background thread — local mode runs the wire
+//! protocol end-to-end. See `docs/architecture.md` for the pipeline.
+
 use std::path::PathBuf;
 
-use seance_mux::MuxEvent;
+use seance_mux_client::MuxEvent;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};

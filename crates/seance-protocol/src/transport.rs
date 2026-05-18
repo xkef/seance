@@ -7,24 +7,36 @@ use crate::identity::ServerSeq;
 use crate::limits::MAX_DECODED_MESSAGE_BYTES;
 use crate::mux::{ClientMessage, MessageKind, ServerMessage};
 
+/// Correlates a server response to the client request that triggered it.
+/// [`RequestId::PUSH`] (= 0) marks unilateral server pushes.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
 pub struct RequestId(pub u64);
 
+/// Partitions the wire into independent ordering domains so a slow stream
+/// (e.g. a large image upload) cannot head-of-line-block keyboard input.
+/// Transport impls are expected to preserve per-stream ordering but may
+/// interleave streams freely.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
 pub struct StreamId(pub u16);
 
 impl StreamId {
+    /// Lifecycle / topology / acks. Default for messages that don't fit
+    /// the dedicated streams below.
     pub const CONTROL: Self = Self(0);
+    /// Keyboard / paste / mouse bytes from client to server.
     pub const INPUT: Self = Self(1);
+    /// Frame deltas and `Lines` data from server to client.
     pub const OUTPUT: Self = Self(2);
+    /// Image cache events (Put / Chunk / Evict).
     pub const IMAGES: Self = Self(3);
 }
 
 impl RequestId {
+    /// Sentinel meaning "server-initiated push, not a response".
     pub const PUSH: Self = Self(0);
 
     pub fn is_push(self) -> bool {
@@ -32,15 +44,30 @@ impl RequestId {
     }
 }
 
+/// A single encoded frame ready for the wire. `bytes` already includes
+/// the length-prefixed envelope; the receiver decodes it via
+/// [`decode_envelope`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransportFrame {
     pub stream_id: StreamId,
     pub bytes: Vec<u8>,
 }
 
+/// Frame-oriented transport contract.
+///
+/// Implementors preserve per-stream ordering. `try_recv` is non-blocking
+/// — callers poll it (often paired with a wake mechanism). The trait is
+/// intentionally not `Send`-bounded so single-threaded server bootstraps
+/// can use cheap interior-mutability impls; transports crossing thread
+/// or process boundaries add their own `Send`/`Sync` requirements as
+/// needed.
 pub trait Transport {
+    /// Enqueue `frame` for delivery. Returns `Err(Closed)` if the peer
+    /// has hung up.
     fn send(&self, frame: TransportFrame) -> Result<(), TransportError>;
 
+    /// Non-blocking receive. Returns `Ok(None)` when no frame is
+    /// currently available, `Err(Closed)` when the peer has hung up.
     fn try_recv(&self) -> Result<Option<TransportFrame>, TransportError>;
 }
 
@@ -225,9 +252,21 @@ pub fn encode_client_frame(
 }
 
 pub fn encode_server_frame(message: ServerMessage) -> Result<TransportFrame, CodecError> {
+    encode_server_frame_with_request(message, RequestId::PUSH)
+}
+
+/// Encode a server message that carries a `request_id` correlating it to a
+/// prior client request (e.g. the [`ServerMessage::Topology`] reply to a
+/// [`ClientMessage::SpawnPane`]). Use [`RequestId::PUSH`] for unilateral
+/// server-initiated messages (the default path through
+/// [`encode_server_frame`]).
+pub fn encode_server_frame_with_request(
+    message: ServerMessage,
+    request_id: RequestId,
+) -> Result<TransportFrame, CodecError> {
     let kind = message.kind();
     let seq = server_seq(&message);
-    let bytes = encode_envelope(kind, RequestId::PUSH, seq, &message)?;
+    let bytes = encode_envelope(kind, request_id, seq, &message)?;
     Ok(TransportFrame {
         stream_id: server_stream(&message),
         bytes,
@@ -235,6 +274,17 @@ pub fn encode_server_frame(message: ServerMessage) -> Result<TransportFrame, Cod
 }
 
 pub fn decode_client_frame(frame: &TransportFrame) -> Result<ClientMessage, CodecError> {
+    let (_request_id, message) = decode_client_frame_with_request(frame)?;
+    Ok(message)
+}
+
+/// Decode a client frame and return both the originating [`RequestId`] and
+/// the [`ClientMessage`]. The server uses the request id to correlate
+/// responses (e.g. tagging a [`ServerMessage::Topology`] as the reply to a
+/// [`ClientMessage::SpawnPane`]).
+pub fn decode_client_frame_with_request(
+    frame: &TransportFrame,
+) -> Result<(RequestId, ClientMessage), CodecError> {
     let (envelope, _consumed) = decode_envelope(&frame.bytes, MAX_DECODED_MESSAGE_BYTES)?;
     let kind = envelope.known_kind()?;
     ensure_client_kind(kind)?;
@@ -245,10 +295,21 @@ pub fn decode_client_frame(frame: &TransportFrame) -> Result<ClientMessage, Code
             actual: kind.into(),
         });
     }
-    Ok(message)
+    Ok((envelope.request_id, message))
 }
 
 pub fn decode_server_frame(frame: &TransportFrame) -> Result<ServerMessage, CodecError> {
+    let (_request_id, message) = decode_server_frame_with_request(frame)?;
+    Ok(message)
+}
+
+/// Decode a server frame and return both the correlating [`RequestId`] and
+/// the [`ServerMessage`]. The client uses the request id to match a server
+/// reply to the in-flight client request that triggered it; a value of
+/// [`RequestId::PUSH`] means the message is unsolicited.
+pub fn decode_server_frame_with_request(
+    frame: &TransportFrame,
+) -> Result<(RequestId, ServerMessage), CodecError> {
     let (envelope, _consumed) = decode_envelope(&frame.bytes, MAX_DECODED_MESSAGE_BYTES)?;
     let kind = envelope.known_kind()?;
     ensure_server_kind(kind)?;
@@ -259,7 +320,7 @@ pub fn decode_server_frame(frame: &TransportFrame) -> Result<ServerMessage, Code
             actual: kind.into(),
         });
     }
-    Ok(message)
+    Ok((envelope.request_id, message))
 }
 
 pub fn client_stream(message: &ClientMessage) -> StreamId {
@@ -277,6 +338,11 @@ pub fn server_stream(message: &ServerMessage) -> StreamId {
         _ => StreamId::CONTROL,
     }
 }
+
+/// Bound on how often the in-process server bootstrap parks itself when both
+/// directions are quiet. Picked to match the deadline scheduler's coarse
+/// wake granularity without paying noticeable in-process latency.
+pub const SERVE_IDLE_BACKOFF_MS: u64 = 1;
 
 pub fn server_seq(message: &ServerMessage) -> ServerSeq {
     match message {
@@ -317,6 +383,7 @@ fn ensure_server_kind(kind: MessageKind) -> Result<(), CodecError> {
         | MessageKind::ServerTopology
         | MessageKind::ServerPaneUpdate
         | MessageKind::ServerPaneExited
+        | MessageKind::ServerPaneClipboardRequest
         | MessageKind::ServerResyncRequired
         | MessageKind::ServerPong
         | MessageKind::ServerLines => Ok(()),
@@ -386,12 +453,13 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    use crate::identity::{PaneEpoch, PaneId, PaneRef, ServerSeq};
+    use crate::identity::{DomainId, PaneEpoch, PaneId, PaneRef, ServerSeq};
     use crate::limits::MAX_DECODED_MESSAGE_BYTES;
     use crate::mux::{ClientMessage, MessageKind, ServerMessage};
 
     fn pane() -> PaneRef {
         PaneRef {
+            domain: DomainId(1),
             pane_id: PaneId(9),
             epoch: PaneEpoch(1),
         }

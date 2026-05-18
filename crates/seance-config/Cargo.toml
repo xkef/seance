@@ -4,7 +4,19 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Configuration and theme loading for seance (TOML config, Ghostty-syntax themes)"
+description = """
+Configuration and theme loading for seance.
+
+Parses `config.toml` from `$XDG_CONFIG_HOME/seance/` (or the macOS
+equivalent) into a typed `Config`, and Ghostty-syntax theme files from
+`themes/` into a `Theme`. A default Catppuccin theme set is bundled at
+compile time via `include_dir!` so seance always renders with sensible
+colors even before a user creates a config.
+
+Hot-reload classifies edits through `ConfigDiff` so only the affected
+caches invalidate: theme → repaint; font → clear glyph + shape caches;
+keybind → rebuild action table.
+"""
 
 [dependencies]
 # external

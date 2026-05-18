@@ -1,12 +1,21 @@
 use std::time::{Duration, Instant};
 
 use winit::dpi::PhysicalPosition;
+use winit::event::MouseButton;
 
 const MULTI_CLICK_WINDOW: Duration = Duration::from_millis(500);
 
 pub(crate) struct MouseState {
     pub(crate) cursor_pos: PhysicalPosition<f64>,
     pub(crate) is_down: bool,
+    /// Most recent button held during PTY-forwarded mouse tracking.
+    /// `None` between releases or while the local-selection path owns
+    /// the drag. Set on press, cleared on the matching release. We
+    /// thread this through motion events because libghostty's encoder
+    /// drops button-event (DECSET 1002) motion when `button` is `None`
+    /// — tmux uses 1002 by default, so without it pane-border drags
+    /// never reach the server.
+    pub(crate) drag_button: Option<MouseButton>,
     click_count: u8,
     last_click_time: Instant,
     last_click_pos: (u16, u16),
@@ -17,6 +26,7 @@ impl Default for MouseState {
         Self {
             cursor_pos: PhysicalPosition::new(0.0, 0.0),
             is_down: false,
+            drag_button: None,
             click_count: 0,
             last_click_time: Instant::now(),
             last_click_pos: (0, 0),

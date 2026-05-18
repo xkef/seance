@@ -4,7 +4,21 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Render-facing frame traits and borrowed adapters for seance"
+description = """
+Render-facing frame contract for seance.
+
+The `FrameSource` trait is the seam every renderer call reads through:
+per-pane grid size, cursor, selection, dirty rows, cells, images, and
+placements. Visitor traits (`CellVisitor`, `ImageVisitor`,
+`PlacementVisitor`) keep traversal allocation-free — the renderer never
+materializes a `Vec<CellView>`.
+
+`SnapshotFrameSource` is the adapter that bridges an owned
+`seance_protocol::frame::VtSnapshot` into the trait. Local panes, remote
+panes received over the wire, and headless test fixtures all implement
+the same contract, so the renderer stays agnostic to where the frame
+data came from.
+"""
 
 [dependencies]
 # internal
