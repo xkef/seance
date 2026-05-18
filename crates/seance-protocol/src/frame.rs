@@ -1458,3 +1458,92 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod prop_tests {
+    use super::*;
+    use proptest::collection::vec;
+    use proptest::prelude::*;
+
+    fn arb_cell_color() -> impl Strategy<Value = CellColor> {
+        prop_oneof![
+            Just(CellColor::Default),
+            any::<u8>().prop_map(CellColor::Palette),
+            (any::<u8>(), any::<u8>(), any::<u8>()).prop_map(|(r, g, b)| CellColor::Rgb(r, g, b)),
+        ]
+    }
+
+    fn arb_attrs() -> impl Strategy<Value = CellAttrs> {
+        any::<[bool; 5]>().prop_map(|[bold, italic, faint, inverse, invisible]| CellAttrs {
+            bold,
+            italic,
+            faint,
+            inverse,
+            invisible,
+        })
+    }
+
+    fn arb_snapshot() -> impl Strategy<Value = VtSnapshot> {
+        (1u16..=6, 1u16..=6, any::<u64>()).prop_flat_map(|(cols, rows, generation)| {
+            let len = usize::from(cols) * usize::from(rows);
+            let cell = (
+                "[a-z0-9 ]{0,2}",
+                arb_cell_color(),
+                arb_cell_color(),
+                arb_attrs(),
+            );
+            (vec(cell, len..=len), vec(any::<bool>(), 0..=3)).prop_map(
+                move |(cells, link_flags)| {
+                    let mut snap = VtSnapshot::empty(cols, rows);
+                    snap.generation = generation;
+                    let urls = ["https://a.example", "https://b.example"];
+                    let link_indices: Vec<u16> = link_flags
+                        .iter()
+                        .enumerate()
+                        .map(|(i, _)| snap.intern_hyperlink(urls[i % urls.len()]))
+                        .collect();
+                    for (i, (text, fg, bg, attrs)) in cells.into_iter().enumerate() {
+                        snap.push_cell(&text, fg, bg, attrs);
+                        if !link_indices.is_empty() && i % 3 == 0 {
+                            let idx = link_indices[i % link_indices.len()];
+                            snap.set_last_cell_hyperlink(idx);
+                        }
+                    }
+                    snap
+                },
+            )
+        })
+    }
+
+    proptest! {
+        #[test]
+        fn postcard_roundtrips_vt_snapshot(snap in arb_snapshot()) {
+            let bytes = postcard::to_allocvec(&snap).expect("serialize");
+            let decoded: VtSnapshot = postcard::from_bytes(&bytes).expect("deserialize");
+            prop_assert_eq!(snap, decoded);
+        }
+
+        #[test]
+        fn postcard_roundtrips_frame_delta_full(snap in arb_snapshot()) {
+            let generation = snap.generation;
+            let frame = FrameDelta::Full { generation, snapshot: snap };
+            let bytes = postcard::to_allocvec(&frame).expect("serialize");
+            let decoded: FrameDelta = postcard::from_bytes(&bytes).expect("deserialize");
+            prop_assert_eq!(frame, decoded);
+        }
+
+        #[test]
+        fn full_frame_apply_preserves_payload(snap in arb_snapshot()) {
+            let frame = FrameDelta::Full {
+                generation: snap.generation,
+                snapshot: snap.clone(),
+            };
+            let applied = apply_frame_delta(None, &frame).expect("apply");
+            prop_assert_eq!(applied.generation, snap.generation);
+            prop_assert_eq!(applied.cells, snap.cells);
+            prop_assert_eq!(applied.text, snap.text);
+            prop_assert_eq!(applied.hyperlinks, snap.hyperlinks);
+            prop_assert_eq!(applied.dirty, DirtySnapshot::Full);
+        }
+    }
+}

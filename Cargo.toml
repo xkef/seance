@@ -61,6 +61,7 @@ pollster = "0.4"
 portable-pty = "0.9"
 postcard = { version = "1", features = ["use-std"] }
 pretty_assertions = "1"
+proptest = "1"
 rand_core = "0.6"
 rand_pcg = "0.3"
 raw-window-handle = "0.6"
