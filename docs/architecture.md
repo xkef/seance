@@ -205,17 +205,20 @@ bg_cells SSBO / atlas textures + sampler):
 | 2    | `cell_bg`   | fullscreen triangle | per-cell bg from SSBO + selection + cursor shapes | premultiplied alpha |
 | 3    | `cell_text` | instanced quads     | atlas sample, min-contrast, cursor color swap     | premultiplied alpha |
 
-### Target layer stack [PLANNED: [M4][m4]]
+### Layer schedule [IMPLEMENTED: [M4][m4]]
 
-A dynamic `i32`-keyed layer schedule, sorted CPU-side, no depth buffer — not a
-closed enum. Layers are created on demand (`layer_for_z(z)`) and kept sorted by
-z-index; the renderer enumerates no product features. Two axes:
+The draw order is a dynamic `i32`-keyed layer schedule, sorted CPU-side, no
+depth buffer — not a closed enum. Layers are created on demand
+(`LayerSchedule::layer_for_z(z)` in `seance-render/src/gpu/schedule.rs`) and
+kept sorted by z-index; the renderer enumerates no product features. Two axes:
 
 - **Layer = open `i32` z.** Well-known positions are `const` (`Z_MAIN = 0`, a
-  `Z_WINDOW_BG` band below it); new overlays (status/tab bar, command palette,
-  IME preedit, split borders) pick their own z and the renderer stays agnostic.
-  Mirrors WezTerm's `layer_for_zindex` (a sorted `Vec` created on demand),
-  adapted to seance's heterogeneous draw ops.
+  `Z_WINDOW_BG` band below it, both in `seance-frame/src/layer.rs`); new
+  overlays (status/tab bar, command palette, IME preedit, split borders) pick
+  their own z and the renderer stays agnostic. Mirrors WezTerm's
+  `layer_for_zindex` (a sorted `Vec` created on demand), adapted to seance's
+  heterogeneous draw ops, which are modeled as a `DrawOp` enum (`BgColorFill`,
+  `CellBg`, `CellText`, `KittyBand`) rather than a single uniform quad buffer.
 - **Sub-role = fixed within-layer order**, `Below → Content → Above`.
 
 The terminal cell content is the reference plane, not a single z, so the three
@@ -226,12 +229,21 @@ text. Within a band, placements keep their raw-`i32`-z sort. Draw order at
 
 ```
 SubRole::Below     bg_color fill → Kitty below-bg → cell_bg SSBO → Kitty below-text
-SubRole::Content   cell_text (glyphs + sprite underlines + cursor glyph)
-SubRole::Above     Kitty above-text → cursor-over-text → selection overlay
+SubRole::Content   cell_text (glyphs)
+SubRole::Above     Kitty above-text
 ```
 
-Stacked window backgrounds sit at negative z; floating UI at positive z — each a
-`layer_for_z(z)` call, no type edits.
+`cell_bg` still carries selection and cursor shapes, and `cell_text` carries
+sprite underlines and the cursor glyph; promoting those into ordered cells of
+their own sub-role is tracked by #262, #263, and #264. The schedule reproduces
+the legacy pass sequence byte-for-byte today — its payoff is structural: stacked
+window backgrounds sit at negative z and floating UI at positive z, each a
+single `layer_for_z(z)` call with no enum, match, or type edits.
+
+A surfaceless render path (`GpuState::render_to_rgba`, exposed via
+`TerminalRenderer::new_headless`) renders one frame into an owned offscreen
+texture and reads it back as `Rgba8Unorm` — the shared rig for the
+byte-identical regression harness and the upload-strategy bench.
 
 ### Offscreen post-pass infrastructure [PLANNED: [M4][m4] + [M7][m7]]
 
