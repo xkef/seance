@@ -7,12 +7,13 @@ use winit::window::Window;
 use super::atlas_texture::{atlas_view, write_atlas_plane};
 use super::dynamic_buffer::DynamicBuffer;
 use super::pipeline::Pipelines;
+use super::schedule::{DrawOp, LayerSchedule};
 use super::uniforms::Uniforms;
 use crate::image::ImageRenderer;
 use crate::renderer::RenderInputs;
 use crate::text::{CellText, FrameInfo, GlyphAtlas};
 use seance_config::Theme;
-use seance_frame::{FrameSource, PlacementLayer};
+use seance_frame::{FrameSource, PlacementLayer, SubRole, Z_MAIN};
 use seance_protocol::frame::DirtySnapshot;
 use seance_protocol::image_cache::ImageCacheEvent;
 
@@ -47,6 +48,8 @@ pub(crate) struct GpuState {
     atlas_sampler: Sampler,
 
     images: ImageRenderer,
+
+    schedule: LayerSchedule,
 
     size: PhysicalSize<u32>,
     surface_dirty: bool,
@@ -145,6 +148,7 @@ impl GpuState {
             atlas_bind_group: None,
             atlas_sampler,
             images,
+            schedule: LayerSchedule::default(),
             size,
             surface_dirty: false,
         }
@@ -385,7 +389,26 @@ impl GpuState {
         }));
     }
 
-    fn record_passes(&self, encoder: &mut CommandEncoder, view: &TextureView) {
+    /// Rebuild the per-frame draw schedule. Today this is a single `Z_MAIN`
+    /// layer whose sub-roles reproduce the legacy fixed pass order: the three
+    /// Kitty bands and `cell_bg` sit in `Below`, glyphs in `Content`, and the
+    /// above-text band in `Above`. New layers (window backgrounds at negative
+    /// z, floating UI at positive z) are added with `layer_for_z(N)` and need
+    /// no changes here.
+    fn rebuild_schedule(&mut self) {
+        self.schedule.clear();
+        let main = self.schedule.layer_for_z(Z_MAIN);
+        main.push(SubRole::Below, DrawOp::BgColorFill);
+        main.push(SubRole::Below, DrawOp::KittyBand(PlacementLayer::BelowBg));
+        main.push(SubRole::Below, DrawOp::CellBg);
+        main.push(SubRole::Below, DrawOp::KittyBand(PlacementLayer::BelowText));
+        main.push(SubRole::Content, DrawOp::CellText);
+        main.push(SubRole::Above, DrawOp::KittyBand(PlacementLayer::AboveText));
+    }
+
+    fn record_passes(&mut self, encoder: &mut CommandEncoder, view: &TextureView) {
+        self.rebuild_schedule();
+
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("seance_frame"),
             color_attachments: &[Some(RenderPassColorAttachment {
@@ -403,52 +426,48 @@ impl GpuState {
             multiview_mask: None,
         });
 
-        // Pass 1: solid background.
-        pass.set_pipeline(&self.pipelines.bg_color);
-        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-        pass.draw(0..3, 0..1);
-
-        // Kitty images below the cell background layer.
-        self.images
-            .record_layer(&mut pass, PlacementLayer::BelowBg, &self.uniform_bind_group);
-
-        // Pass 2: per-cell backgrounds + selection + cursor shapes.
-        let maybe_bg_bg = self.bg_cells.bind_group.as_ref();
-        if let Some(bg_bg) = maybe_bg_bg {
-            pass.set_pipeline(&self.pipelines.cell_bg);
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            pass.set_bind_group(1, bg_bg, &[]);
-            pass.draw(0..3, 0..1);
+        for layer in self.schedule.layers() {
+            for op in layer.ops() {
+                self.record_op(&mut pass, op);
+            }
         }
+    }
 
-        // Kitty images between cell bg and text.
-        self.images.record_layer(
-            &mut pass,
-            PlacementLayer::BelowText,
-            &self.uniform_bind_group,
-        );
-
-        // Pass 3: text (instanced quads).
-        if let (Some(bg_bg), Some(atlas_bg), Some(text_buf)) = (
-            maybe_bg_bg,
-            self.atlas_bind_group.as_ref(),
-            self.text_instances.buffer.as_ref(),
-        ) && self.text_instance_count > 0
-        {
-            pass.set_pipeline(&self.pipelines.cell_text);
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            pass.set_bind_group(1, bg_bg, &[]);
-            pass.set_bind_group(2, atlas_bg, &[]);
-            pass.set_vertex_buffer(0, text_buf.slice(..));
-            pass.draw(0..4, 0..self.text_instance_count);
+    fn record_op(&self, pass: &mut RenderPass<'_>, op: DrawOp) {
+        match op {
+            DrawOp::BgColorFill => {
+                pass.set_pipeline(&self.pipelines.bg_color);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            DrawOp::CellBg => {
+                if let Some(bg_bg) = self.bg_cells.bind_group.as_ref() {
+                    pass.set_pipeline(&self.pipelines.cell_bg);
+                    pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    pass.set_bind_group(1, bg_bg, &[]);
+                    pass.draw(0..3, 0..1);
+                }
+            }
+            DrawOp::CellText => {
+                if let (Some(bg_bg), Some(atlas_bg), Some(text_buf)) = (
+                    self.bg_cells.bind_group.as_ref(),
+                    self.atlas_bind_group.as_ref(),
+                    self.text_instances.buffer.as_ref(),
+                ) && self.text_instance_count > 0
+                {
+                    pass.set_pipeline(&self.pipelines.cell_text);
+                    pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    pass.set_bind_group(1, bg_bg, &[]);
+                    pass.set_bind_group(2, atlas_bg, &[]);
+                    pass.set_vertex_buffer(0, text_buf.slice(..));
+                    pass.draw(0..4, 0..self.text_instance_count);
+                }
+            }
+            DrawOp::KittyBand(band) => {
+                self.images
+                    .record_layer(pass, band, &self.uniform_bind_group);
+            }
         }
-
-        // Kitty images above the text layer.
-        self.images.record_layer(
-            &mut pass,
-            PlacementLayer::AboveText,
-            &self.uniform_bind_group,
-        );
     }
 }
 

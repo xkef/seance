@@ -12,6 +12,6 @@ mod layer;
 mod snapshot_source;
 mod source;
 
-pub use layer::PlacementLayer;
+pub use layer::{PlacementLayer, SubRole, Z_MAIN, Z_WINDOW_BG};
 pub use snapshot_source::SnapshotFrameSource;
 pub use source::{CellView, CellVisitor, FrameSource, ImageInfo, ImageVisitor, PlacementVisitor};
