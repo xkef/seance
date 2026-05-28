@@ -29,7 +29,9 @@ pub(crate) struct CellFrame<'a> {
 }
 
 pub(crate) struct GpuState {
-    surface: Surface<'static>,
+    // `None` in the headless render path (regression harness, benches),
+    // which renders to an owned offscreen texture instead of a swapchain.
+    surface: Option<Surface<'static>>,
     device: Device,
     queue: Queue,
     config: SurfaceConfiguration,
@@ -101,8 +103,64 @@ impl GpuState {
         };
         surface.configure(&device, &config);
 
-        let pipelines = Pipelines::new(&device, format);
-        let images = ImageRenderer::new(&device, format, &pipelines.uniform_bgl);
+        Self::assemble(device, queue, config, Some(surface), size)
+    }
+
+    /// Build a surfaceless `GpuState` that renders to an owned offscreen
+    /// texture. Used by the regression harness and benches. Returns `None`
+    /// when no GPU adapter is available (CI without a GPU, sandboxes).
+    ///
+    /// The target format is `Rgba8Unorm` so [`Self::render_to_rgba`] reads
+    /// back tightly-packed RGBA without a swizzle. The windowed path picks a
+    /// non-srgb surface format for the same reason, so the two paths shade
+    /// identically.
+    pub(crate) async fn new_headless(width: u32, height: u32) -> Option<Self> {
+        let instance = Instance::new(InstanceDescriptor {
+            backends: Backends::PRIMARY,
+            ..InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = instance
+            .request_adapter(&RequestAdapterOptions {
+                power_preference: PowerPreference::HighPerformance,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            })
+            .await
+            .ok()?;
+        let (device, queue) = adapter
+            .request_device(&DeviceDescriptor {
+                label: Some("seance-headless"),
+                required_features: Features::empty(),
+                required_limits: Limits::default(),
+                memory_hints: MemoryHints::Performance,
+                ..Default::default()
+            })
+            .await
+            .ok()?;
+
+        let size = PhysicalSize::new(width.max(1), height.max(1));
+        let config = SurfaceConfiguration {
+            usage: TextureUsages::RENDER_ATTACHMENT,
+            format: TextureFormat::Rgba8Unorm,
+            width: size.width,
+            height: size.height,
+            present_mode: PresentMode::AutoVsync,
+            alpha_mode: CompositeAlphaMode::Auto,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        Some(Self::assemble(device, queue, config, None, size))
+    }
+
+    fn assemble(
+        device: Device,
+        queue: Queue,
+        config: SurfaceConfiguration,
+        surface: Option<Surface<'static>>,
+        size: PhysicalSize<u32>,
+    ) -> Self {
+        let pipelines = Pipelines::new(&device, config.format);
+        let images = ImageRenderer::new(&device, config.format, &pipelines.uniform_bgl);
 
         let uniform_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("uniforms"),
@@ -184,8 +242,11 @@ impl GpuState {
         theme: &Theme,
     ) -> bool {
         let _span = tracing::trace_span!("gpu::submit").entered();
+        let Some(surface) = self.surface.as_ref() else {
+            return false;
+        };
         if self.surface_dirty {
-            self.surface.configure(&self.device, &self.config);
+            surface.configure(&self.device, &self.config);
             self.surface_dirty = false;
         }
 
@@ -217,14 +278,118 @@ impl GpuState {
         true
     }
 
+    /// Render one frame to an owned offscreen texture and read it back as
+    /// tightly-packed `Rgba8Unorm` (`width * height * 4` bytes, row-major,
+    /// top-left origin). The regression harness and benches use this; there
+    /// is no swapchain involved, so it works without a window.
+    ///
+    /// UNVERIFIED: written against the wgpu 29 readback contract but not yet
+    /// executed on a GPU (the dev container has no adapter). Validate on a
+    /// GPU host before relying on the exact bytes.
+    pub(crate) fn render_to_rgba(
+        &mut self,
+        frame_info: &FrameInfo,
+        cells: CellFrame<'_>,
+        atlas: &GlyphAtlas,
+        inputs: &RenderInputs,
+        theme: &Theme,
+    ) -> Vec<u8> {
+        self.upload_uniforms(frame_info, inputs, theme);
+        self.upload_cell_data(
+            cells.bg_cells,
+            cells.text_cells,
+            cells.dirty,
+            frame_info.grid_cols,
+        );
+        self.upload_atlas(atlas);
+        self.ensure_atlas_bind_group();
+
+        let (width, height) = (self.size.width.max(1), self.size.height.max(1));
+        let target = self.device.create_texture(&TextureDescriptor {
+            label: Some("headless_target"),
+            size: Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: self.config.format,
+            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&TextureViewDescriptor::default());
+
+        // 256-byte row alignment is required by copy_texture_to_buffer; we
+        // strip the padding back out after mapping.
+        let bytes_per_pixel = 4u32;
+        let unpadded_row = width * bytes_per_pixel;
+        let align = COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_row = unpadded_row.div_ceil(align) * align;
+        let readback = self.device.create_buffer(&BufferDescriptor {
+            label: Some("headless_readback"),
+            size: (padded_row * height) as u64,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("headless_frame"),
+            });
+        self.record_passes(&mut encoder, &view);
+        encoder.copy_texture_to_buffer(
+            TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = readback.slice(..);
+        slice.map_async(MapMode::Read, |_| {});
+        let _ = self.device.poll(PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+
+        let mapped = slice.get_mapped_range();
+        let mut out = Vec::with_capacity((unpadded_row * height) as usize);
+        for row in 0..height {
+            let start = (row * padded_row) as usize;
+            out.extend_from_slice(&mapped[start..start + unpadded_row as usize]);
+        }
+        drop(mapped);
+        readback.unmap();
+        out
+    }
+
     fn acquire_surface_texture(&mut self) -> Option<SurfaceTexture> {
-        match self.surface.get_current_texture() {
+        let surface = self.surface.as_ref()?;
+        match surface.get_current_texture() {
             CurrentSurfaceTexture::Success(frame) | CurrentSurfaceTexture::Suboptimal(frame) => {
                 Some(frame)
             }
             CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => None,
             CurrentSurfaceTexture::Outdated | CurrentSurfaceTexture::Lost => {
-                self.surface.configure(&self.device, &self.config);
+                surface.configure(&self.device, &self.config);
                 None
             }
             other => {

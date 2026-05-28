@@ -78,7 +78,28 @@ pub struct TerminalRenderer {
 
 impl TerminalRenderer {
     pub async fn new(window: Arc<Window>, config: RendererConfig) -> Option<Self> {
-        let backend: Box<dyn TextBackend> = Box::new(CosmicTextBackend::new(BackendConfig {
+        let backend = Self::make_backend(&config);
+        let gpu = GpuState::new(window).await;
+        Some(Self::assemble(backend, gpu, config))
+    }
+
+    /// Surfaceless renderer that draws to an offscreen texture instead of a
+    /// window. Returns `None` when no GPU adapter is available. Pair with
+    /// [`TerminalRenderer::render_to_rgba`]. This is a test/bench seam, not a
+    /// production entry point.
+    ///
+    /// UNVERIFIED end to end: the offscreen render + readback has not been
+    /// run on a GPU yet (dev container has no adapter). Validate on a GPU
+    /// host before trusting the pixels.
+    #[doc(hidden)]
+    pub async fn new_headless(config: RendererConfig) -> Option<Self> {
+        let backend = Self::make_backend(&config);
+        let gpu = GpuState::new_headless(config.width, config.height).await?;
+        Some(Self::assemble(backend, gpu, config))
+    }
+
+    fn make_backend(config: &RendererConfig) -> Box<dyn TextBackend> {
+        Box::new(CosmicTextBackend::new(BackendConfig {
             family: &config.font_family,
             font_size: config.font_size,
             scale: config.scale,
@@ -86,12 +107,13 @@ impl TerminalRenderer {
             adjust_cell_width: config.adjust_cell_width.as_deref(),
             features: &config.font_features,
             fallback: &config.font_fallback,
-        }));
+        }))
+    }
+
+    fn assemble(backend: Box<dyn TextBackend>, gpu: GpuState, config: RendererConfig) -> Self {
         let m = backend.metrics();
         let cell_size = [m.cell_width, m.cell_height];
-        let gpu = GpuState::new(window).await;
-
-        Some(Self {
+        Self {
             backend,
             cell_builder: CellBuilder::new(),
             gpu,
@@ -102,7 +124,7 @@ impl TerminalRenderer {
             surface_width: config.width,
             surface_height: config.height,
             window_padding: config.window_padding,
-        })
+        }
     }
 
     pub fn cell_size(&self) -> [f32; 2] {
@@ -199,6 +221,26 @@ impl TerminalRenderer {
             inputs,
             &self.theme,
         )
+    }
+
+    /// Render the current frame to tightly-packed `Rgba8Unorm` pixels
+    /// (`width * height * 4`, row-major, top-left origin) instead of a
+    /// window. Returns `None` if no frame has been built yet. Test/bench
+    /// seam paired with [`TerminalRenderer::new_headless`].
+    #[doc(hidden)]
+    pub fn render_to_rgba(&mut self, inputs: &RenderInputs) -> Option<Vec<u8>> {
+        let fi = self.cell_builder.last_frame()?;
+        Some(self.gpu.render_to_rgba(
+            fi,
+            CellFrame {
+                bg_cells: self.cell_builder.bg_cells(),
+                text_cells: self.cell_builder.text_cells(),
+                dirty: self.cell_builder.last_dirty(),
+            },
+            self.cell_builder.atlas(),
+            inputs,
+            &self.theme,
+        ))
     }
 
     pub fn set_font_size(&mut self, points: f32) {
