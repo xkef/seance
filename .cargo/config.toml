@@ -1,3 +1,7 @@
+[alias]
+lint = "clippy --workspace --all-targets -- -D warnings"
+fmt-check = "fmt --all -- --check"
+
 [env]
 MACOSX_DEPLOYMENT_TARGET = "13.0"
 # Point libghostty-vt-sys at our repo-local, pre-patched ghostty clone.
