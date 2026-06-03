@@ -63,7 +63,7 @@ impl App {
         Self {
             surface: None,
             input,
-            keybinds: Keybinds::new(),
+            keybinds: Keybinds::from_config(&config.keybind),
             config,
             font_size,
             proxy,
