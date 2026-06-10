@@ -420,15 +420,7 @@ impl VtSnapshot {
     /// already at capacity (`u16::MAX - 1` entries) this returns
     /// [`NO_HYPERLINK`] and the cell should be left unlinked.
     pub fn intern_hyperlink(&mut self, url: &str) -> u16 {
-        if let Some(idx) = self.hyperlinks.iter().position(|existing| existing == url) {
-            return u16::try_from(idx).unwrap_or(NO_HYPERLINK);
-        }
-        let idx = self.hyperlinks.len();
-        if idx >= usize::from(NO_HYPERLINK) {
-            return NO_HYPERLINK;
-        }
-        self.hyperlinks.push(url.to_owned());
-        u16::try_from(idx).unwrap_or(NO_HYPERLINK)
+        intern_hyperlink(&mut self.hyperlinks, url)
     }
 
     /// Attach a hyperlink index to the most recently pushed cell. No-op if
