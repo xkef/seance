@@ -4,7 +4,7 @@
 //! partial config fills in every missing field from the compile-time defaults.
 //!
 //! The `theme` key is stored as a raw string; resolution into a palette is the
-//! job of the (forthcoming) theme loader — see issue #12.
+//! job of the `theme` module.
 
 use serde::Deserialize;
 
@@ -17,7 +17,6 @@ pub struct Config {
     pub cursor: CursorConfig,
     pub clipboard: ClipboardConfig,
     pub scrollback: ScrollbackConfig,
-    pub mouse: MouseConfig,
     pub input: InputConfig,
     pub links: LinksConfig,
     pub keybind: Vec<KeybindConfig>,
@@ -32,7 +31,6 @@ impl Default for Config {
             cursor: CursorConfig::default(),
             clipboard: ClipboardConfig::default(),
             scrollback: ScrollbackConfig::default(),
-            mouse: MouseConfig::default(),
             input: InputConfig::default(),
             links: LinksConfig::default(),
             keybind: Vec::new(),
@@ -60,7 +58,6 @@ pub struct FontConfig {
     pub adjust_cell_height: Option<String>,
     pub adjust_cell_width: Option<String>,
     pub min_contrast: f32,
-    pub fallback: Vec<String>,
 }
 
 impl Default for FontConfig {
@@ -72,7 +69,6 @@ impl Default for FontConfig {
             adjust_cell_height: None,
             adjust_cell_width: None,
             min_contrast: 1.0,
-            fallback: Vec::new(),
         }
     }
 }
@@ -169,20 +165,6 @@ pub struct ScrollbackConfig {
 impl Default for ScrollbackConfig {
     fn default() -> Self {
         Self { limit: 50_000 }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct MouseConfig {
-    pub hide_while_typing: bool,
-}
-
-impl Default for MouseConfig {
-    fn default() -> Self {
-        Self {
-            hide_while_typing: true,
-        }
     }
 }
 

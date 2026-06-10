@@ -4,10 +4,10 @@ use libghostty_vt::kitty::graphics as kg;
 use libghostty_vt::render::{CellIteration, CellIterator, RowIterator};
 use libghostty_vt::style::{self, PaletteIndex};
 
-use crate::frame::{
-    ImageId, ImageInfo, ImageVisitor, PlacementLayer, PlacementSnapshot, PlacementVisitor,
+use crate::{
+    ImageInfo, ImageVisitor, PlacementLayer, PlacementSnapshot, PlacementVisitor, SnapshotImage,
 };
-use crate::snapshot::SnapshotImage;
+use seance_protocol::identity::ImageId;
 
 #[derive(Default)]
 pub(crate) struct KittyGraphicsSnapshot {

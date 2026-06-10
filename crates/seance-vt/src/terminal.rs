@@ -36,8 +36,8 @@ pub(crate) fn install_png_decoder_for_this_thread() {
 
 #[cfg(test)]
 mod tests {
+    use crate::CursorShape;
     use crate::core::{DEFAULT_MAX_SCROLLBACK, VtCore, VtCoreOptions};
-    use crate::frame::CursorShape;
 
     #[test]
     fn vt_core_can_be_constructed_on_worker_thread() {

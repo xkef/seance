@@ -105,14 +105,6 @@ impl App {
                 .set_font_features(&self.config.font.features);
             surface.mark_dirty();
         }
-        if diff.font_fallback_changed
-            && let Some(surface) = self.surface.as_mut()
-        {
-            surface
-                .renderer
-                .set_font_fallback(&self.config.font.fallback);
-            surface.mark_dirty();
-        }
         if diff.font_family_changed {
             tracing::info!(
                 "font.family change takes effect on restart (live swap not yet supported)"

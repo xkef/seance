@@ -360,8 +360,8 @@ palette.
 
 `~/.config/seance/config.toml` (or `$XDG_CONFIG_HOME/seance/config.toml`) with
 sections `[font]`, `[window]`, `[cursor]`, `[clipboard]`, `[scrollback]`,
-`[mouse]`, `[input]`, `[[keybind]]`, `[renderer]`, plus a top-level
-`theme = "<name>"` that resolves against `~/.config/seance/themes/`.
+`[input]`, `[[keybind]]`, `[renderer]`, plus a top-level `theme = "<name>"` that
+resolves against `~/.config/seance/themes/`.
 
 Canonical schema:
 [`seance_config::Config`](../crates/seance-config/src/schema.rs) and its

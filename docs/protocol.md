@@ -20,7 +20,8 @@ the same session expect to see this differently? If yes, it belongs client-side.
   masquerading as render state.
 - Route every pane command and update through mux-level messages, not
   `VtCommand`, `VtEvent`, or app/render identifiers.
-- Make remote compatibility explicit before transports exist.
+- Defer remote-only surface (handshake, resume, pull requests) to #221 instead
+  of carrying unimplemented message arms.
 - Let attach/reconnect rebuild topology and current pane state without depending
   on a durable event log.
 - Keep full frames, base-explicit partial frames, image cache events, and
@@ -28,22 +29,11 @@ the same session expect to see this differently? If yes, it belongs client-side.
 
 ## Handshake and capabilities
 
-Clients begin with
-`Hello { min_version, max_version, capabilities, max_message_bytes, max_image_bytes, last_seen_seq }`.
-Servers answer with
-`ServerHello { version, capabilities, server_id, session_id }` or a structured
-`VersionMismatch` / `UnsupportedCapability` error.
-
-Phase 1 defines these capabilities:
-
-- `FrameDelta`
-- `ImageCache`
-- `ImageChunks`
-- `Resume`
-- `Zstd`
-
-`Zstd` is only negotiated when both sides advertise it. A frame with the
-compression bit set before negotiation is a protocol error.
+Phase 1 performs no handshake: the only transport is the in-process pair, where
+client and server come from the same build. Version and capability negotiation
+(`Hello` / `ServerHello`, zstd compression, image chunking, resume) arrives with
+the socket transports under #221, alongside its first real consumer. Until then
+a frame with the compression bit set is a protocol error.
 
 ## Envelope, framing, and codec
 
@@ -78,7 +68,7 @@ oversized frames, bad compression flags, and corrupted payloads separately.
 
 Protocol identities are opaque newtypes:
 
-- `ServerId`, `SessionId`, `ClientId`
+- `ClientId`
 - `DomainId`, `WindowId`, `TabId`, `PaneId`, `PaneEpoch`
 - `ImageId`
 
@@ -90,39 +80,30 @@ between remote identities and local pane views.
 ## Messages
 
 The main render path is push-based: the server sends ordered `PaneUpdate`
-notifications. The protocol also reserves pull requests for scrollback/viewport
-line content (`GetLines { range, since_seq }` and `Lines`) so a client can ask
-for a bounded cell range without forcing the server to push an unbounded
-scrollback log.
+notifications. Pull requests for scrollback/viewport line content and the
+remaining pane-lifecycle commands (close, subscribe, snapshot re-request) are
+deferred to #221.
 
-Client payloads include:
+Client payloads:
 
-- `Hello`
-- `Subscribe`
 - `SpawnPane`
-- `ClosePane`
 - `ResizePane`
 - `ScrollPane`
 - `SetPaneTheme`
 - `SetPaneCursorShape`
 - `PaneInput`
-- `RequestSnapshot`
-- `ImageCacheMiss`
-- `AckApplied`
 - `AckPresented`
 - `Ping`
-- `GetLines`
 
-Server payloads include:
+Server payloads:
 
-- `Hello`
 - `Error`
 - `Topology`
 - `PaneUpdate`
 - `PaneExited`
+- `PaneClipboardRequest`
 - `ResyncRequired`
 - `Pong`
-- `Lines`
 
 `VtCommand` and `VtEvent` remain local VT Actor implementation details. The
 local Domain maps them into pane-scoped mux wakes and ordered Pane Updates.
@@ -170,25 +151,22 @@ unit. Image events in a `PaneUpdate` apply before the frame in the same update.
 
 The pane-owning Domain keeps a per-pane `PaneFrameHistory` ring plus the latest
 full update. On first attach it can send topology followed by a full frame. On
-resume with `last_seen_seq`, retained updates replay in order; if the requested
-sequence is older than the ring, the client receives a resync/full reset.
+resume, retained updates replay in order; if the requested sequence is older
+than the ring, the client receives a resync/full reset.
 
 The Mux Client uses the same Pane View materialization path for the single local
 pane that future remote clients use.
 
 ## Image cache events
 
-The protocol reserves out-of-band image cache events:
-
-- `ImagePut` for small payloads.
-- `ImagePutStart`, `ImagePutChunk`, and `ImagePutComplete` for large payloads.
-- `ImageEvict` for server-side payload deletion.
+Out-of-band image cache events are `Put` (full payload) and `Evict` (server-side
+payload deletion). Chunked uploads for large payloads and client-initiated
+re-requests after a local cache miss are deferred to #221.
 
 Image payloads carry width, height, byte length, format, digest, and bytes.
 Render frames carry placement references. Renderer LRU eviction is local; it
 does not mean the server evicted the image. If a later frame references a
-locally missing image, the client sends `ImageCacheMiss` and skips that
-placement until the server re-sends the payload.
+locally missing image, the renderer skips that placement.
 
 The renderer exposes explicit image-cache event application. The current
 in-process compatibility path can still visit snapshot image payloads while VT
@@ -215,7 +193,6 @@ Initial limits are constants in `seance-protocol`:
 - `MAX_DECODED_MESSAGE_BYTES`
 - `MAX_PTY_INPUT_BYTES`
 - `MAX_PENDING_INPUT_BYTES_PER_CLIENT`
-- `MAX_IMAGE_CHUNK_BYTES`
 - `MAX_PENDING_OUTBOUND_BYTES_PER_CLIENT`
 - `MAX_RETAINED_PANE_UPDATES`
 
@@ -247,15 +224,14 @@ policies are protocol-adjacent but not Phase 1 implementation work.
 ## Error taxonomy
 
 Protocol errors are structured as
-`ProtocolErrorPayload { kind, message, request_id, pane }`. Kinds include
-version mismatch, unsupported capability, unknown message, bad route, stale
-pane, need-full, frame too large, image too large, protocol corruption, pane
-exit, transport EOF, clean detach, and server pane error.
+`ProtocolErrorPayload { kind, message, request_id, pane }`. Phase 1 kinds are
+protocol corruption and server pane error; the finer taxonomy (version mismatch,
+stale pane, oversized frames, clean detach, …) returns with the #221 transports
+that can produce those failures.
 
 ## WezTerm ptymux lessons
 
 The schema follows WezTerm ptymux in using an explicit ordered PDU stream,
-request serials, server pushes, up-front compatibility negotiation, mapped
-remote identities, attach via topology/current state, and heavy coalescing.
-Séance intentionally uses min/max protocol versions instead of exact codec
-equality and keeps VT Core as the only owner of live terminal state.
+request serials, server pushes, mapped remote identities, attach via
+topology/current state, and heavy coalescing. Séance keeps VT Core as the only
+owner of live terminal state.

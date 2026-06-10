@@ -29,9 +29,9 @@ impl StreamId {
     pub const CONTROL: Self = Self(0);
     /// Keyboard / paste / mouse bytes from client to server.
     pub const INPUT: Self = Self(1);
-    /// Frame deltas and `Lines` data from server to client.
+    /// Frame deltas from server to client.
     pub const OUTPUT: Self = Self(2);
-    /// Image cache events (Put / Chunk / Evict).
+    /// Image cache events (Put / Evict).
     pub const IMAGES: Self = Self(3);
 }
 
@@ -326,7 +326,6 @@ pub fn decode_server_frame_with_request(
 pub fn client_stream(message: &ClientMessage) -> StreamId {
     match message {
         ClientMessage::PaneInput { .. } => StreamId::INPUT,
-        ClientMessage::ImageCacheMiss { .. } => StreamId::IMAGES,
         _ => StreamId::CONTROL,
     }
 }
@@ -334,7 +333,7 @@ pub fn client_stream(message: &ClientMessage) -> StreamId {
 pub fn server_stream(message: &ServerMessage) -> StreamId {
     match message {
         ServerMessage::PaneUpdate(update) if !update.image_events.is_empty() => StreamId::IMAGES,
-        ServerMessage::PaneUpdate(_) | ServerMessage::Lines(_) => StreamId::OUTPUT,
+        ServerMessage::PaneUpdate(_) => StreamId::OUTPUT,
         _ => StreamId::CONTROL,
     }
 }
@@ -347,25 +346,17 @@ pub const SERVE_IDLE_BACKOFF_MS: u64 = 1;
 pub fn server_seq(message: &ServerMessage) -> ServerSeq {
     match message {
         ServerMessage::PaneUpdate(update) => update.seq,
-        ServerMessage::Lines(lines) => lines.seq,
         _ => ServerSeq(0),
     }
 }
 
 fn ensure_client_kind(kind: MessageKind) -> Result<(), CodecError> {
     match kind {
-        MessageKind::ClientHello
-        | MessageKind::ClientSubscribe
-        | MessageKind::ClientSpawnPane
-        | MessageKind::ClientClosePane
+        MessageKind::ClientSpawnPane
         | MessageKind::ClientResizePane
         | MessageKind::ClientPaneInput
-        | MessageKind::ClientRequestSnapshot
-        | MessageKind::ClientImageCacheMiss
-        | MessageKind::ClientAckApplied
         | MessageKind::ClientAckPresented
         | MessageKind::ClientPing
-        | MessageKind::ClientGetLines
         | MessageKind::ClientScrollPane
         | MessageKind::ClientSetPaneTheme
         | MessageKind::ClientSetPaneCursorShape => Ok(()),
@@ -378,15 +369,13 @@ fn ensure_client_kind(kind: MessageKind) -> Result<(), CodecError> {
 
 fn ensure_server_kind(kind: MessageKind) -> Result<(), CodecError> {
     match kind {
-        MessageKind::ServerHello
-        | MessageKind::ServerError
+        MessageKind::ServerError
         | MessageKind::ServerTopology
         | MessageKind::ServerPaneUpdate
         | MessageKind::ServerPaneExited
         | MessageKind::ServerPaneClipboardRequest
         | MessageKind::ServerResyncRequired
-        | MessageKind::ServerPong
-        | MessageKind::ServerLines => Ok(()),
+        | MessageKind::ServerPong => Ok(()),
         _ => Err(CodecError::UnexpectedMessageKind {
             direction: MessageDirection::Server,
             kind,
@@ -504,7 +493,7 @@ mod tests {
             &ClientMessage::Ping { nonce: 99 },
         )
         .unwrap();
-        assert_eq!(encoded, vec![12, 7, 0, 11, 2, 10, 99]);
+        assert_eq!(encoded, vec![12, 7, 0, 11, 2, 4, 99]);
 
         let (envelope, consumed) = decode_envelope(&encoded, MAX_DECODED_MESSAGE_BYTES).unwrap();
         assert_eq!(consumed, encoded.len());

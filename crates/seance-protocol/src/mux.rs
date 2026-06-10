@@ -1,80 +1,14 @@
 use serde::{Deserialize, Serialize};
 
 use crate::clipboard::ClipboardRequest;
-use crate::frame::{CursorShape, FrameDelta, LineRange, Resize, RowDelta, ThemeColors};
-use crate::identity::{
-    DomainId, ImageKey, PaneRef, ServerId, ServerSeq, SessionId, TabId, WindowId,
-};
+use crate::frame::{CursorShape, FrameDelta, Resize, ThemeColors};
+use crate::identity::{DomainId, PaneRef, ServerSeq, TabId, WindowId};
 use crate::image_cache::ImageCacheEvent;
-use crate::limits::MAX_DECODED_MESSAGE_BYTES;
 use crate::transport::{CodecError, RequestId};
-
-pub const CURRENT_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(1);
-pub const MIN_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion(1);
-
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
-pub struct ProtocolVersion(pub u16);
-
-/// Optional protocol features a client/server negotiates at handshake.
-/// Both sides advertise the set they support in [`Hello`] / [`ServerHello`];
-/// only the intersection is active on the connection. New capabilities
-/// are added without bumping [`ProtocolVersion`] when backwards-compatible.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum Capability {
-    Zstd,
-    FrameDelta,
-    ImageCache,
-    ImageChunks,
-    Resume,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Hello {
-    pub min_version: ProtocolVersion,
-    pub max_version: ProtocolVersion,
-    pub capabilities: Vec<Capability>,
-    pub max_message_bytes: u32,
-    pub max_image_bytes: u64,
-    pub last_seen_seq: Option<ServerSeq>,
-}
-
-impl Default for Hello {
-    fn default() -> Self {
-        Self {
-            min_version: MIN_PROTOCOL_VERSION,
-            max_version: CURRENT_PROTOCOL_VERSION,
-            capabilities: vec![Capability::FrameDelta, Capability::ImageCache],
-            max_message_bytes: u32::try_from(MAX_DECODED_MESSAGE_BYTES).unwrap_or(u32::MAX),
-            max_image_bytes: 64 * 1024 * 1024,
-            last_seen_seq: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ServerHello {
-    pub version: ProtocolVersion,
-    pub capabilities: Vec<Capability>,
-    pub server_id: ServerId,
-    pub session_id: SessionId,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProtocolErrorKind {
-    VersionMismatch,
-    UnsupportedCapability,
-    UnknownMessage,
-    BadRoute,
-    StalePane,
-    NeedFull,
-    FrameTooLarge,
-    ImageTooLarge,
     ProtocolCorrupt,
-    PaneExited,
-    TransportEof,
-    Detached,
     ServerPaneError,
 }
 
@@ -95,10 +29,6 @@ pub struct ProtocolErrorPayload {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClientMessage {
-    Hello(Hello),
-    Subscribe {
-        pane: Option<PaneRef>,
-    },
     SpawnPane {
         domain: DomainId,
         cols: u16,
@@ -111,9 +41,6 @@ pub enum ClientMessage {
         /// receive side.
         max_scrollback: u64,
     },
-    ClosePane {
-        pane: PaneRef,
-    },
     ResizePane {
         pane: PaneRef,
         resize: Resize,
@@ -122,27 +49,12 @@ pub enum ClientMessage {
         pane: PaneRef,
         bytes: Vec<u8>,
     },
-    RequestSnapshot {
-        pane: PaneRef,
-    },
-    ImageCacheMiss {
-        key: ImageKey,
-    },
-    AckApplied {
-        pane: PaneRef,
-        seq: ServerSeq,
-    },
     AckPresented {
         pane: PaneRef,
         generation: u64,
     },
     Ping {
         nonce: u64,
-    },
-    GetLines {
-        pane: PaneRef,
-        range: LineRange,
-        since_seq: Option<ServerSeq>,
     },
     ScrollPane {
         pane: PaneRef,
@@ -161,21 +73,14 @@ pub enum ClientMessage {
 impl ClientMessage {
     pub fn kind(&self) -> MessageKind {
         match self {
-            Self::Hello(_) => MessageKind::ClientHello,
-            Self::Subscribe { .. } => MessageKind::ClientSubscribe,
             Self::SpawnPane { .. } => MessageKind::ClientSpawnPane,
-            Self::ClosePane { .. } => MessageKind::ClientClosePane,
             Self::ResizePane { .. } => MessageKind::ClientResizePane,
             Self::ScrollPane { .. } => MessageKind::ClientScrollPane,
             Self::SetPaneTheme { .. } => MessageKind::ClientSetPaneTheme,
             Self::SetPaneCursorShape { .. } => MessageKind::ClientSetPaneCursorShape,
             Self::PaneInput { .. } => MessageKind::ClientPaneInput,
-            Self::RequestSnapshot { .. } => MessageKind::ClientRequestSnapshot,
-            Self::ImageCacheMiss { .. } => MessageKind::ClientImageCacheMiss,
-            Self::AckApplied { .. } => MessageKind::ClientAckApplied,
             Self::AckPresented { .. } => MessageKind::ClientAckPresented,
             Self::Ping { .. } => MessageKind::ClientPing,
-            Self::GetLines { .. } => MessageKind::ClientGetLines,
         }
     }
 }
@@ -189,7 +94,6 @@ impl ClientMessage {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ServerMessage {
-    Hello(ServerHello),
     Error(ProtocolErrorPayload),
     Topology(Topology),
     PaneUpdate(PaneUpdate),
@@ -208,13 +112,11 @@ pub enum ServerMessage {
     Pong {
         nonce: u64,
     },
-    Lines(LineContent),
 }
 
 impl ServerMessage {
     pub fn kind(&self) -> MessageKind {
         match self {
-            Self::Hello(_) => MessageKind::ServerHello,
             Self::Error(_) => MessageKind::ServerError,
             Self::Topology(_) => MessageKind::ServerTopology,
             Self::PaneUpdate(_) => MessageKind::ServerPaneUpdate,
@@ -222,19 +124,8 @@ impl ServerMessage {
             Self::PaneClipboardRequest { .. } => MessageKind::ServerPaneClipboardRequest,
             Self::ResyncRequired { .. } => MessageKind::ServerResyncRequired,
             Self::Pong { .. } => MessageKind::ServerPong,
-            Self::Lines(_) => MessageKind::ServerLines,
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LineContent {
-    pub pane: PaneRef,
-    pub seq: ServerSeq,
-    pub generation: u64,
-    pub cols: u16,
-    pub range: LineRange,
-    pub rows: Vec<RowDelta>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -286,34 +177,26 @@ pub struct PaneUpdate {
 
 /// Stable u16 tags for every [`ClientMessage`] / [`ServerMessage`]
 /// variant. Client-direction tags are 1..=15; server-direction tags are
-/// 1001..=1099. Wire-stable across releases — never renumber, only add
-/// new variants with the next free id in the appropriate range.
+/// 1001..=1099. Wire-stable across releases — never renumber or reuse an
+/// id (gaps are retired ids); add new variants with the next free id in
+/// the appropriate range.
 #[repr(u16)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MessageKind {
-    ClientHello = 1,
-    ClientSubscribe = 2,
     ClientSpawnPane = 3,
-    ClientClosePane = 4,
     ClientResizePane = 5,
     ClientPaneInput = 6,
-    ClientRequestSnapshot = 7,
-    ClientImageCacheMiss = 8,
-    ClientAckApplied = 9,
     ClientAckPresented = 10,
     ClientPing = 11,
-    ClientGetLines = 12,
     ClientScrollPane = 13,
     ClientSetPaneTheme = 14,
     ClientSetPaneCursorShape = 15,
-    ServerHello = 1001,
     ServerError = 1002,
     ServerTopology = 1003,
     ServerPaneUpdate = 1004,
     ServerPaneExited = 1005,
     ServerResyncRequired = 1006,
     ServerPong = 1007,
-    ServerLines = 1008,
     ServerPaneClipboardRequest = 1009,
 }
 
@@ -322,29 +205,20 @@ impl TryFrom<u16> for MessageKind {
 
     fn try_from(value: u16) -> Result<Self, Self::Error> {
         let kind = match value {
-            1 => Self::ClientHello,
-            2 => Self::ClientSubscribe,
             3 => Self::ClientSpawnPane,
-            4 => Self::ClientClosePane,
             5 => Self::ClientResizePane,
             6 => Self::ClientPaneInput,
-            7 => Self::ClientRequestSnapshot,
-            8 => Self::ClientImageCacheMiss,
-            9 => Self::ClientAckApplied,
             10 => Self::ClientAckPresented,
             11 => Self::ClientPing,
-            12 => Self::ClientGetLines,
             13 => Self::ClientScrollPane,
             14 => Self::ClientSetPaneTheme,
             15 => Self::ClientSetPaneCursorShape,
-            1001 => Self::ServerHello,
             1002 => Self::ServerError,
             1003 => Self::ServerTopology,
             1004 => Self::ServerPaneUpdate,
             1005 => Self::ServerPaneExited,
             1006 => Self::ServerResyncRequired,
             1007 => Self::ServerPong,
-            1008 => Self::ServerLines,
             1009 => Self::ServerPaneClipboardRequest,
             other => return Err(CodecError::UnknownMessage(other)),
         };
@@ -369,8 +243,8 @@ mod tests {
         CellAttrs, CellColor, CursorInfo, DirtySnapshot, GridPos, PlacementSnapshot, RowMeta,
         SnapshotImage, VtSnapshot,
     };
-    use crate::identity::{DomainId, ImageId, PaneEpoch, PaneId};
-    use crate::image_cache::{ImageFormat, ImagePayload, ImagePutChunk};
+    use crate::identity::{DomainId, ImageId, ImageKey, PaneEpoch, PaneId};
+    use crate::image_cache::{ImageFormat, ImagePayload};
     use crate::transport::{RequestId, decode_payload, encode_payload};
 
     fn pane() -> PaneRef {
@@ -433,33 +307,11 @@ mod tests {
             pane,
             shape: CursorShape::Underline,
         });
-        round_trip(&ClientMessage::GetLines {
-            pane,
-            range: LineRange {
-                start: 0,
-                count: 24,
-            },
-            since_seq: Some(ServerSeq(3)),
-        });
-        round_trip(&ServerMessage::Hello(ServerHello {
-            version: ProtocolVersion(1),
-            capabilities: vec![Capability::FrameDelta],
-            server_id: ServerId(1),
-            session_id: SessionId(2),
-        }));
         round_trip(&ServerMessage::Error(ProtocolErrorPayload {
-            kind: ProtocolErrorKind::NeedFull,
-            message: "base missing".into(),
+            kind: ProtocolErrorKind::ServerPaneError,
+            message: "pane spawn failed".into(),
             request_id: RequestId(7),
             pane: Some(pane),
-        }));
-        round_trip(&ServerMessage::Lines(LineContent {
-            pane,
-            seq: ServerSeq(4),
-            generation: 9,
-            cols: 1,
-            range: LineRange { start: 0, count: 1 },
-            rows: vec![RowDelta::from_snapshot_row(&snapshot(1, 1, 9, &["x"]), 0).unwrap()],
         }));
     }
 
@@ -515,11 +367,6 @@ mod tests {
             format: ImageFormat::Rgba8,
             digest: [5; 32],
             rgba: vec![1, 2, 3, 4],
-        }));
-        round_trip(&ImageCacheEvent::PutChunk(ImagePutChunk {
-            key,
-            offset: 0,
-            bytes: vec![1, 2],
         }));
         round_trip(&ImageCacheEvent::Evict { key });
     }

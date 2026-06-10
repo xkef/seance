@@ -230,7 +230,6 @@ impl ApplicationHandler<UserEvent> for App {
             adjust_cell_height: self.config.font.adjust_cell_height.clone(),
             adjust_cell_width: self.config.font.adjust_cell_width.clone(),
             font_features: self.config.font.features.clone(),
-            font_fallback: self.config.font.fallback.clone(),
             min_contrast: self.config.font.min_contrast,
             window_padding: physical_window_padding(&self.config, window.scale_factor()),
             background_opacity: self.config.window.background_opacity,

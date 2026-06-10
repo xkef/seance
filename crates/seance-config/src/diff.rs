@@ -35,14 +35,11 @@ pub struct ConfigDiff {
     /// `font.features` changed — caller must invalidate shape caches and
     /// rebuild the next frame.
     pub font_features_changed: bool,
-    /// `font.fallback` changed — caller must invalidate shape caches so the
-    /// next miss reconsiders the new fallback list.
-    pub font_fallback_changed: bool,
     /// `window.padding_x|y` changed — caller must push the new padding to
     /// the renderer and reflow the PTY (cols/rows shrink when padding grows).
     pub window_padding_changed: bool,
-    /// Min-contrast, cursor, opacity, or mouse-hide changed — a plain
-    /// repaint is enough once the renderer has consumed the new values.
+    /// Min-contrast, cursor, or opacity changed — a plain repaint is
+    /// enough once the renderer has consumed the new values.
     pub repaint_only: bool,
     /// `[input]` section changed — caller must push the new settings to
     /// `InputHandler` (e.g. `macos_option_as_alt`).
@@ -68,7 +65,6 @@ impl ConfigDiff {
         let font_adjust_cell_width_changed =
             old.font.adjust_cell_width != new.font.adjust_cell_width;
         let font_features_changed = old.font.features != new.font.features;
-        let font_fallback_changed = old.font.fallback != new.font.fallback;
 
         let window_padding_changed = old.window.padding_x != new.window.padding_x
             || old.window.padding_y != new.window.padding_y;
@@ -79,8 +75,7 @@ impl ConfigDiff {
         let repaint_only = old.font.min_contrast != new.font.min_contrast
             || old.window.background_opacity != new.window.background_opacity
             || old.cursor.style != new.cursor.style
-            || old.cursor.blink != new.cursor.blink
-            || old.mouse.hide_while_typing != new.mouse.hide_while_typing;
+            || old.cursor.blink != new.cursor.blink;
 
         let input_changed = old.input.macos_option_as_alt != new.input.macos_option_as_alt;
         let links_changed = old.links != new.links;
@@ -94,7 +89,6 @@ impl ConfigDiff {
             font_adjust_cell_height_changed,
             font_adjust_cell_width_changed,
             font_features_changed,
-            font_fallback_changed,
             window_padding_changed,
             repaint_only,
             input_changed,
@@ -112,7 +106,6 @@ impl ConfigDiff {
             || self.font_adjust_cell_height_changed
             || self.font_adjust_cell_width_changed
             || self.font_features_changed
-            || self.font_fallback_changed
             || self.window_padding_changed
             || self.repaint_only
             || self.input_changed
@@ -196,16 +189,6 @@ mod tests {
         b.font.features = vec!["calt".to_string(), "ss01".to_string()];
         let d = ConfigDiff::between(&a, &b);
         assert!(d.font_features_changed);
-        assert!(!d.font_size_changed);
-    }
-
-    #[test]
-    fn font_fallback_change_is_detected() {
-        let a = Config::default();
-        let mut b = Config::default();
-        b.font.fallback = vec!["Apple Color Emoji".to_string()];
-        let d = ConfigDiff::between(&a, &b);
-        assert!(d.font_fallback_changed);
         assert!(!d.font_size_changed);
     }
 

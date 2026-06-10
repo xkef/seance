@@ -1,6 +1,5 @@
 pub const MAX_DECODED_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_PTY_INPUT_BYTES: usize = 1024 * 1024;
 pub const MAX_PENDING_INPUT_BYTES_PER_CLIENT: usize = 4 * 1024 * 1024;
-pub const MAX_IMAGE_CHUNK_BYTES: usize = 1024 * 1024;
 pub const MAX_PENDING_OUTBOUND_BYTES_PER_CLIENT: usize = 32 * 1024 * 1024;
 pub const MAX_RETAINED_PANE_UPDATES: usize = 512;

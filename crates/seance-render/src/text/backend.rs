@@ -88,10 +88,6 @@ pub trait TextBackend {
     /// can map to different glyphs once features change.
     fn set_features(&mut self, features: &[String]);
 
-    /// Replace the fallback family list. Callers must drop their shape
-    /// caches.
-    fn set_fallback(&mut self, fallback: &[String]);
-
     /// Shape a contiguous run of text into glyphs. Each emitted glyph
     /// carries the byte offset of its source cluster within `text`, so
     /// callers driving multi-cell input (ligatures, ZWJ sequences, flag

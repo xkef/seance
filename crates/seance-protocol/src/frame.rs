@@ -10,12 +10,6 @@ use crate::identity::ImageId;
 /// OSC 8 hyperlink." Real indices reference [`VtSnapshot::hyperlinks`].
 pub const NO_HYPERLINK: u16 = u16::MAX;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LineRange {
-    pub start: i64,
-    pub count: u16,
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GridPos {
     pub col: u16,
@@ -426,15 +420,7 @@ impl VtSnapshot {
     /// already at capacity (`u16::MAX - 1` entries) this returns
     /// [`NO_HYPERLINK`] and the cell should be left unlinked.
     pub fn intern_hyperlink(&mut self, url: &str) -> u16 {
-        if let Some(idx) = self.hyperlinks.iter().position(|existing| existing == url) {
-            return u16::try_from(idx).unwrap_or(NO_HYPERLINK);
-        }
-        let idx = self.hyperlinks.len();
-        if idx >= usize::from(NO_HYPERLINK) {
-            return NO_HYPERLINK;
-        }
-        self.hyperlinks.push(url.to_owned());
-        u16::try_from(idx).unwrap_or(NO_HYPERLINK)
+        intern_hyperlink(&mut self.hyperlinks, url)
     }
 
     /// Attach a hyperlink index to the most recently pushed cell. No-op if

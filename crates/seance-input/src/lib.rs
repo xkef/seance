@@ -6,7 +6,7 @@
 
 mod keymap;
 #[cfg(target_os = "macos")]
-mod macos;
+mod uckey;
 
 use libghostty_vt::{key, mouse};
 use seance_protocol::frame::{MouseSize, MouseTracking, TerminalModes};
@@ -141,7 +141,7 @@ pub struct InputHandler {
     mouse_size: Option<MouseSize>,
     option_as_alt: OptionAsAlt,
     #[cfg(target_os = "macos")]
-    uckey: macos::uckey::UcKey,
+    uckey: uckey::UcKey,
 }
 
 impl Default for InputHandler {
@@ -164,7 +164,7 @@ impl Default for InputHandler {
             mouse_size: None,
             option_as_alt: OptionAsAlt::default(),
             #[cfg(target_os = "macos")]
-            uckey: macos::uckey::UcKey::new(),
+            uckey: uckey::UcKey::new(),
         }
     }
 }
@@ -343,7 +343,7 @@ impl InputHandler {
         let composed = {
             let state = modifiers.state();
             let alt_held = state.alt_key();
-            let right = macos::uckey::right_option_held(modifiers);
+            let right = uckey::right_option_held(modifiers);
             if composer_side(self.option_as_alt, alt_held, right) {
                 self.uckey.translate(code, modifiers)
             } else if !alt_held
