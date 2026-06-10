@@ -4,6 +4,7 @@
 use seance_config::ConfigDiff;
 
 use crate::app::{App, link_detector_from_config, mux_shape_from_config};
+use crate::keybinds::Keybinds;
 use crate::platform;
 use crate::surface_state::SurfaceState;
 
@@ -126,6 +127,9 @@ impl App {
             if let Some(surface) = self.surface.as_ref() {
                 platform::set_option_as_alt(&surface.window, mode);
             }
+        }
+        if diff.keybinds_changed {
+            self.keybinds = Keybinds::from_config(&self.config.keybind);
         }
         if diff.links_changed
             && let Some(surface) = self.surface.as_mut()

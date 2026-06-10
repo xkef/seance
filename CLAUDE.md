@@ -26,26 +26,27 @@ touching the renderer or VT layer.
 ## First-time setup
 
 ```sh
-tools/setup-sysroot.sh       # macOS 26 SDK overlay for Zig's arm64 linker
-tools/setup-ghostty-src.sh   # clones + patches vendored ghostty-src
+tools/setup.sh               # ghostty-src + themes + macOS sysroot
 ```
 
-Re-run `setup-ghostty-src.sh` after `cargo clean` or after bumping
-`libghostty-vt` in `Cargo.toml`.
+Re-run it after `cargo clean` or after bumping `libghostty-vt` in `Cargo.toml`.
 
 ## Everyday commands
 
 ```sh
-tools/run.sh                 # setup-ghostty-src + cargo run
+tools/run.sh                 # setup + cargo run
 cargo check --workspace
 cargo fmt --all
-cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt-check              # alias: fmt --all -- --check
+cargo lint                   # alias: clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+tools/ci.sh                  # every CI gate: fmt, clippy, tests, markdown
 
 # Markdown / prose checks (CI runs both against **/*.md):
-npx --yes prettier --check "**/*.md"
-npx --yes markdownlint-cli2 "**/*.md"
+tools/md-check.sh            # pass --fix to rewrite with prettier
 ```
+
+Cargo aliases (`lint`, `fmt-check`) are defined in `.cargo/config.toml`.
 
 CI gates every push on `prettier --check` and `markdownlint-cli2`. Any change
 that touches a `.md` file (including `CLAUDE.md`, `README.md`, and anything

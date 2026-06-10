@@ -15,9 +15,9 @@ Two kinds of tests live here:
 - **`tests/layer4_frame.rs`** — `insta::assert_snapshot!`. Feeds a VT fixture,
   dumps the rendered grid through `VtSnapshot` + `SnapshotFrameSource` as text +
   per-cell annotations. When behavior changes deliberately, bless with
-  `just snap-review` (or `cargo insta review -p seance-render-test`). When
-  behavior changes unintentionally, **read the diff in the grid box** to see
-  what moved — that's the failure diagnosis.
+  `cargo insta review -p seance-render-test`. When behavior changes
+  unintentionally, **read the diff in the grid box** to see what moved — that's
+  the failure diagnosis.
 
 ## Layer → file → failure-action map
 
@@ -39,7 +39,7 @@ A `.snap` file is the contract. If a test fails:
    produced vs what it should produce.
 2. If the new output is **wrong** — fix the renderer, not the snapshot.
 3. If the new output is **correct** (deliberate behavioral change) — re-bless
-   with `just snap-review`.
+   with `cargo insta review -p seance-render-test`.
 
 Never accept a snapshot without reading it first.
 
@@ -58,10 +58,13 @@ depend on them.
 ## Commands
 
 ```sh
-just test                 # runs cargo nextest on the full workspace
-just test-render          # runs just this crate
-just snap-review          # cargo insta review for this crate
+cargo nextest run --workspace             # full workspace test suite
+cargo nextest run -p seance-render-test   # just this crate
+cargo insta review -p seance-render-test  # review pending snapshots
 ```
+
+`cargo nextest` and `cargo insta` are external subcommands; install once with
+`cargo install --locked cargo-nextest cargo-insta`.
 
 To bless snapshots non-interactively:
 

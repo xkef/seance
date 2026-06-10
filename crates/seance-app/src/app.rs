@@ -29,6 +29,7 @@ use seance_mux_client::{
 use seance_render::{RenderInputs, RendererConfig, TerminalRenderer};
 
 use crate::UserEvent;
+use crate::keybinds::Keybinds;
 use crate::platform;
 use crate::surface_state::SurfaceState;
 use crate::watcher::ConfigWatcher;
@@ -41,6 +42,7 @@ const BLINK_HALF_PERIOD: Duration = Duration::from_millis(500);
 pub(crate) struct App {
     pub(crate) surface: Option<SurfaceState>,
     pub(crate) input: InputHandler,
+    pub(crate) keybinds: Keybinds,
     pub(crate) config: Config,
     pub(crate) font_size: f32,
     proxy: EventLoopProxy<UserEvent>,
@@ -61,6 +63,7 @@ impl App {
         Self {
             surface: None,
             input,
+            keybinds: Keybinds::from_config(&config.keybind),
             config,
             font_size,
             proxy,

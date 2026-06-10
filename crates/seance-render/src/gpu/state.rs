@@ -6,6 +6,7 @@ use winit::window::Window;
 
 use super::atlas_texture::{atlas_view, write_atlas_plane};
 use super::dynamic_buffer::DynamicBuffer;
+use super::layers::{DrawOp, LayerSchedule, SubRole, Z_MAIN};
 use super::pipeline::Pipelines;
 use super::uniforms::Uniforms;
 use crate::image::ImageRenderer;
@@ -403,52 +404,78 @@ impl GpuState {
             multiview_mask: None,
         });
 
-        // Pass 1: solid background.
-        pass.set_pipeline(&self.pipelines.bg_color);
-        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-        pass.draw(0..3, 0..1);
-
-        // Kitty images below the cell background layer.
-        self.images
-            .record_layer(&mut pass, PlacementLayer::BelowBg, &self.uniform_bind_group);
-
-        // Pass 2: per-cell backgrounds + selection + cursor shapes.
-        let maybe_bg_bg = self.bg_cells.bind_group.as_ref();
-        if let Some(bg_bg) = maybe_bg_bg {
-            pass.set_pipeline(&self.pipelines.cell_bg);
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            pass.set_bind_group(1, bg_bg, &[]);
-            pass.draw(0..3, 0..1);
+        for op in self.build_schedule().walk() {
+            self.record_op(&mut pass, op);
         }
+    }
 
-        // Kitty images between cell bg and text.
-        self.images.record_layer(
-            &mut pass,
-            PlacementLayer::BelowText,
-            &self.uniform_bind_group,
+    /// The terminal cell content is the reference plane, so the three Kitty
+    /// bands are sub-roles of [`Z_MAIN`], not separate layers. Draw order at
+    /// `Z_MAIN`:
+    ///
+    /// ```text
+    /// Below    bg_color fill → Kitty below-bg → cell_bg SSBO → Kitty below-text
+    /// Content  cell_text
+    /// Above    Kitty above-text
+    /// ```
+    fn build_schedule(&self) -> LayerSchedule {
+        let mut schedule = LayerSchedule::default();
+        schedule.push(Z_MAIN, SubRole::Below, DrawOp::BgColorFill);
+        schedule.push(
+            Z_MAIN,
+            SubRole::Below,
+            DrawOp::Images(PlacementLayer::BelowBg),
         );
+        schedule.push(Z_MAIN, SubRole::Below, DrawOp::CellBg);
+        schedule.push(
+            Z_MAIN,
+            SubRole::Below,
+            DrawOp::Images(PlacementLayer::BelowText),
+        );
+        schedule.push(Z_MAIN, SubRole::Content, DrawOp::CellText);
+        schedule.push(
+            Z_MAIN,
+            SubRole::Above,
+            DrawOp::Images(PlacementLayer::AboveText),
+        );
+        schedule
+    }
 
-        // Pass 3: text (instanced quads).
-        if let (Some(bg_bg), Some(atlas_bg), Some(text_buf)) = (
-            maybe_bg_bg,
-            self.atlas_bind_group.as_ref(),
-            self.text_instances.buffer.as_ref(),
-        ) && self.text_instance_count > 0
-        {
-            pass.set_pipeline(&self.pipelines.cell_text);
-            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            pass.set_bind_group(1, bg_bg, &[]);
-            pass.set_bind_group(2, atlas_bg, &[]);
-            pass.set_vertex_buffer(0, text_buf.slice(..));
-            pass.draw(0..4, 0..self.text_instance_count);
+    fn record_op(&self, pass: &mut RenderPass<'_>, op: DrawOp) {
+        match op {
+            DrawOp::BgColorFill => {
+                pass.set_pipeline(&self.pipelines.bg_color);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            DrawOp::CellBg => {
+                if let Some(bg_bg) = self.bg_cells.bind_group.as_ref() {
+                    pass.set_pipeline(&self.pipelines.cell_bg);
+                    pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    pass.set_bind_group(1, bg_bg, &[]);
+                    pass.draw(0..3, 0..1);
+                }
+            }
+            DrawOp::CellText => {
+                if let (Some(bg_bg), Some(atlas_bg), Some(text_buf)) = (
+                    self.bg_cells.bind_group.as_ref(),
+                    self.atlas_bind_group.as_ref(),
+                    self.text_instances.buffer.as_ref(),
+                ) && self.text_instance_count > 0
+                {
+                    pass.set_pipeline(&self.pipelines.cell_text);
+                    pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    pass.set_bind_group(1, bg_bg, &[]);
+                    pass.set_bind_group(2, atlas_bg, &[]);
+                    pass.set_vertex_buffer(0, text_buf.slice(..));
+                    pass.draw(0..4, 0..self.text_instance_count);
+                }
+            }
+            DrawOp::Images(layer) => {
+                self.images
+                    .record_layer(pass, layer, &self.uniform_bind_group);
+            }
         }
-
-        // Kitty images above the text layer.
-        self.images.record_layer(
-            &mut pass,
-            PlacementLayer::AboveText,
-            &self.uniform_bind_group,
-        );
     }
 }
 

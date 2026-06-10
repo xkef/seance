@@ -12,7 +12,8 @@ use winit::window::Fullscreen;
 use seance_input::{MouseAction, MouseEventInput, VtInput};
 
 use crate::app::App;
-use crate::command::{AppCommand, match_global_keybind};
+use crate::command::AppCommand;
+use crate::keybinds::Action;
 use crate::link_open;
 use crate::surface_state::SurfaceState;
 
@@ -40,8 +41,8 @@ impl App {
             .map(|surface| surface.modifiers)
             .unwrap_or_default();
 
-        if let Some(cmd) = match_global_keybind(event, &modifiers) {
-            let preserves_selection = matches!(cmd, AppCommand::Copy | AppCommand::SelectAll);
+        if let Some(action) = self.keybinds.match_event(event, &modifiers) {
+            let preserves_selection = matches!(action, Action::Copy | Action::SelectAll);
             if !preserves_selection
                 && let Some(surface) = self.surface_mut()
                 && surface.has_selection()
@@ -49,7 +50,7 @@ impl App {
                 surface.clear_selection();
                 surface.mark_dirty();
             }
-            self.execute_app_command(event_loop, cmd);
+            self.execute_action(event_loop, action);
             return;
         }
 
@@ -70,6 +71,15 @@ impl App {
             if selection_changed {
                 surface.mark_dirty();
             }
+        }
+    }
+
+    fn execute_action(&mut self, event_loop: &ActiveEventLoop, action: Action) {
+        match action.to_app_command() {
+            Some(cmd) => self.execute_app_command(event_loop, cmd),
+            // A recognized chord is consumed even when its action has no
+            // dispatch target yet, so the bytes never leak to the VT encoder.
+            None => tracing::info!("keybind action not yet implemented: {action:?}"),
         }
     }
 

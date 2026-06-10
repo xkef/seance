@@ -14,7 +14,8 @@ pub mod theme;
 pub use diff::ConfigDiff;
 pub use schema::{
     ClipboardConfig, ClipboardPolicy, Config, CursorConfig, CursorStyle, FontConfig, InputConfig,
-    LinkModifiersConfig, LinksConfig, MacosOptionAsAlt, ScrollbackConfig, WindowConfig,
+    KeybindConfig, LinkModifiersConfig, LinksConfig, MacosOptionAsAlt, ScrollbackConfig,
+    WindowConfig,
 };
 pub use theme::{Theme, load as load_theme};
 
@@ -244,6 +245,45 @@ mod tests {
             let cfg: Config = toml::from_str(&src).unwrap();
             assert_eq!(cfg.input.macos_option_as_alt, want, "raw={raw}");
         }
+    }
+
+    #[test]
+    fn keybind_array_parses_each_entry() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [[keybind]]
+            key = "ctrl+shift+c"
+            action = "copy"
+
+            [[keybind]]
+            key = "cmd+plus"
+            action = "font_size_inc:1"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.keybind.len(), 2);
+        assert_eq!(cfg.keybind[0].key, "ctrl+shift+c");
+        assert_eq!(cfg.keybind[0].action, "copy");
+        assert_eq!(cfg.keybind[1].key, "cmd+plus");
+        assert_eq!(cfg.keybind[1].action, "font_size_inc:1");
+    }
+
+    #[test]
+    fn empty_config_has_no_keybinds() {
+        let cfg: Config = toml::from_str("").unwrap();
+        assert!(cfg.keybind.is_empty());
+    }
+
+    #[test]
+    fn keybind_missing_field_is_rejected() {
+        let err = toml::from_str::<Config>(
+            r#"
+            [[keybind]]
+            key = "ctrl+c"
+            "#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("action"), "{err}");
     }
 
     #[test]
