@@ -25,6 +25,10 @@ impl ModSet {
     fn insert(&mut self, other: Self) {
         self.0 |= other.0;
     }
+
+    fn remove(&mut self, other: Self) {
+        self.0 &= !other.0;
+    }
 }
 
 impl std::ops::BitOr for ModSet {
@@ -76,7 +80,15 @@ pub enum ChordParseError {
 }
 
 impl Chord {
+    /// Shift is stripped for the `Equal`/`Minus` tokens: `+` is the shifted
+    /// face of `=` on common layouts (and `=` itself is shifted on others),
+    /// so a shift-produced glyph and the bare key must resolve to the same
+    /// binding. Without this, cmd+shift+= misses the `cmd+plus` default.
     pub fn new(mods: ModSet, key: KeyToken) -> Self {
+        let mut mods = mods;
+        if matches!(key, KeyToken::Named(NamedToken::Equal | NamedToken::Minus)) {
+            mods.remove(ModSet::SHIFT);
+        }
         Self { mods, key }
     }
 
@@ -105,14 +117,14 @@ impl Chord {
             key = Some(parsed);
         }
         let key = key.ok_or(ChordParseError::NoKey)?;
-        Ok(Chord { mods, key })
+        Ok(Chord::new(mods, key))
     }
 
     pub fn from_event(event: &KeyEvent, modifiers: &Modifiers) -> Option<Chord> {
-        Some(Chord {
-            mods: mods_from_state(modifiers.state()),
-            key: key_token_from_logical(&event.logical_key)?,
-        })
+        Some(Chord::new(
+            mods_from_state(modifiers.state()),
+            key_token_from_logical(&event.logical_key)?,
+        ))
     }
 }
 
@@ -285,6 +297,24 @@ mod tests {
     fn plus_and_equal_fold_together() {
         assert_eq!(Chord::parse("cmd+plus"), Chord::parse("cmd+equal"));
         assert_eq!(key_of("cmd+plus"), KeyToken::Named(NamedToken::Equal));
+    }
+
+    #[test]
+    fn shift_folds_away_for_plus_and_minus() {
+        // cmd+shift+= is the canonical "cmd plus" on layouts where `+` is
+        // the shifted face of `=`; the event-side chord must still hit the
+        // `cmd+plus` binding.
+        assert_eq!(
+            Chord::new(
+                ModSet::SUPER | ModSet::SHIFT,
+                KeyToken::Named(NamedToken::Equal)
+            ),
+            Chord::parse("cmd+plus").unwrap()
+        );
+        assert_eq!(Chord::parse("cmd+shift+plus"), Chord::parse("cmd+plus"));
+        assert_eq!(Chord::parse("cmd+shift+minus"), Chord::parse("cmd+minus"));
+        // Shift stays significant for every other token.
+        assert_ne!(Chord::parse("ctrl+shift+c"), Chord::parse("ctrl+c"));
     }
 
     #[test]

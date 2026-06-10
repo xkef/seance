@@ -90,7 +90,13 @@ impl ActionSpec {
             "split_h" => Action::SplitH,
             "split_v" => Action::SplitV,
             "font_size" | "font_size_inc" => Action::FontSize(parse_i8(&name, arg)?),
-            "font_size_dec" => Action::FontSize(parse_i8(&name, arg)?.saturating_neg()),
+            "font_size_dec" => {
+                let delta = parse_i8(&name, arg)?;
+                let negated = delta
+                    .checked_neg()
+                    .ok_or_else(|| ActionParseError::BadArg(delta.to_string()))?;
+                Action::FontSize(negated)
+            }
             "switch_tab" => Action::SwitchTab(parse_int(&name, arg)?),
             "focus_pane" => Action::FocusPane(parse_dir(&name, arg)?),
             "scroll" => Action::Scroll(parse_dir(&name, arg)?),
@@ -174,6 +180,10 @@ mod tests {
         assert_eq!(
             ActionSpec::parse("font_size_inc:x").unwrap_err(),
             ActionParseError::BadArg("x".to_string())
+        );
+        assert_eq!(
+            ActionSpec::parse("font_size_dec:-128").unwrap_err(),
+            ActionParseError::BadArg("-128".to_string())
         );
         assert_eq!(
             ActionSpec::parse("focus_pane:sideways").unwrap_err(),
