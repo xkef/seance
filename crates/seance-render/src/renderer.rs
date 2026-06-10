@@ -23,10 +23,6 @@ pub struct RendererConfig {
     /// OpenType feature tags to enable on every shape ("calt", "liga",
     /// "ss01", …). Empty means the shaper applies its own defaults.
     pub font_features: Vec<String>,
-    /// Fallback families consulted when the primary `font_family` lacks
-    /// a glyph. Stored verbatim; cosmic-text already iterates through
-    /// loaded fonts on miss, so the list is a hint for future wiring.
-    pub font_fallback: Vec<String>,
     pub min_contrast: f32,
     /// Inner gutter between window edges and the cell grid, in physical
     /// pixels. `[x, y]`. The area outside the grid is filled by the
@@ -85,7 +81,6 @@ impl TerminalRenderer {
             adjust_cell_height: config.adjust_cell_height.as_deref(),
             adjust_cell_width: config.adjust_cell_width.as_deref(),
             features: &config.font_features,
-            fallback: &config.font_fallback,
         }));
         let m = backend.metrics();
         let cell_size = [m.cell_width, m.cell_height];
@@ -232,13 +227,6 @@ impl TerminalRenderer {
     /// resolve to different glyphs under the new feature set.
     pub fn set_font_features(&mut self, features: &[String]) {
         self.backend.set_features(features);
-        self.cell_builder.reset_glyphs();
-    }
-
-    /// Replace the fallback family list. Drops shape and glyph caches so
-    /// the next miss reconsiders the new fallback order.
-    pub fn set_font_fallback(&mut self, fallback: &[String]) {
-        self.backend.set_fallback(fallback);
         self.cell_builder.reset_glyphs();
     }
 

@@ -44,11 +44,6 @@ pub struct BackendConfig<'a> {
     /// not exactly four bytes are dropped with a warning so a typo can't
     /// silently disable shaping.
     pub features: &'a [String],
-    /// Fallback families consulted when the primary `family` lacks a
-    /// glyph. Stored verbatim; cosmic-text's font fallback iterator
-    /// considers all loaded families regardless, so the list is a hint
-    /// for future wiring (#142) rather than a hard constraint today.
-    pub fallback: &'a [String],
 }
 
 pub struct CosmicTextBackend {
@@ -63,12 +58,6 @@ pub struct CosmicTextBackend {
     /// Pre-built feature list passed to every shape call. Rebuilt only on
     /// `set_features` to avoid the per-shape parse cost.
     font_features: FontFeatures,
-    /// Read by `set_fallback`/`new` but not yet consumed during shaping;
-    /// cosmic-text's font fallback iterator already considers all loaded
-    /// families on a glyph miss, so stored verbatim until #142 wires
-    /// priority-aware fallback through `Attrs`.
-    #[allow(dead_code)]
-    fallback: Vec<String>,
 
     /// Intern CacheKey → stable `GlyphId` so the atlas cache can key on
     /// a small integer without knowing the cosmic-text encoding.
@@ -99,7 +88,6 @@ impl CosmicTextBackend {
             adjust_cell_height,
             adjust_cell_width,
             font_features: build_font_features(config.features),
-            fallback: config.fallback.to_vec(),
             key_to_id: HashMap::with_hasher(FxBuildHasher),
             id_to_key: Vec::new(),
         }
@@ -162,10 +150,6 @@ impl TextBackend for CosmicTextBackend {
 
     fn set_features(&mut self, features: &[String]) {
         self.font_features = build_font_features(features);
-    }
-
-    fn set_fallback(&mut self, fallback: &[String]) {
-        self.fallback = fallback.to_vec();
     }
 
     fn shape_run(&mut self, text: &str, attrs: FontAttrs, out: &mut Vec<ShapedGlyph>) {
