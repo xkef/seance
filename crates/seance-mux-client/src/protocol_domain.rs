@@ -188,9 +188,6 @@ fn server_message_to_events(message: ServerMessage) -> Vec<DomainEvent> {
         ServerMessage::Error(ProtocolErrorPayload { pane, message, .. }) => {
             vec![DomainEvent::Error { pane, message }]
         }
-        ServerMessage::Hello(_)
-        | ServerMessage::Topology(_)
-        | ServerMessage::Pong { .. }
-        | ServerMessage::Lines(_) => Vec::new(),
+        ServerMessage::Topology(_) | ServerMessage::Pong { .. } => Vec::new(),
     }
 }

@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 /// Monotonic sequence number assigned by the server to each pushed update.
-/// Clients ack the last applied/presented value back so the server knows
-/// what frames it can drop from its replay history.
+/// Clients ack the last presented value back so the server knows what
+/// frames it can drop from its replay history.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
@@ -16,21 +16,6 @@ pub struct ServerSeq(pub u64);
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
 )]
 pub struct Generation(pub u64);
-
-/// Identifies a server process. Distinguishes which long-lived server a
-/// client is currently connected to so reattach can refuse a mismatched
-/// session.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
-pub struct ServerId(pub u64);
-
-/// Identifies a single mux session within a server. Survives client
-/// disconnect/reconnect; persists for the daemon's lifetime.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
-pub struct SessionId(pub u64);
 
 /// Identifies a connected client within a session. Multi-client work
 /// (M12 Phase 5) uses this to arbitrate input focus and spectator mode.

@@ -42,11 +42,10 @@ pub use protocol_domain::ProtocolDomain;
 pub use seance_frame::SnapshotFrameSource;
 pub use seance_protocol::clipboard::{ClipboardRequest, encode_osc52_reply};
 pub use seance_protocol::frame::{
-    CellAttrs, CellColor, CursorInfo, CursorShape, GridPos, LineRange, PlacementSnapshot, Resize,
-    Selection, SelectionGranularity, TerminalModes, ThemeColors,
+    CellAttrs, CellColor, CursorInfo, CursorShape, GridPos, PlacementSnapshot, Resize, Selection,
+    SelectionGranularity, TerminalModes, ThemeColors,
 };
 pub use seance_protocol::identity::{DomainId, ImageId, ImageKey, PaneRef};
-pub use seance_protocol::mux::LineContent;
 pub use seance_protocol::transport::{InProcessTransport, TransportFrame};
 
 #[cfg(test)]

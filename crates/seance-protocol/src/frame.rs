@@ -10,12 +10,6 @@ use crate::identity::ImageId;
 /// OSC 8 hyperlink." Real indices reference [`VtSnapshot::hyperlinks`].
 pub const NO_HYPERLINK: u16 = u16::MAX;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LineRange {
-    pub start: i64,
-    pub count: u16,
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GridPos {
     pub col: u16,

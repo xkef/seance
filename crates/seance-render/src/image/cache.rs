@@ -61,9 +61,6 @@ impl ImageCache {
         match event {
             ImageCacheEvent::Put(payload) => self.put_payload(device, queue, payload),
             ImageCacheEvent::Evict { key } => self.evict(*key),
-            ImageCacheEvent::PutStart(_)
-            | ImageCacheEvent::PutChunk(_)
-            | ImageCacheEvent::PutComplete { .. } => {}
         }
     }
 

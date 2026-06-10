@@ -270,16 +270,6 @@ where
         ClientMessage::Ping { nonce } => {
             send_response(transport, config, request_id, ServerMessage::Pong { nonce })?;
         }
-        ClientMessage::ClosePane { .. }
-        | ClientMessage::Hello(_)
-        | ClientMessage::Subscribe { .. }
-        | ClientMessage::RequestSnapshot { .. }
-        | ClientMessage::ImageCacheMiss { .. }
-        | ClientMessage::AckApplied { .. }
-        | ClientMessage::GetLines { .. } => {
-            // Phase-2-era operations: the loop accepts and ignores them so
-            // future clients don't get spurious errors during rollout.
-        }
     }
     Ok(())
 }
