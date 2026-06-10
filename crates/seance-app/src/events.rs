@@ -12,7 +12,7 @@ use winit::window::Fullscreen;
 use seance_input::{MouseAction, MouseEventInput, VtInput};
 
 use crate::app::App;
-use crate::command::AppCommand;
+use crate::command::{AppCommand, match_global_keybind};
 use crate::link_open;
 use crate::surface_state::SurfaceState;
 
@@ -40,7 +40,7 @@ impl App {
             .map(|surface| surface.modifiers)
             .unwrap_or_default();
 
-        if let Some(cmd) = self.keybinds.match_event(event, &modifiers) {
+        if let Some(cmd) = match_global_keybind(event, &modifiers) {
             let preserves_selection = matches!(cmd, AppCommand::Copy | AppCommand::SelectAll);
             if !preserves_selection
                 && let Some(surface) = self.surface_mut()
