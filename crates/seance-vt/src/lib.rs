@@ -7,12 +7,8 @@
 
 mod clipboard;
 mod core;
-mod frame;
 mod kitty_graphics;
-mod modes;
-pub mod selection;
 mod session;
-mod snapshot;
 mod snapshot_extraction;
 mod terminal;
 
@@ -21,14 +17,15 @@ pub mod test_support;
 
 pub use clipboard::{ClipboardRequest, encode_osc52_reply};
 pub use core::{DEFAULT_MAX_SCROLLBACK, VtCoreError};
-pub use frame::{
-    CellAttrs, CellColor, CellView, CellVisitor, CursorInfo, CursorShape, DirtySnapshot,
-    FrameSource, ImageInfo, ImageVisitor, PlacementLayer, PlacementSnapshot, PlacementVisitor,
+pub use seance_frame::{
+    CellView, CellVisitor, FrameSource, ImageInfo, ImageVisitor, PlacementLayer, PlacementVisitor,
+    SnapshotFrameSource,
 };
-pub use modes::TerminalModes;
-pub use selection::{GridPos, Selection, SelectionGranularity};
+pub use seance_protocol::frame::{
+    CellAttrs, CellColor, CursorInfo, CursorShape, DirtySnapshot, GridPos, PlacementSnapshot,
+    Selection, SelectionGranularity, SnapshotCell, SnapshotImage, TerminalModes, VtSnapshot,
+};
 pub use session::{
     Resize, SnapshotSlot, SpawnError, ThemeColors, VtCommand, VtEvent, VtSessionError,
     VtSessionHandle, VtSessionOptions, spawn_vt_session,
 };
-pub use snapshot::{SnapshotCell, SnapshotFrameSource, SnapshotImage, VtSnapshot};

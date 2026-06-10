@@ -10,11 +10,11 @@ use libghostty_vt::terminal::{Mode, Point, PointCoordinate};
 use seance_protocol::frame::RowMeta;
 
 use crate::core::VtCoreError;
-use crate::frame::{CellAttrs, CellColor, CursorInfo, CursorShape, DirtySnapshot};
 use crate::kitty_graphics::{extract_kitty_graphics, is_placeholder_text};
-use crate::modes::TerminalModes;
-use crate::selection::GridPos;
-use crate::snapshot::VtSnapshot;
+use crate::{
+    CellAttrs, CellColor, CursorInfo, CursorShape, DirtySnapshot, GridPos, TerminalModes,
+    VtSnapshot,
+};
 use seance_protocol::frame::MouseTracking;
 
 /// Copy live libghostty mode flags into séance-owned input state.

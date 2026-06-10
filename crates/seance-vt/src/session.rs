@@ -17,8 +17,7 @@ pub use seance_protocol::frame::{Resize, ThemeColors};
 
 use crate::clipboard::ClipboardRequest;
 use crate::core::VtCoreError;
-use crate::frame::CursorShape;
-use crate::snapshot::VtSnapshot;
+use crate::{CursorShape, VtSnapshot};
 
 const SYNC_OUTPUT_TIMEOUT: Duration = Duration::from_millis(150);
 
@@ -1002,7 +1001,7 @@ mod unix_actor {
         /// downstream redraw are skipped for the no-op snapshot.
         fn publish_snapshot_if_dirty(&mut self) -> Result<(), VtCoreError> {
             let snapshot = self.core.snapshot()?;
-            if matches!(snapshot.dirty, crate::frame::DirtySnapshot::Clean) {
+            if matches!(snapshot.dirty, crate::DirtySnapshot::Clean) {
                 return Ok(());
             }
             self.notifier.publish(Arc::new(snapshot));
@@ -1047,7 +1046,7 @@ mod unix_actor {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use crate::frame::DirtySnapshot;
+        use crate::DirtySnapshot;
 
         type TestSink = Box<dyn Fn(VtEvent)>;
         type ActorFixture = (
@@ -1362,7 +1361,7 @@ use unix_actor::spawn_vt_session_unix;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frame::CellColor;
+    use crate::CellColor;
 
     fn test_snapshot(text: &str) -> Arc<VtSnapshot> {
         let mut snapshot = VtSnapshot::empty(1, 1);
@@ -1370,7 +1369,7 @@ mod tests {
             text,
             CellColor::Default,
             CellColor::Default,
-            crate::frame::CellAttrs::default(),
+            crate::CellAttrs::default(),
         );
         Arc::new(snapshot)
     }

@@ -8,10 +8,10 @@ use libghostty_vt::terminal::{Mode, ScrollViewport};
 use libghostty_vt::{RenderState, Terminal as VtTerminal, TerminalOptions};
 
 use crate::clipboard::{ClipboardRequest, parse_osc52};
-use crate::frame::{CursorInfo, CursorShape, DirtySnapshot};
-use crate::snapshot::{RowMeta, VtSnapshot};
 use crate::snapshot_extraction::{SnapshotExtraction, extract_snapshot};
 use crate::terminal::install_png_decoder_for_this_thread;
+use crate::{CursorInfo, CursorShape, DirtySnapshot, VtSnapshot};
+use seance_protocol::frame::RowMeta;
 
 pub const DEFAULT_MAX_SCROLLBACK: usize = 10_000;
 pub(crate) const KITTY_IMAGE_STORAGE_LIMIT_BYTES: u64 = 320 * 1000 * 1000;
@@ -390,9 +390,9 @@ struct RowCache {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RowCell {
     text: String,
-    fg: crate::frame::CellColor,
-    bg: crate::frame::CellColor,
-    attrs: crate::frame::CellAttrs,
+    fg: crate::CellColor,
+    bg: crate::CellColor,
+    attrs: crate::CellAttrs,
     hyperlink: Option<String>,
 }
 
@@ -596,8 +596,7 @@ pub(crate) fn cursor_shape_sequence(shape: CursorShape) -> &'static [u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frame::{CellAttrs, CellColor};
-    use crate::selection::GridPos;
+    use crate::{CellAttrs, CellColor, GridPos};
 
     fn core() -> VtCore {
         VtCore::new(VtCoreOptions {

@@ -6,10 +6,8 @@
 
 use libghostty_vt::terminal::Mode;
 
-use crate::VtCoreError;
 use crate::core::{DEFAULT_MAX_SCROLLBACK, VtCore, VtCoreOptions};
-use crate::frame::CursorShape;
-use crate::snapshot::VtSnapshot;
+use crate::{CursorShape, VtCoreError, VtSnapshot};
 
 /// A PTY-less VT adapter for tests.
 pub struct HeadlessTerminal {
