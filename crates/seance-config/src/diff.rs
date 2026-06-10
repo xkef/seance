@@ -49,6 +49,8 @@ pub struct ConfigDiff {
     pub input_changed: bool,
     /// `[links]` section changed — caller must rebuild link detection state.
     pub links_changed: bool,
+    /// `[[keybind]]` entries changed — caller rebuilds the keybind table.
+    pub keybinds_changed: bool,
     /// `scrollback.limit` changed — rebuilding the VT scrollback buffer
     /// requires respawning the actor, which the live reload path does not do
     /// today. Caller logs a notice telling the user to restart.
@@ -82,6 +84,7 @@ impl ConfigDiff {
 
         let input_changed = old.input.macos_option_as_alt != new.input.macos_option_as_alt;
         let links_changed = old.links != new.links;
+        let keybinds_changed = old.keybind != new.keybind;
         let scrollback_limit_changed = old.scrollback.limit != new.scrollback.limit;
 
         Self {
@@ -96,6 +99,7 @@ impl ConfigDiff {
             repaint_only,
             input_changed,
             links_changed,
+            keybinds_changed,
             scrollback_limit_changed,
         }
     }
@@ -113,6 +117,7 @@ impl ConfigDiff {
             || self.repaint_only
             || self.input_changed
             || self.links_changed
+            || self.keybinds_changed
             || self.scrollback_limit_changed)
     }
 }
@@ -256,6 +261,21 @@ mod tests {
         assert!(d.links_changed);
         assert!(!d.repaint_only);
         assert!(!d.theme_changed);
+    }
+
+    #[test]
+    fn keybinds_change_is_detected_separately() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.keybind.push(crate::KeybindConfig {
+            key: "ctrl+shift+c".to_string(),
+            action: "copy".to_string(),
+        });
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.keybinds_changed);
+        assert!(!d.repaint_only);
+        assert!(!d.theme_changed);
+        assert!(!d.is_empty());
     }
 
     #[test]

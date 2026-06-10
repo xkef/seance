@@ -384,9 +384,13 @@ rebuild action table.
   `ESC`-prefix; the other side falls through to macOS text composition (`ø`,
   `¬`, `–`, …). `both` makes both Option keys Alt (breaks text composition);
   `none` (default) preserves the macOS default.
-- User keybind table parsed from config → `Action` enum (`Copy`, `Paste`,
-  `FontSize(i8)`, `NewTab`, `SplitH`, `FocusPane(Dir)`, `ToggleFullscreen`, …)
-  [PLANNED: [M1][m1] + [M6][m6]].
+- User keybind table parsed from config `[[keybind]]` entries → `Action` enum
+  [IMPLEMENTED: [M1][m1]]. Built-in defaults (the Cmd shortcuts) seed the table;
+  a user entry overrides by chord and an `unbind` action removes one. Dispatch
+  actions wired today (`Copy`, `Paste`, `SelectAll`, `Quit`, `CloseSurface`,
+  `FontSize(i8)`, `ResetFontSize`, `ToggleFullscreen`) run; mux actions
+  (`NewTab`, `SplitH`, `FocusPane(Dir)`, `SwitchTab`, `Scroll(Dir)`, …) parse
+  but are logged as not-yet-implemented pending [M6][m6].
 
 ---
 

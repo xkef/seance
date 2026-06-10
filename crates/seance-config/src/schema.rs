@@ -20,6 +20,7 @@ pub struct Config {
     pub mouse: MouseConfig,
     pub input: InputConfig,
     pub links: LinksConfig,
+    pub keybind: Vec<KeybindConfig>,
 }
 
 impl Default for Config {
@@ -34,8 +35,20 @@ impl Default for Config {
             mouse: MouseConfig::default(),
             input: InputConfig::default(),
             links: LinksConfig::default(),
+            keybind: Vec::new(),
         }
     }
+}
+
+/// One `[[keybind]]` entry. Both fields are required (no `#[serde(default)]`),
+/// so a table missing either is a parse error. The `key`/`action` strings are
+/// inert here — `seance-app` owns the chord/action grammar and parses them when
+/// it builds the binding table, keeping this crate free of any winit dependency.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct KeybindConfig {
+    pub key: String,
+    pub action: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
