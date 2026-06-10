@@ -67,7 +67,7 @@ Epic index:
 │       glyph_cache.get_or_insert(CacheKey)                            │
 │         miss → SwashCache → bitmap → etagere atlas                   │
 │                                                                      │
-│ emit quads into per-layer vertex buffers [PLANNED: M4]               │
+│ i32-keyed layer schedule -> per-op draws [IMPLEMENTED]               │
 │ single render pass → N pipeline switches                             │
 │ optional post-pass (custom shaders, ping-pong) [PLANNED: M7]         │
 │ present()                                                            │
@@ -194,22 +194,12 @@ without libghostty linked. The local-mode binary pairs `seance-mux-client`
 
 ## GPU layers
 
-### Current pipeline [IMPLEMENTED]
+### Layer schedule [IMPLEMENTED]
 
-One `wgpu::RenderPass` with 3 pipelines sharing 3 bind groups (uniforms /
-bg_cells SSBO / atlas textures + sampler):
-
-| Pass | Pipeline    | Vertex              | Fragment                                          | Blend               |
-| ---- | ----------- | ------------------- | ------------------------------------------------- | ------------------- |
-| 1    | `bg_color`  | fullscreen triangle | solid uniforms.bg_color                           | none                |
-| 2    | `cell_bg`   | fullscreen triangle | per-cell bg from SSBO + selection + cursor shapes | premultiplied alpha |
-| 3    | `cell_text` | instanced quads     | atlas sample, min-contrast, cursor color swap     | premultiplied alpha |
-
-### Target layer stack [PLANNED: [M4][m4]]
-
-A dynamic `i32`-keyed layer schedule, sorted CPU-side, no depth buffer — not a
-closed enum. Layers are created on demand (`layer_for_z(z)`) and kept sorted by
-z-index; the renderer enumerates no product features. Two axes:
+One `wgpu::RenderPass` drives a dynamic `i32`-keyed layer schedule
+(`crates/seance-render/src/gpu/layers.rs`), sorted CPU-side, no depth buffer —
+not a closed enum. Layers are created on demand (`layer_for_z(z)`) and kept
+sorted by z-index; the renderer enumerates no product features. Two axes:
 
 - **Layer = open `i32` z.** Well-known positions are `const` (`Z_MAIN = 0`, a
   `Z_WINDOW_BG` band below it); new overlays (status/tab bar, command palette,
@@ -217,6 +207,17 @@ z-index; the renderer enumerates no product features. Two axes:
   Mirrors WezTerm's `layer_for_zindex` (a sorted `Vec` created on demand),
   adapted to seance's heterogeneous draw ops.
 - **Sub-role = fixed within-layer order**, `Below → Content → Above`.
+
+A layer holds `DrawOp` tags, not GPU state; the frame's render pass walks the
+schedule and binds the matching pipeline per op. The four op kinds share 3 bind
+groups (uniforms / bg_cells SSBO / atlas textures + sampler):
+
+| Op             | Vertex              | Fragment                                          | Blend               |
+| -------------- | ------------------- | ------------------------------------------------- | ------------------- |
+| `BgColorFill`  | fullscreen triangle | solid uniforms.bg_color                           | none                |
+| `CellBg`       | fullscreen triangle | per-cell bg from SSBO + selection + cursor shapes | premultiplied alpha |
+| `CellText`     | instanced quads     | atlas sample, min-contrast, cursor color swap     | premultiplied alpha |
+| `Images(band)` | instanced quads     | per-image texture sample                          | premultiplied alpha |
 
 The terminal cell content is the reference plane, not a single z, so the three
 Kitty `PlacementLayer` bands live as sub-roles of the `Z_MAIN` layer rather than
@@ -227,17 +228,20 @@ text. Within a band, placements keep their raw-`i32`-z sort. Draw order at
 ```
 SubRole::Below     bg_color fill → Kitty below-bg → cell_bg SSBO → Kitty below-text
 SubRole::Content   cell_text (glyphs + sprite underlines + cursor glyph)
-SubRole::Above     Kitty above-text → cursor-over-text → selection overlay
+SubRole::Above     Kitty above-text
 ```
 
 Stacked window backgrounds sit at negative z; floating UI at positive z — each a
-`layer_for_z(z)` call, no type edits.
+`layer_for_z(z)` call, no type edits. Cursor-over-text and the selection overlay
+are currently baked into the `cell_bg`/`cell_text` shaders; promoting them to
+distinct `Above` ops is future work.
 
 ### Offscreen post-pass infrastructure [PLANNED: [M4][m4] + [M7][m7]]
 
 Front/back `bgra8unorm_srgb` render textures sized to the surface. All layers
 target `back`; optional ping-pong of user-supplied Shadertoy-compatible shaders;
-final blit to the drawable.
+final blit to the drawable. The offscreen front/back pair + blit is the
+remaining M4 exit criterion.
 
 ### Atlas upload
 

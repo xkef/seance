@@ -1,5 +1,6 @@
 mod atlas_texture;
 mod dynamic_buffer;
+mod layers;
 mod pipeline;
 mod state;
 pub(crate) mod uniforms;
