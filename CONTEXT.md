@@ -22,8 +22,8 @@ use **Pane View** for client-side pane state. _Avoid_: window session, terminal
 state
 
 **Mux Protocol**: The transport-neutral message schema for client/server pane
-routing, handshake, ordered pane updates, frame deltas, image cache events, and
-classified lifecycle errors. _Avoid_: VT command wire ABI
+routing, ordered pane updates, frame deltas, image cache events, and classified
+lifecycle errors. _Avoid_: VT command wire ABI
 
 **Mux Client**: The client-side mux module that owns Pane Views, sends pane
 commands through a Domain, and applies ordered Pane Updates. _Avoid_: pane

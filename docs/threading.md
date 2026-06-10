@@ -186,10 +186,10 @@ also defines ordered image cache events for remote transports.
   on the current in-process compatibility path.
 - `VtSnapshot::visit_placements(layer)` filters placement snapshots by layer.
 - `PaneUpdate.image_events` apply before the frame in the same ordered update.
-- Remote image payloads use `ImageCacheEvent` puts/chunks/evicts keyed by
+- Remote image payloads use `ImageCacheEvent` puts/evicts keyed by
   `ImageKey { pane, image_id }`.
-- Renderer LRU eviction is local. A missing referenced image becomes
-  `ImageCacheMiss`, not a panic or server eviction.
+- Renderer LRU eviction is local. A missing referenced image is skipped, not a
+  panic or server eviction.
 
 ---
 
@@ -294,10 +294,10 @@ generation or dimensions do not match, the client returns `NeedFull` and uses a
 full reset.
 
 The per-pane history ring retains ordered `PaneUpdate`s plus the latest full
-update for first attach and resume. Reconnects replay retained updates when the
-client's `last_seen_seq` is available; otherwise the mux sends a resync/full
-reset. See [`docs/protocol.md`](./protocol.md) for handshake, envelope, image
-cache, flow-control, and error taxonomy details.
+update for first attach and resume. Reconnects replay retained updates from the
+ring when possible; otherwise the mux sends a resync/full reset. See
+[`docs/protocol.md`](./protocol.md) for envelope, image cache, flow-control, and
+error taxonomy details.
 
 ---
 

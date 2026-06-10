@@ -6,12 +6,19 @@ macOS-first; Linux is a target but untested as of this writing.
 
 ## Crate layout
 
-| Crate           | Role                                                                                                |
-| --------------- | --------------------------------------------------------------------------------------------------- |
-| `seance-app`    | winit event loop, `Window`, top-level `App`. Drives PTY polling and redraw dispatch.                |
-| `seance-vt`     | VT adapter around `libghostty-vt` — terminal state, render-state iteration, kitty-graphics adapter. |
-| `seance-render` | wgpu pipelines, glyph atlas (cosmic-text + swash), image renderer.                                  |
-| `seance-input`  | winit key/mouse → VT escape sequences, Cmd shortcut dispatch.                                       |
+| Crate                | Role                                                                                                |
+| -------------------- | --------------------------------------------------------------------------------------------------- |
+| `seance-app`         | winit event loop, `Window`, top-level `App`. Drives PTY polling and redraw dispatch.                |
+| `seance-vt`          | VT adapter around `libghostty-vt` — terminal state, render-state iteration, kitty-graphics adapter. |
+| `seance-render`      | wgpu pipelines, glyph atlas (cosmic-text + swash), image renderer.                                  |
+| `seance-input`       | winit key/mouse → VT escape sequences, Cmd shortcut dispatch.                                       |
+| `seance-protocol`    | Wire-level mux protocol: owned snapshot/delta types, postcard envelopes, `Transport` trait.         |
+| `seance-frame`       | Render-facing frame traits (`FrameSource` + visitors) bridging protocol snapshots to the renderer.  |
+| `seance-mux-client`  | Client-side mux: `Domain` seam, `MuxClient`/`PaneView` materialization, link detection.             |
+| `seance-mux-server`  | Server-side mux: `LocalDomain` over seance-vt, the `serve` protocol-dispatch loop.                  |
+| `seance-config`      | `config.toml` schema + loading, hot-reload `ConfigDiff`, theme resolution.                          |
+| `seance-render-test` | Layered renderer test harness: headless VT, ASCII frame dumps, snapshot tests.                      |
+| `seance-bench`       | Frame-time bench harness: CPU stopwatch + headless GPU timing.                                      |
 
 Canonical architecture reference: **`docs/architecture.md`**. Read that before
 touching the renderer or VT layer.

@@ -4,7 +4,7 @@
 //! partial config fills in every missing field from the compile-time defaults.
 //!
 //! The `theme` key is stored as a raw string; resolution into a palette is the
-//! job of the (forthcoming) theme loader — see issue #12.
+//! job of the `theme` module.
 
 use serde::Deserialize;
 
