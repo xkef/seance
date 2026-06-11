@@ -96,17 +96,16 @@ impl App {
                 .mux
                 .pane_view(surface.active_pane)
                 .and_then(|view| view.cursor_shape());
+            let selection = surface.selection_range();
             if let Some(mut source) = surface
                 .mux
                 .pane_view(surface.active_pane)
                 .and_then(|view| view.frame_source())
             {
-                surface.renderer.update_frame(&mut source);
+                surface.renderer.update_frame(&mut source, selection);
             }
         }
-        let selection = surface.selection_range();
         let hovered_link = surface.hovered_link_range();
-        surface.render_inputs.selection = selection;
         surface.render_inputs.hovered_link = hovered_link;
         // Prefer the VT-reported shape; fall back to the user's configured
         // default when the VT has no opinion. Refreshed every frame so that

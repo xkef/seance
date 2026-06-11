@@ -212,12 +212,12 @@ A layer holds `DrawOp` tags, not GPU state; the frame's render pass walks the
 schedule and binds the matching pipeline per op. The four op kinds share 3 bind
 groups (uniforms / bg_cells SSBO / atlas textures + sampler):
 
-| Op             | Vertex              | Fragment                                          | Blend               |
-| -------------- | ------------------- | ------------------------------------------------- | ------------------- |
-| `BgColorFill`  | fullscreen triangle | solid uniforms.bg_color                           | none                |
-| `CellBg`       | fullscreen triangle | per-cell bg from SSBO + selection + cursor shapes | premultiplied alpha |
-| `CellText`     | instanced quads     | atlas sample, min-contrast, cursor color swap     | premultiplied alpha |
-| `Images(band)` | instanced quads     | per-image texture sample                          | premultiplied alpha |
+| Op             | Vertex              | Fragment                                      | Blend               |
+| -------------- | ------------------- | --------------------------------------------- | ------------------- |
+| `BgColorFill`  | fullscreen triangle | solid uniforms.bg_color                       | none                |
+| `CellBg`       | fullscreen triangle | per-cell bg from SSBO + cursor shapes         | premultiplied alpha |
+| `CellText`     | instanced quads     | atlas sample, min-contrast, cursor color swap | premultiplied alpha |
+| `Images(band)` | instanced quads     | per-image texture sample                      | premultiplied alpha |
 
 The terminal cell content is the reference plane, not a single z, so the three
 Kitty `PlacementLayer` bands live as sub-roles of the `Z_MAIN` layer rather than
@@ -232,9 +232,10 @@ SubRole::Above     Kitty above-text
 ```
 
 Stacked window backgrounds sit at negative z; floating UI at positive z — each a
-`layer_for_z(z)` call, no type edits. Cursor-over-text and the selection overlay
-are currently baked into the `cell_bg`/`cell_text` shaders; promoting them to
-distinct `Above` ops is future work.
+`layer_for_z(z)` call, no type edits. Selection is resolved on the CPU into the
+`bg_cells` SSBO and per-glyph colors (Ghostty-style); cursor-over-text stays
+baked into the `cell_bg`/`cell_text` shaders, and promoting it to a distinct
+`Above` op is future work.
 
 ### Offscreen post-pass infrastructure [PLANNED: [M4][m4] + [M7][m7]]
 

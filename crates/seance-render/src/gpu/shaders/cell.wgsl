@@ -19,17 +19,8 @@ struct Uniforms {
     overlay_shape: u32,
     overlay_pos: vec2<u32>,
     overlay_color: vec4<f32>,
-    selection_start: vec2<u32>,
-    selection_end: vec2<u32>,
-    selection_color: vec4<f32>,
-    // alpha == 0 means "no override"; glyphs in selection then fall
-    // back to the cell's effective bg for natural contrast against
-    // selection_color.
-    selection_fg: vec4<f32>,
-    selection_active: u32,
     baseline: f32,
     hovered_link_active: u32,
-    _pad_link: u32,
     hovered_link_start: vec2<u32>,
     hovered_link_end: vec2<u32>,
     hovered_link_color: vec4<f32>,
@@ -40,6 +31,7 @@ struct Uniforms {
 const ATLAS_MASK: u32 = 0xFFu;
 const CURSOR_GLYPH_FLAGS_MASK: u32 = 0xFF00u;
 const MIN_CONTRAST_FLAG: u32 = 0x10000u;
+const IN_SELECTION_FLAG: u32 = 0x20000u;
 
 // ================================================================
 // Min-contrast (WCAG relative luminance in linearized sRGB)
@@ -87,32 +79,6 @@ fn apply_min_contrast(fg: vec3<f32>, bg: vec3<f32>, min_ratio: f32) -> vec3<f32>
         return vec3<f32>(1.0, 1.0, 1.0);
     }
     return vec3<f32>(0.0, 0.0, 0.0);
-}
-
-// ================================================================
-// Selection helper
-// ================================================================
-
-fn is_in_selection(col: u32, row: u32) -> bool {
-    if uniforms.selection_active == 0u {
-        return false;
-    }
-    let s = uniforms.selection_start;
-    let e = uniforms.selection_end;
-
-    if row < s.y || row > e.y {
-        return false;
-    }
-    if s.y == e.y {
-        return col >= s.x && col <= e.x;
-    }
-    if row == s.y {
-        return col >= s.x;
-    }
-    if row == e.y {
-        return col <= e.x;
-    }
-    return true;
 }
 
 fn is_in_hovered_link(col: u32, row: u32) -> bool {
@@ -195,13 +161,6 @@ fn fs_cell_bg(in: FullScreenOut) -> @location(0) vec4<f32> {
     let idx = row * uniforms.grid_size.x + col;
     let packed = bg_cells[idx];
     var color = unpack_rgba(packed);
-
-    if is_in_selection(col, row) {
-        let sel = uniforms.selection_color;
-        // Tmux-style: paint the cell bg fully opaque so glyphs sit on a
-        // solid block instead of an alpha tint.
-        color = vec4<f32>(sel.rgb, 1.0);
-    }
 
     if uniforms.cursor_visible != 0u
        && uniforms.overlay_shape != 0u
@@ -301,18 +260,13 @@ fn vs_cell_text(
     let bg_srgb = unpack_rgba(bg_packed);
     let effective_bg = select(bg_srgb.rgb, uniforms.bg_color.rgb, bg_srgb.a < 0.01);
 
+    // Selection colors are resolved on the CPU into instance.color and
+    // bg_cells; the flag only keeps selection winning over cursor
+    // inversion.
+    let in_selection = (instance.atlas_and_flags & IN_SELECTION_FLAG) != 0u;
+
     var color = instance.color;
-    if is_in_selection(instance.grid_pos.x, instance.grid_pos.y) {
-        // Selection wins over cursor inversion. Use the explicit
-        // selection_fg if the theme provides one (alpha != 0); else
-        // fall back to the cell's effective bg for contrast against the
-        // (now opaque) selection bg.
-        if uniforms.selection_fg.a > 0.0 {
-            color = vec4<f32>(uniforms.selection_fg.rgb, color.a);
-        } else {
-            color = vec4<f32>(effective_bg, color.a);
-        }
-    } else if (at_cursor || at_cursor_wide) && !is_cursor_glyph {
+    if (at_cursor || at_cursor_wide) && !is_cursor_glyph && !in_selection {
         if uniforms.overlay_shape == 1u {
             // Block cursor fills the cell; invert glyph to bg for legibility.
             color = vec4<f32>(effective_bg, color.a);
