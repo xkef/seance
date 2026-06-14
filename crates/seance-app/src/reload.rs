@@ -82,6 +82,11 @@ impl App {
                     .renderer
                     .set_background_opacity(self.config.window.background_opacity);
             }
+            if old_config.bold_is_bright != self.config.bold_is_bright {
+                surface
+                    .renderer
+                    .set_bold_is_bright(self.config.bold_is_bright);
+            }
         }
 
         if diff.font_size_changed {

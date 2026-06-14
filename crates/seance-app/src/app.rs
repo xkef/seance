@@ -233,6 +233,7 @@ impl ApplicationHandler<UserEvent> for App {
             min_contrast: self.config.font.min_contrast,
             window_padding: physical_window_padding(&self.config, window.scale_factor()),
             background_opacity: self.config.window.background_opacity,
+            bold_is_bright: self.config.bold_is_bright,
             theme: theme.clone(),
         };
 

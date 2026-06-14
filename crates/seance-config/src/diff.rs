@@ -38,8 +38,8 @@ pub struct ConfigDiff {
     /// `window.padding_x|y` changed — caller must push the new padding to
     /// the renderer and reflow the PTY (cols/rows shrink when padding grows).
     pub window_padding_changed: bool,
-    /// Min-contrast, cursor, or opacity changed — a plain repaint is
-    /// enough once the renderer has consumed the new values.
+    /// Min-contrast, cursor, opacity, or bold-is-bright changed — a plain
+    /// repaint is enough once the renderer has consumed the new values.
     pub repaint_only: bool,
     /// `[input]` section changed — caller must push the new settings to
     /// `InputHandler` (e.g. `macos_option_as_alt`).
@@ -75,7 +75,8 @@ impl ConfigDiff {
         let repaint_only = old.font.min_contrast != new.font.min_contrast
             || old.window.background_opacity != new.window.background_opacity
             || old.cursor.style != new.cursor.style
-            || old.cursor.blink != new.cursor.blink;
+            || old.cursor.blink != new.cursor.blink
+            || old.bold_is_bright != new.bold_is_bright;
 
         let input_changed = old.input.macos_option_as_alt != new.input.macos_option_as_alt;
         let links_changed = old.links != new.links;
@@ -222,6 +223,17 @@ mod tests {
         let d = ConfigDiff::between(&a, &b);
         assert!(d.window_padding_changed);
         assert!(!d.repaint_only);
+    }
+
+    #[test]
+    fn bold_is_bright_change_is_repaint_only() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.bold_is_bright = true;
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.repaint_only);
+        assert!(!d.theme_changed);
+        assert!(!d.font_size_changed);
     }
 
     #[test]

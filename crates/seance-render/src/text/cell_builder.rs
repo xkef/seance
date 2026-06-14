@@ -64,6 +64,7 @@ pub struct BuildFrameConfig<'a> {
     pub theme: &'a Theme,
     pub bg_color: [u8; 4],
     pub min_contrast: f32,
+    pub bold_is_bright: bool,
 }
 
 type GlyphSlots = HashMap<GlyphId, AtlasEntry, FxBuildHasher>;
@@ -237,6 +238,7 @@ impl CellBuilder {
             &mut self.bg_cells,
             &mut self.runs,
             &mut self.procedural_cells,
+            config.bold_is_bright,
         );
 
         self.text_cells.clear();
@@ -348,10 +350,17 @@ fn geometry(
 
 /// Resolve a VT-reported color into concrete RGB. `None` means "use the
 /// theme default" — the caller decides fg vs bg.
-fn resolve_color(theme: &Theme, color: &CellColor) -> Option<[u8; 3]> {
+///
+/// `brighten` applies the `bold-is-bright` remap: an ANSI 0–7 palette index is
+/// shifted to its bright 8–15 counterpart. It only ever makes sense on the
+/// foreground of a bold cell; RGB and 256-color (8+) entries are untouched.
+fn resolve_color(theme: &Theme, color: &CellColor, brighten: bool) -> Option<[u8; 3]> {
     match *color {
         CellColor::Default => None,
-        CellColor::Palette(idx) => Some(theme.palette[idx as usize]),
+        CellColor::Palette(idx) => {
+            let idx = if brighten && idx < 8 { idx + 8 } else { idx };
+            Some(theme.palette[idx as usize])
+        }
         CellColor::Rgb(r, g, b) => Some([r, g, b]),
     }
 }
@@ -368,6 +377,7 @@ fn walk_grid_into_runs(
     bg_cells: &mut Vec<[u8; 4]>,
     runs: &mut Vec<ShapeRun>,
     procedural_cells: &mut Vec<ProceduralCell>,
+    bold_is_bright: bool,
 ) {
     bg_cells.clear();
     bg_cells.resize(
@@ -385,6 +395,7 @@ fn walk_grid_into_runs(
         theme,
         cols: geom.grid_cols,
         rows: geom.grid_rows,
+        bold_is_bright,
     };
     source.visit_cells(&mut visitor);
     visitor.flush();
@@ -484,6 +495,7 @@ struct RunBuilder<'a> {
     theme: &'a Theme,
     cols: u16,
     rows: u16,
+    bold_is_bright: bool,
 }
 
 impl RunBuilder<'_> {
@@ -505,8 +517,9 @@ impl CellVisitor for RunBuilder<'_> {
 
         let theme_bg = [self.theme.bg[0], self.theme.bg[1], self.theme.bg[2]];
         let min_contrast = matches!(view.fg, CellColor::Default) && !view.attrs.inverse;
-        let mut fg_rgb = resolve_color(self.theme, &view.fg).unwrap_or(self.theme.fg);
-        let mut bg_rgb = resolve_color(self.theme, &view.bg).unwrap_or(theme_bg);
+        let brighten_fg = self.bold_is_bright && view.attrs.bold;
+        let mut fg_rgb = resolve_color(self.theme, &view.fg, brighten_fg).unwrap_or(self.theme.fg);
+        let mut bg_rgb = resolve_color(self.theme, &view.bg, false).unwrap_or(theme_bg);
         if view.attrs.inverse {
             std::mem::swap(&mut fg_rgb, &mut bg_rgb);
         }
@@ -743,6 +756,7 @@ mod tests {
             theme,
             bg_color: [0, 0, 0, 255],
             min_contrast: 1.0,
+            bold_is_bright: false,
         }
     }
 
@@ -767,6 +781,16 @@ mod tests {
         cells: &[FakeCell<'_>],
         theme: &Theme,
     ) -> (Vec<[u8; 4]>, Vec<ShapeRun>, Vec<ProceduralCell>) {
+        collect_runs_cfg(cols, rows, cells, theme, false)
+    }
+
+    fn collect_runs_cfg(
+        cols: u16,
+        rows: u16,
+        cells: &[FakeCell<'_>],
+        theme: &Theme,
+        bold_is_bright: bool,
+    ) -> (Vec<[u8; 4]>, Vec<ShapeRun>, Vec<ProceduralCell>) {
         let mut source = FakeFrame::new(cols, rows, cells);
         let geom = FrameGeometry {
             cell_width: 10.0,
@@ -785,6 +809,7 @@ mod tests {
             &mut bg,
             &mut runs,
             &mut procedural,
+            bold_is_bright,
         );
         (bg, runs, procedural)
     }
@@ -898,6 +923,58 @@ mod tests {
 
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].slots[0].fg, [0, 205, 205, FAINT_ALPHA]);
+    }
+
+    #[test]
+    fn bold_is_bright_remaps_ansi_fg_to_bright_for_bold_cells() {
+        let theme = Theme::blank();
+        let cells = [("B", CellColor::Palette(1), CellColor::Default, bold())];
+        let (_bg, runs, _) = collect_runs_cfg(1, 1, &cells, &theme, true);
+
+        assert_eq!(runs.len(), 1);
+        // Palette(1) (0xcd0000) brightens to Palette(9) (0xff0000).
+        assert_eq!(runs[0].slots[0].fg, [0xff, 0x00, 0x00, 255]);
+    }
+
+    #[test]
+    fn bold_is_bright_leaves_fg_untouched_when_disabled() {
+        let theme = Theme::blank();
+        let cells = [("B", CellColor::Palette(1), CellColor::Default, bold())];
+        let (_bg, runs, _) = collect_runs_cfg(1, 1, &cells, &theme, false);
+
+        assert_eq!(runs[0].slots[0].fg, [0xcd, 0x00, 0x00, 255]);
+    }
+
+    #[test]
+    fn bold_is_bright_only_brightens_bold_cells() {
+        let theme = Theme::blank();
+        let cells = [("p", CellColor::Palette(1), CellColor::Default, plain())];
+        let (_bg, runs, _) = collect_runs_cfg(1, 1, &cells, &theme, true);
+
+        assert_eq!(runs[0].slots[0].fg, [0xcd, 0x00, 0x00, 255]);
+    }
+
+    #[test]
+    fn bold_is_bright_leaves_high_palette_and_rgb_fg_alone() {
+        let theme = Theme::blank();
+        let cells = [
+            // Already-bright ANSI index (9) stays put — no wrap past 15.
+            ("a", CellColor::Palette(9), CellColor::Default, bold()),
+            ("b", CellColor::Rgb(10, 20, 30), CellColor::Default, bold()),
+        ];
+        let (_bg, runs, _) = collect_runs_cfg(2, 1, &cells, &theme, true);
+
+        assert_eq!(runs[0].slots[0].fg, [0xff, 0x00, 0x00, 255]);
+        assert_eq!(runs[0].slots[1].fg, [10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn bold_is_bright_never_brightens_background() {
+        let theme = Theme::blank();
+        let cells = [("x", CellColor::Default, CellColor::Palette(1), bold())];
+        let (bg, _runs, _) = collect_runs_cfg(1, 1, &cells, &theme, true);
+
+        assert_eq!(bg[0], [0xcd, 0x00, 0x00, 255]);
     }
 
     #[test]
