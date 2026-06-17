@@ -38,9 +38,11 @@ impl App {
 
     pub(crate) fn apply_scale_factor(&mut self, scale_factor: f64) {
         let padding = physical_window_padding(&self.config, scale_factor);
+        let balance = self.config.window.padding_balance;
         if let Some(ws) = self.surface_mut() {
             ws.renderer.set_scale(scale_factor);
             ws.renderer.set_window_padding(padding);
+            ws.renderer.set_window_padding_balance(balance);
             ws.reflow(ws.window.inner_size());
         }
     }
@@ -53,6 +55,8 @@ impl App {
         if let Some(ws) = self.surface.as_mut() {
             let padding = physical_window_padding(config, ws.window.scale_factor());
             ws.renderer.set_window_padding(padding);
+            ws.renderer
+                .set_window_padding_balance(config.window.padding_balance);
             ws.reflow(ws.window.inner_size());
         }
     }
