@@ -58,6 +58,10 @@ pub struct FontConfig {
     pub adjust_cell_height: Option<String>,
     pub adjust_cell_width: Option<String>,
     pub min_contrast: f32,
+    /// Faux-bold the rasterized glyph by dilating its coverage one pixel,
+    /// mirroring Ghostty's `font-thicken`. Applies to grayscale glyphs only;
+    /// color glyphs (emoji) are left untouched.
+    pub thicken: bool,
 }
 
 impl Default for FontConfig {
@@ -69,6 +73,7 @@ impl Default for FontConfig {
             adjust_cell_height: None,
             adjust_cell_width: None,
             min_contrast: 1.0,
+            thicken: false,
         }
     }
 }
