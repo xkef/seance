@@ -1,6 +1,6 @@
 //! Procedural rasterization of Unicode box-drawing and block-element
-//! codepoints (U+2500–U+259F) and Powerline separator triangles
-//! (U+E0B0–U+E0B3).
+//! codepoints (U+2500–U+259F) and the geometric Powerline separators
+//! (U+E0B0–U+E0BF: triangles, semicircles, and corner wedges).
 //!
 //! Fonts ship inconsistent metrics for these glyphs, so monospace alignment
 //! breaks at non-integer font sizes — long horizontal lines split into pieces,
@@ -126,10 +126,44 @@ enum PowerlineTriangle {
     LeftThin,
 }
 
+/// A Powerline rounded separator (U+E0B4–U+E0B7): a half-ellipse spanning the
+/// full cell, flat diameter flush against one vertical edge and the curved
+/// side bulging out to the opposite mid-edge. Filled variants fill the disc;
+/// thin variants stroke the arc only.
+#[derive(Clone, Copy)]
+enum Semicircle {
+    /// U+E0B4 — diameter on the left edge, bulge to (cell_width, h/2).
+    RightFilled,
+    /// U+E0B5 — outline of `RightFilled`.
+    RightThin,
+    /// U+E0B6 — diameter on the right edge, bulge to (0, h/2).
+    LeftFilled,
+    /// U+E0B7 — outline of `LeftFilled`.
+    LeftThin,
+}
+
+/// A filled Powerline corner wedge (U+E0B8, U+E0BA, U+E0BC, U+E0BE): the
+/// half-cell right triangle adjacent to the named corner, split off by a cell
+/// diagonal. The matching thin wedges (U+E0B9/BB/BD/BF) are that diagonal on
+/// its own and reuse [`Diagonal`].
+#[derive(Clone, Copy)]
+enum CornerTriangle {
+    /// U+E0B8 — fills below the main diagonal (top-left → bottom-right).
+    LowerLeft,
+    /// U+E0BA — fills below the anti-diagonal (top-right → bottom-left).
+    LowerRight,
+    /// U+E0BC — fills above the anti-diagonal.
+    UpperLeft,
+    /// U+E0BE — fills above the main diagonal.
+    UpperRight,
+}
+
 #[derive(Clone, Copy)]
 enum RenderKind {
     Box(Strokes),
     Powerline(PowerlineTriangle),
+    Semicircle(Semicircle),
+    CornerTriangle(CornerTriangle),
     Arc(ArcCorner),
     Diagonal(Diagonal),
     Quadrant(QuadrantMask),
@@ -149,20 +183,38 @@ fn lookup(c: char) -> Option<RenderKind> {
     let cp = c as u32;
     match cp {
         0x2500..=0x259F => lookup_in_range(cp),
-        0xE0B0..=0xE0B3 => lookup_powerline(cp),
+        0xE0B0..=0xE0BF => lookup_powerline(cp),
         _ => None,
     }
 }
 
 fn lookup_powerline(cp: u32) -> Option<RenderKind> {
-    let kind = match cp {
-        0xE0B0 => PowerlineTriangle::RightFilled,
-        0xE0B1 => PowerlineTriangle::RightThin,
-        0xE0B2 => PowerlineTriangle::LeftFilled,
-        0xE0B3 => PowerlineTriangle::LeftThin,
+    Some(match cp {
+        // Arrow separators.
+        0xE0B0 => RenderKind::Powerline(PowerlineTriangle::RightFilled),
+        0xE0B1 => RenderKind::Powerline(PowerlineTriangle::RightThin),
+        0xE0B2 => RenderKind::Powerline(PowerlineTriangle::LeftFilled),
+        0xE0B3 => RenderKind::Powerline(PowerlineTriangle::LeftThin),
+
+        // Rounded separators.
+        0xE0B4 => RenderKind::Semicircle(Semicircle::RightFilled),
+        0xE0B5 => RenderKind::Semicircle(Semicircle::RightThin),
+        0xE0B6 => RenderKind::Semicircle(Semicircle::LeftFilled),
+        0xE0B7 => RenderKind::Semicircle(Semicircle::LeftThin),
+
+        // Corner wedges. The thin variants are exactly a cell diagonal, so
+        // they reuse the box-drawing diagonal renderer.
+        0xE0B8 => RenderKind::CornerTriangle(CornerTriangle::LowerLeft),
+        0xE0B9 => RenderKind::Diagonal(Diagonal::Back),
+        0xE0BA => RenderKind::CornerTriangle(CornerTriangle::LowerRight),
+        0xE0BB => RenderKind::Diagonal(Diagonal::Forward),
+        0xE0BC => RenderKind::CornerTriangle(CornerTriangle::UpperLeft),
+        0xE0BD => RenderKind::Diagonal(Diagonal::Forward),
+        0xE0BE => RenderKind::CornerTriangle(CornerTriangle::UpperRight),
+        0xE0BF => RenderKind::Diagonal(Diagonal::Back),
+
         _ => return None,
-    };
-    Some(RenderKind::Powerline(kind))
+    })
 }
 
 fn lookup_in_range(cp: u32) -> Option<RenderKind> {
@@ -408,6 +460,8 @@ fn draw(kind: RenderKind, pixmap: &mut Pixmap, w: u32, h: u32) {
     match kind {
         RenderKind::Box(strokes) => draw_box(strokes, pixmap, w, h),
         RenderKind::Powerline(triangle) => draw_powerline(triangle, pixmap, w, h),
+        RenderKind::Semicircle(kind) => draw_semicircle(kind, pixmap, w, h),
+        RenderKind::CornerTriangle(kind) => draw_corner_triangle(kind, pixmap, w, h),
         RenderKind::Arc(corner) => draw_arc(corner, pixmap, w, h),
         RenderKind::Diagonal(kind) => draw_diagonal(kind, pixmap, w, h),
         RenderKind::Quadrant(mask) => draw_quadrants(mask, pixmap, w, h),
@@ -618,6 +672,75 @@ fn draw_powerline(triangle: PowerlineTriangle, pixmap: &mut Pixmap, w: u32, h: u
         };
         pixmap.stroke_path(&path, &white_paint(), &stroke, Transform::identity(), None);
     }
+}
+
+fn draw_semicircle(kind: Semicircle, pixmap: &mut Pixmap, w: u32, h: u32) {
+    let wf = w as f32;
+    let hf = h as f32;
+    let mid_y = hf / 2.0;
+    // Half-ellipse: rx spans the whole cell width, ry is half the height.
+    // The diameter sits on `flat_x`; the curve bulges out to `apex_x`.
+    let (apex_x, flat_x) = match kind {
+        Semicircle::RightFilled | Semicircle::RightThin => (wf, 0.0),
+        Semicircle::LeftFilled | Semicircle::LeftThin => (0.0, wf),
+    };
+    // Cubic control-point factor for a quarter ellipse (see `draw_arc`).
+    const K: f32 = 0.552_284_8;
+    let dx = (apex_x - flat_x) * K;
+    let dy = mid_y * K;
+
+    let mut pb = PathBuilder::new();
+    pb.move_to(flat_x, 0.0);
+    // Top quarter: diameter top → apex.
+    pb.cubic_to(flat_x + dx, 0.0, apex_x, mid_y - dy, apex_x, mid_y);
+    // Bottom quarter: apex → diameter bottom.
+    pb.cubic_to(apex_x, mid_y + dy, flat_x + dx, hf, flat_x, hf);
+
+    let filled = matches!(kind, Semicircle::RightFilled | Semicircle::LeftFilled);
+    if filled {
+        pb.close();
+        let Some(path) = pb.finish() else { return };
+        pixmap.fill_path(
+            &path,
+            &white_paint(),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+    } else {
+        let Some(path) = pb.finish() else { return };
+        let stroke = SkStroke {
+            width: light_width(h),
+            line_cap: LineCap::Butt,
+            line_join: LineJoin::Round,
+            ..SkStroke::default()
+        };
+        pixmap.stroke_path(&path, &white_paint(), &stroke, Transform::identity(), None);
+    }
+}
+
+fn draw_corner_triangle(kind: CornerTriangle, pixmap: &mut Pixmap, w: u32, h: u32) {
+    let wf = w as f32;
+    let hf = h as f32;
+    let pts = match kind {
+        CornerTriangle::LowerLeft => [(0.0, 0.0), (0.0, hf), (wf, hf)],
+        CornerTriangle::LowerRight => [(wf, 0.0), (0.0, hf), (wf, hf)],
+        CornerTriangle::UpperLeft => [(0.0, 0.0), (wf, 0.0), (0.0, hf)],
+        CornerTriangle::UpperRight => [(0.0, 0.0), (wf, 0.0), (wf, hf)],
+    };
+    let mut pb = PathBuilder::new();
+    pb.move_to(pts[0].0, pts[0].1);
+    pb.line_to(pts[1].0, pts[1].1);
+    pb.line_to(pts[2].0, pts[2].1);
+    pb.close();
+    let Some(path) = pb.finish() else { return };
+    pixmap.fill_path(
+        &path,
+        &white_paint(),
+        FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
 }
 
 fn draw_diagonal(kind: Diagonal, pixmap: &mut Pixmap, w: u32, h: u32) {
@@ -835,9 +958,9 @@ mod tests {
         // Dashed variants live in U+2504..U+250B; not in the registry yet.
         assert!(rasterize('\u{2504}', &m).is_none());
         // Powerline PUA codepoints adjacent to the supported set
-        // (U+E0B0..=U+E0B3) — these neighbors are not registered.
+        // (U+E0B0..=U+E0BF) — these neighbors are not registered.
         assert!(rasterize('\u{E0AF}', &m).is_none());
-        assert!(rasterize('\u{E0B4}', &m).is_none());
+        assert!(rasterize('\u{E0C0}', &m).is_none());
     }
 
     #[test]
@@ -951,5 +1074,106 @@ mod tests {
         assert_eq!(g.bearing_x, 0);
         assert_eq!(g.bearing_y, 16);
         assert_eq!(g.format, GlyphFormat::Alpha);
+    }
+
+    #[test]
+    fn supports_extended_powerline_separators() {
+        for cp in 0xE0B4u32..=0xE0BF {
+            let c = char::from_u32(cp).unwrap();
+            assert!(supports(c), "expected procedural support for U+{cp:04X}");
+        }
+    }
+
+    #[test]
+    fn semicircle_right_filled_inks_flat_edge_and_apex() {
+        // U+E0B4: the flat diameter sits on the left edge (the seam that has
+        // to meet the previous segment), the curve bulges to the right-mid
+        // edge. Skip the corner rows where the diameter degenerates to a
+        // vertex and anti-aliased coverage is platform-dependent.
+        let m = metrics(16, 32);
+        let g = rasterize('\u{E0B4}', &m).unwrap();
+        let w = g.width as usize;
+        let h = g.height as usize;
+        let mid = h / 2;
+        for row in 1..h - 1 {
+            assert!(g.data[row * w] > 0, "expected flat-edge ink at row {row}");
+        }
+        assert!(g.data[mid * w + (w - 1)] > 0, "apex at right-mid edge");
+        // Top-right corner lies outside the half-disc.
+        assert_eq!(g.data[w - 1], 0, "top-right corner outside the disc");
+    }
+
+    #[test]
+    fn semicircle_left_filled_mirrors_right() {
+        let m = metrics(16, 32);
+        let g = rasterize('\u{E0B6}', &m).unwrap();
+        let w = g.width as usize;
+        let h = g.height as usize;
+        let mid = h / 2;
+        // Diameter on the right edge, apex on the left-mid edge.
+        for row in 1..h - 1 {
+            assert!(
+                g.data[row * w + (w - 1)] > 0,
+                "expected flat-edge ink at row {row}"
+            );
+        }
+        assert!(g.data[mid * w] > 0, "apex at left-mid edge");
+        assert_eq!(g.data[0], 0, "top-left corner outside the disc");
+    }
+
+    #[test]
+    fn semicircle_thin_leaves_interior_empty() {
+        // U+E0B5 strokes only the arc; a point well inside the disc and away
+        // from both the arc and the (unstroked) flat edge stays clear.
+        let m = metrics(16, 32);
+        let g = rasterize('\u{E0B5}', &m).unwrap();
+        let w = g.width as usize;
+        let h = g.height as usize;
+        let mid = h / 2;
+        assert_eq!(
+            g.data[mid * w + w / 4],
+            0,
+            "thin arc must leave the interior clear"
+        );
+        // The arc itself reaches the right-mid edge.
+        assert!(g.data[mid * w + (w - 1)] > 0, "thin arc present at apex");
+    }
+
+    #[test]
+    fn corner_triangle_lower_left_fills_below_main_diagonal() {
+        let m = metrics(16, 16);
+        let g = rasterize('\u{E0B8}', &m).unwrap();
+        let w = g.width as usize;
+        let h = g.height as usize;
+        assert_eq!(g.data[(h - 1) * w], 255, "bottom-left corner filled");
+        assert_eq!(g.data[w - 1], 0, "top-right corner empty");
+    }
+
+    #[test]
+    fn corner_triangle_upper_right_mirrors_lower_left() {
+        let m = metrics(16, 16);
+        let g = rasterize('\u{E0BE}', &m).unwrap();
+        let w = g.width as usize;
+        let h = g.height as usize;
+        assert_eq!(g.data[w - 1], 255, "top-right corner filled");
+        assert_eq!(g.data[(h - 1) * w], 0, "bottom-left corner empty");
+    }
+
+    #[test]
+    fn corner_triangle_thin_is_diagonal_only() {
+        // U+E0B9 is the lower-left wedge's hypotenuse — the main diagonal on
+        // its own. The bulk of the wedge stays unfilled, but the diagonal
+        // crosses the cell center.
+        let m = metrics(16, 16);
+        let g = rasterize('\u{E0B9}', &m).unwrap();
+        let w = g.width as usize;
+        let h = g.height as usize;
+        assert_eq!(g.data[(h - 1) * w], 0, "thin wedge leaves the corner empty");
+        let mid = h / 2;
+        let band = [w / 2 - 1, w / 2, w / 2 + 1];
+        assert!(
+            band.iter().any(|&c| g.data[mid * w + c] > 0),
+            "diagonal stroke crosses the cell center"
+        );
     }
 }
