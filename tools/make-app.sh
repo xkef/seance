@@ -31,8 +31,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>CFBundleIdentifier</key><string>dev.seance.app</string>
-  <key>CFBundleName</key><string>Seance</string>
-  <key>CFBundleDisplayName</key><string>Seance</string>
+  <key>CFBundleName</key><string>Séance</string>
+  <key>CFBundleDisplayName</key><string>Séance</string>
   <key>CFBundleExecutable</key><string>seance</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>

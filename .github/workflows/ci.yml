@@ -30,6 +30,13 @@ jobs:
           node-version: "22"
       - run: npx --yes prettier --check "**/*.md"
 
+  naming:
+    name: naming
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: tools/check-naming.sh
+
   fmt:
     name: cargo fmt
     runs-on: ubuntu-latest
