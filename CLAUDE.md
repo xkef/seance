@@ -1,4 +1,4 @@
-# seance
+# séance
 
 GPU-rendered terminal built on `libghostty-vt` (the Rust bindings from
 [libghostty-rs](https://github.com/Uzaaft/libghostty-rs)) and `wgpu`.
