@@ -205,20 +205,33 @@ fn fs_cell_bg(in: FullScreenOut) -> @location(0) vec4<f32> {
 
     if uniforms.cursor_visible != 0u
        && uniforms.overlay_shape != 0u
-       && col == uniforms.overlay_pos.x
        && row == uniforms.overlay_pos.y {
         let local = pos - uniforms.cell_size * vec2<f32>(f32(col), f32(row));
         let cur_color = uniforms.overlay_color;
         var draw = false;
 
-        if uniforms.overlay_shape == 1u {
-            draw = true;
-        } else if uniforms.overlay_shape == 2u {
-            let thickness = max(2.0, uniforms.cell_size.y * 0.12);
-            draw = local.y >= (uniforms.cell_size.y - thickness);
-        } else if uniforms.overlay_shape == 3u {
+        if col == uniforms.overlay_pos.x {
+            if uniforms.overlay_shape == 1u {
+                draw = true;
+            } else if uniforms.overlay_shape == 2u {
+                let thickness = max(2.0, uniforms.cell_size.y * 0.12);
+                draw = local.y >= (uniforms.cell_size.y - thickness);
+            } else if uniforms.overlay_shape == 3u {
+                // Bar straddles the left cell edge; the right half (biased
+                // narrower) falls inside the cursor cell.
+                let thickness = max(2.0, uniforms.cell_size.x * 0.1);
+                let right_half = floor(thickness * 0.5);
+                draw = local.x < right_half;
+            }
+        } else if uniforms.overlay_shape == 3u
+               && uniforms.overlay_pos.x > 0u
+               && col == uniforms.overlay_pos.x - 1u {
+            // Left half of the bar reaches into the preceding cell, so the
+            // bar sits centered between characters rather than biased right.
+            // Bias an extra pixel left to match ghostty's cursor_bar.
             let thickness = max(2.0, uniforms.cell_size.x * 0.1);
-            draw = local.x < thickness;
+            let left_half = ceil(thickness * 0.5);
+            draw = local.x >= (uniforms.cell_size.x - left_half);
         }
 
         if draw {
