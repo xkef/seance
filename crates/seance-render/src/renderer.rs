@@ -179,21 +179,29 @@ impl TerminalRenderer {
 
     pub fn render(&mut self, inputs: &RenderInputs) -> bool {
         let _span = tracing::trace_span!("render::frame").entered();
-        let Some(fi) = self.cell_builder.last_frame() else {
-            tracing::warn!("render: no frame built yet");
-            return false;
+        let presented = {
+            let Some(fi) = self.cell_builder.last_frame() else {
+                tracing::warn!("render: no frame built yet");
+                return false;
+            };
+            self.gpu.render_frame(
+                fi,
+                CellFrame {
+                    bg_cells: self.cell_builder.bg_cells(),
+                    text_cells: self.cell_builder.text_cells(),
+                    dirty: self.cell_builder.last_dirty(),
+                },
+                self.cell_builder.atlas(),
+                inputs,
+                &self.theme,
+            )
         };
-        self.gpu.render_frame(
-            fi,
-            CellFrame {
-                bg_cells: self.cell_builder.bg_cells(),
-                text_cells: self.cell_builder.text_cells(),
-                dirty: self.cell_builder.last_dirty(),
-            },
-            self.cell_builder.atlas(),
-            inputs,
-            &self.theme,
-        )
+        // Only a presented frame uploaded the atlas; a dropped frame keeps its
+        // pending rects for the next attempt.
+        if presented {
+            self.cell_builder.clear_atlas_dirty();
+        }
+        presented
     }
 
     pub fn set_font_size(&mut self, points: f32) {

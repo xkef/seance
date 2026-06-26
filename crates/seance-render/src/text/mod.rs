@@ -12,5 +12,5 @@ pub mod cosmic;
 mod procedural;
 mod shape_cache;
 
-pub(crate) use atlas::GlyphAtlas;
+pub(crate) use atlas::{DirtyRect, GlyphAtlas, PlaneUpload};
 pub(crate) use cell_builder::{BuildFrameConfig, CellBuilder, CellText, FrameInfo};
