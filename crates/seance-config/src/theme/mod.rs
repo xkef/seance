@@ -7,6 +7,8 @@
 //!
 //! Entry points:
 //! - [`load`] — resolve the `theme` key from `config.toml` to a `Theme`.
+//! - [`load_for`] — the same, honoring the OS [`Appearance`] for a
+//!   `light:/dark:` spec.
 //! - [`bundled`] — iterate or look up the embedded bundled themes.
 //! - [`parse_source`] — parse a theme file's text into a `Theme`.
 
@@ -15,7 +17,7 @@ pub mod parser;
 pub mod resolve;
 
 pub use parser::{ParseError, parse_source};
-pub use resolve::{LoadError, ThemeSpec, load, try_load};
+pub use resolve::{Appearance, LoadError, ThemeSpec, load, load_for, try_load, try_load_for};
 
 /// One theme — a palette plus window/cursor/selection colors.
 ///
