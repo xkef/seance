@@ -81,6 +81,16 @@ struct FrameGeometry {
     grid_padding: [f32; 4],
 }
 
+/// Columns at which a shape run must break beyond style/contiguity: the
+/// cursor cell (when visible) and the active selection's edges.
+#[derive(Clone, Copy)]
+struct RunSplits {
+    /// Cursor cell to isolate into its own run, when the cursor is visible.
+    cursor: Option<GridPos>,
+    /// Active selection `(start, end)` in row-major reading order.
+    selection: Option<(GridPos, GridPos)>,
+}
+
 /// One cell within a [`ShapeRun`]. `byte_offset` is the start of this cell's
 /// grapheme inside the run's `text`; `col` is the grid column the cell lives
 /// at; `fg` is the post-inverse, post-faint foreground color.
@@ -229,17 +239,18 @@ impl CellBuilder {
             (m.baseline, g)
         };
         let cursor = source.cursor();
-        let selection = source.selection();
         // A hidden cursor leaves no edit point to isolate, so it does not
         // split runs; a visible one does (see `RunBuilder::run_boundary_before`).
-        let cursor_split = cursor.visible.then_some(cursor.pos);
+        let splits = RunSplits {
+            cursor: cursor.visible.then_some(cursor.pos),
+            selection: source.selection(),
+        };
 
         walk_grid_into_runs(
             source,
             &geom,
             config.theme,
-            cursor_split,
-            selection,
+            splits,
             &mut self.bg_cells,
             &mut self.runs,
             &mut self.procedural_cells,
@@ -365,16 +376,15 @@ fn resolve_color(theme: &Theme, color: &CellColor) -> Option<[u8; 3]> {
 /// VT-aware pass: walk every cell, write its bg into `bg_cells`, and
 /// accumulate non-empty cells into [`ShapeRun`]s grouped by row, attrs, and
 /// column contiguity. Runs additionally break at the cursor cell and the
-/// selection edges (`cursor_split` / `selection`) so a keystroke or a
-/// selection toggle re-shapes only the run it touches. Cells whose grapheme
+/// selection edges (`splits`) so a keystroke or a selection toggle re-shapes
+/// only the run it touches. Cells whose grapheme
 /// is a single procedural codepoint (box-drawing, block elements) bypass
 /// shaping and land in `procedural_cells` instead.
 fn walk_grid_into_runs(
     source: &mut dyn FrameSource,
     geom: &FrameGeometry,
     theme: &Theme,
-    cursor_split: Option<GridPos>,
-    selection: Option<(GridPos, GridPos)>,
+    splits: RunSplits,
     bg_cells: &mut Vec<[u8; 4]>,
     runs: &mut Vec<ShapeRun>,
     procedural_cells: &mut Vec<ProceduralCell>,
@@ -395,8 +405,7 @@ fn walk_grid_into_runs(
         theme,
         cols: geom.grid_cols,
         rows: geom.grid_rows,
-        cursor_split,
-        selection,
+        splits,
     };
     source.visit_cells(&mut visitor);
     visitor.flush();
@@ -496,10 +505,7 @@ struct RunBuilder<'a> {
     theme: &'a Theme,
     cols: u16,
     rows: u16,
-    /// Cursor cell to isolate into its own run, when the cursor is visible.
-    cursor_split: Option<GridPos>,
-    /// Active selection `(start, end)` in row-major reading order.
-    selection: Option<(GridPos, GridPos)>,
+    splits: RunSplits,
 }
 
 impl RunBuilder<'_> {
@@ -527,17 +533,17 @@ impl RunBuilder<'_> {
     /// on [`FontAttrs`] only — background color never enters the run, matching
     /// ghostty's `comparableStyle`.
     fn run_boundary_before(&self, row: u16, col: u16) -> bool {
-        if let Some(c) = self.cursor_split {
-            if row == c.row && (col == c.col || col == c.col.saturating_add(1)) {
-                return true;
-            }
+        if let Some(c) = self.splits.cursor
+            && row == c.row
+            && (col == c.col || col == c.col.saturating_add(1))
+        {
+            return true;
         }
-        if let Some((start, end)) = self.selection {
-            if (row == start.row && col == start.col)
-                || (row == end.row && col == end.col.saturating_add(1))
-            {
-                return true;
-            }
+        if let Some((start, end)) = self.splits.selection
+            && ((row == start.row && col == start.col)
+                || (row == end.row && col == end.col.saturating_add(1)))
+        {
+            return true;
         }
         false
     }
@@ -858,8 +864,10 @@ mod tests {
             &mut source,
             &geom,
             theme,
-            cursor_split,
-            selection,
+            RunSplits {
+                cursor: cursor_split,
+                selection,
+            },
             &mut bg,
             &mut runs,
             &mut procedural,
