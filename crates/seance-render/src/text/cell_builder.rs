@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use rustc_hash::FxBuildHasher;
 use seance_config::Theme;
 use seance_frame::{CellView, CellVisitor, FrameSource};
-use seance_protocol::frame::{CellColor, DirtySnapshot};
+use seance_protocol::frame::{CellColor, DirtySnapshot, GridPos};
 
 use super::atlas::{AtlasEntry, GlyphAtlas};
 use super::backend::{CellMetrics, FontAttrs, GlyphFormat, GlyphId, ShapedGlyph, TextBackend};
@@ -229,11 +229,17 @@ impl CellBuilder {
             (m.baseline, g)
         };
         let cursor = source.cursor();
+        let selection = source.selection();
+        // A hidden cursor leaves no edit point to isolate, so it does not
+        // split runs; a visible one does (see `RunBuilder::run_boundary_before`).
+        let cursor_split = cursor.visible.then_some(cursor.pos);
 
         walk_grid_into_runs(
             source,
             &geom,
             config.theme,
+            cursor_split,
+            selection,
             &mut self.bg_cells,
             &mut self.runs,
             &mut self.procedural_cells,
@@ -358,13 +364,17 @@ fn resolve_color(theme: &Theme, color: &CellColor) -> Option<[u8; 3]> {
 
 /// VT-aware pass: walk every cell, write its bg into `bg_cells`, and
 /// accumulate non-empty cells into [`ShapeRun`]s grouped by row, attrs, and
-/// column contiguity. Cells whose grapheme is a single procedural codepoint
-/// (box-drawing, block elements) bypass shaping and land in `procedural_cells`
-/// instead.
+/// column contiguity. Runs additionally break at the cursor cell and the
+/// selection edges (`cursor_split` / `selection`) so a keystroke or a
+/// selection toggle re-shapes only the run it touches. Cells whose grapheme
+/// is a single procedural codepoint (box-drawing, block elements) bypass
+/// shaping and land in `procedural_cells` instead.
 fn walk_grid_into_runs(
     source: &mut dyn FrameSource,
     geom: &FrameGeometry,
     theme: &Theme,
+    cursor_split: Option<GridPos>,
+    selection: Option<(GridPos, GridPos)>,
     bg_cells: &mut Vec<[u8; 4]>,
     runs: &mut Vec<ShapeRun>,
     procedural_cells: &mut Vec<ProceduralCell>,
@@ -385,6 +395,8 @@ fn walk_grid_into_runs(
         theme,
         cols: geom.grid_cols,
         rows: geom.grid_rows,
+        cursor_split,
+        selection,
     };
     source.visit_cells(&mut visitor);
     visitor.flush();
@@ -484,6 +496,10 @@ struct RunBuilder<'a> {
     theme: &'a Theme,
     cols: u16,
     rows: u16,
+    /// Cursor cell to isolate into its own run, when the cursor is visible.
+    cursor_split: Option<GridPos>,
+    /// Active selection `(start, end)` in row-major reading order.
+    selection: Option<(GridPos, GridPos)>,
 }
 
 impl RunBuilder<'_> {
@@ -493,6 +509,37 @@ impl RunBuilder<'_> {
         if let Some(run) = self.open.take() {
             self.runs.push(run);
         }
+    }
+
+    /// Whether a shape run must not span the boundary immediately before
+    /// `(row, col)`. Two cases, mirroring Ghostty's run iterator
+    /// (`font/shaper/run.zig`):
+    ///
+    /// - The cursor cell is split out three ways — pre-cursor, exactly the
+    ///   cursor cell, post-cursor — by breaking before the cursor column and
+    ///   before the column after it. A keystroke edits the cursor cell, so
+    ///   isolating it keeps the flanking runs byte-identical and cached.
+    /// - Selection edges break the run before the first selected cell (on the
+    ///   start row) and before the first cell past the selection (on the end
+    ///   row), so toggling a selection only invalidates the boundary runs.
+    ///
+    /// Style changes already split runs via [`ShapeRun::extends`], which keys
+    /// on [`FontAttrs`] only — background color never enters the run, matching
+    /// ghostty's `comparableStyle`.
+    fn run_boundary_before(&self, row: u16, col: u16) -> bool {
+        if let Some(c) = self.cursor_split {
+            if row == c.row && (col == c.col || col == c.col.saturating_add(1)) {
+                return true;
+            }
+        }
+        if let Some((start, end)) = self.selection {
+            if (row == start.row && col == start.col)
+                || (row == end.row && col == end.col.saturating_add(1))
+            {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -544,10 +591,12 @@ impl CellVisitor for RunBuilder<'_> {
             italic: view.attrs.italic,
         };
 
-        let extends = self
-            .open
-            .as_ref()
-            .is_some_and(|r| r.extends(row, col, attrs));
+        let force_break = self.run_boundary_before(row, col);
+        let extends = !force_break
+            && self
+                .open
+                .as_ref()
+                .is_some_and(|r| r.extends(row, col, attrs));
         if !extends {
             self.flush();
             self.open = Some(ShapeRun::new(row, attrs));
@@ -640,6 +689,8 @@ mod tests {
         cells: &'a [FakeCell<'a>],
         dirty: DirtySnapshot,
         clear_count: u32,
+        cursor: CursorInfo,
+        selection: Option<(GridPos, GridPos)>,
     }
 
     impl<'a> FakeFrame<'a> {
@@ -650,7 +701,19 @@ mod tests {
                 cells,
                 dirty: DirtySnapshot::Full,
                 clear_count: 0,
+                cursor: CursorInfo::default(),
+                selection: None,
             }
+        }
+
+        fn with_cursor(mut self, cursor: CursorInfo) -> Self {
+            self.cursor = cursor;
+            self
+        }
+
+        fn with_selection(mut self, selection: (GridPos, GridPos)) -> Self {
+            self.selection = Some(selection);
+            self
         }
     }
 
@@ -659,10 +722,10 @@ mod tests {
             (self.cols, self.rows)
         }
         fn cursor(&mut self) -> CursorInfo {
-            CursorInfo::default()
+            self.cursor
         }
         fn selection(&mut self) -> Option<(GridPos, GridPos)> {
-            None
+            self.selection
         }
         fn visit_cells(&mut self, visitor: &mut dyn CellVisitor) {
             for (i, (text, fg, bg, attrs)) in self.cells.iter().enumerate() {
@@ -767,6 +830,19 @@ mod tests {
         cells: &[FakeCell<'_>],
         theme: &Theme,
     ) -> (Vec<[u8; 4]>, Vec<ShapeRun>, Vec<ProceduralCell>) {
+        collect_runs_full(cols, rows, cells, theme, None, None)
+    }
+
+    /// Visitor-pass helper that also takes the cursor-split and selection
+    /// inputs, for exercising the run-boundary behavior directly.
+    fn collect_runs_full(
+        cols: u16,
+        rows: u16,
+        cells: &[FakeCell<'_>],
+        theme: &Theme,
+        cursor_split: Option<GridPos>,
+        selection: Option<(GridPos, GridPos)>,
+    ) -> (Vec<[u8; 4]>, Vec<ShapeRun>, Vec<ProceduralCell>) {
         let mut source = FakeFrame::new(cols, rows, cells);
         let geom = FrameGeometry {
             cell_width: 10.0,
@@ -782,6 +858,8 @@ mod tests {
             &mut source,
             &geom,
             theme,
+            cursor_split,
+            selection,
             &mut bg,
             &mut runs,
             &mut procedural,
@@ -1537,5 +1615,189 @@ mod tests {
         // and land at the start of the grayscale plane again.
         assert_eq!(second.glyph_pos, first.glyph_pos);
         assert_eq!(second.glyph_size, first.glyph_size);
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // Run splitting around cursor and selection (issue #206)
+    // ────────────────────────────────────────────────────────────────────
+
+    fn visible_cursor(col: u16, row: u16) -> CursorInfo {
+        CursorInfo {
+            pos: GridPos { col, row },
+            visible: true,
+            wide: false,
+            shape: None,
+        }
+    }
+
+    fn ascii_row(texts: &'static [&'static str]) -> Vec<FakeCell<'static>> {
+        texts
+            .iter()
+            .map(|t| (*t, CellColor::Default, CellColor::Default, plain()))
+            .collect()
+    }
+
+    fn run_texts(runs: &[ShapeRun]) -> Vec<&str> {
+        runs.iter().map(|r| r.text.as_str()).collect()
+    }
+
+    #[test]
+    fn cursor_in_mid_row_splits_into_three_runs() {
+        // [a b | c | d e] — the cursor cell is shaped on its own so an edit
+        // there leaves "ab" and "de" byte-identical and cached.
+        let theme = Theme::blank();
+        let cells = ascii_row(&["a", "b", "c", "d", "e"]);
+        let (_bg, runs, _) =
+            collect_runs_full(5, 1, &cells, &theme, Some(GridPos { col: 2, row: 0 }), None);
+        assert_eq!(run_texts(&runs), vec!["ab", "c", "de"]);
+    }
+
+    #[test]
+    fn cursor_at_first_column_isolates_only_that_cell() {
+        let theme = Theme::blank();
+        let cells = ascii_row(&["a", "b", "c", "d", "e"]);
+        let (_bg, runs, _) =
+            collect_runs_full(5, 1, &cells, &theme, Some(GridPos { col: 0, row: 0 }), None);
+        assert_eq!(run_texts(&runs), vec!["a", "bcde"]);
+    }
+
+    #[test]
+    fn cursor_off_this_row_does_not_split_it() {
+        // A cursor on row 1 leaves row 0 as one contiguous run.
+        let theme = Theme::blank();
+        let cells = ascii_row(&["a", "b", "c"]);
+        let (_bg, runs, _) =
+            collect_runs_full(3, 1, &cells, &theme, Some(GridPos { col: 1, row: 1 }), None);
+        assert_eq!(run_texts(&runs), vec!["abc"]);
+    }
+
+    #[test]
+    fn selection_breaks_run_at_its_start_and_end_edges() {
+        // Selection covering columns 1..=3 → [a | bcd | e].
+        let theme = Theme::blank();
+        let cells = ascii_row(&["a", "b", "c", "d", "e"]);
+        let sel = (GridPos { col: 1, row: 0 }, GridPos { col: 3, row: 0 });
+        let (_bg, runs, _) = collect_runs_full(5, 1, &cells, &theme, None, Some(sel));
+        assert_eq!(run_texts(&runs), vec!["a", "bcd", "e"]);
+    }
+
+    #[test]
+    fn multi_row_selection_breaks_only_at_its_edges() {
+        // 4×2 grid, selection from (col 2, row 0) to (col 1, row 1). The
+        // start row breaks before col 2, the end row before col 2; interior
+        // row breaks already separate the two rows.
+        let theme = Theme::blank();
+        let cells = ascii_row(&["a", "b", "c", "d", "e", "f", "g", "h"]);
+        let sel = (GridPos { col: 2, row: 0 }, GridPos { col: 1, row: 1 });
+        let (_bg, runs, _) = collect_runs_full(4, 2, &cells, &theme, None, Some(sel));
+        assert_eq!(run_texts(&runs), vec!["ab", "cd", "ef", "gh"]);
+    }
+
+    #[test]
+    fn background_only_difference_keeps_cells_in_one_run() {
+        // Background color never enters the run key, so two cells differing
+        // only in `bg` stay in a single run (ghostty `comparableStyle`).
+        let theme = Theme::blank();
+        let cells = [
+            ("a", CellColor::Default, CellColor::Palette(1), plain()),
+            ("b", CellColor::Default, CellColor::Palette(4), plain()),
+        ];
+        let (_bg, runs) = collect_runs(2, 1, &cells, &theme);
+        assert_eq!(run_texts(&runs), vec!["ab"]);
+    }
+
+    #[test]
+    fn visible_cursor_splits_run_through_build_frame() {
+        // Gating lives in build_frame: a visible cursor splits the row.
+        let theme = Theme::blank();
+        let cells = ascii_row(&["a", "b", "c", "d", "e"]);
+        let mut source = FakeFrame::new(5, 1, &cells).with_cursor(visible_cursor(2, 0));
+        let mut backend = StubBackend::new();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        assert_eq!(backend.shape_calls, 3, "[ab][c][de] → three shape calls");
+    }
+
+    #[test]
+    fn selection_splits_run_through_build_frame() {
+        // The selection break is driven by source.selection() in build_frame.
+        let theme = Theme::blank();
+        let cells = ascii_row(&["a", "b", "c", "d", "e"]);
+        let sel = (GridPos { col: 1, row: 0 }, GridPos { col: 3, row: 0 });
+        let mut source = FakeFrame::new(5, 1, &cells).with_selection(sel);
+        let mut backend = StubBackend::new();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        assert_eq!(backend.shape_calls, 3, "[a][bcd][e] → three shape calls");
+    }
+
+    #[test]
+    fn hidden_cursor_leaves_row_unsplit_through_build_frame() {
+        // A hidden cursor (the default) has no edit point to isolate.
+        let theme = Theme::blank();
+        let cells = ascii_row(&["a", "b", "c", "d", "e"]);
+        let mut cursor = visible_cursor(2, 0);
+        cursor.visible = false;
+        let mut source = FakeFrame::new(5, 1, &cells).with_cursor(cursor);
+        let mut backend = StubBackend::new();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        assert_eq!(backend.shape_calls, 1, "one contiguous run, no split");
+    }
+
+    #[test]
+    fn typing_at_cursor_reshapes_only_the_cursor_run() {
+        // Acceptance: editing the cursor cell re-shapes one run; the flanking
+        // runs are served from the shape cache.
+        let theme = Theme::blank();
+        let cursor = visible_cursor(2, 0);
+        let mut backend = StubBackend::new();
+        let mut builder = CellBuilder::new();
+
+        let cells1 = ascii_row(&["h", "e", "l", "l", "o"]);
+        let mut s1 = FakeFrame::new(5, 1, &cells1).with_cursor(cursor);
+        builder.build_frame(&mut s1, &mut backend, build_config(&theme));
+        assert_eq!(backend.shape_calls, 3, "[he][l][lo] cold");
+        assert_eq!(builder.shape_cache_stats().misses, 3);
+        assert_eq!(builder.shape_cache_stats().hits, 0);
+
+        // Type over the cursor cell only ("l" → "L"); "he" and "lo" are
+        // unchanged and stay cached.
+        let cells2 = ascii_row(&["h", "e", "L", "l", "o"]);
+        let mut s2 = FakeFrame::new(5, 1, &cells2).with_cursor(cursor);
+        builder.build_frame(&mut s2, &mut backend, build_config(&theme));
+        assert_eq!(backend.shape_calls, 4, "only the cursor run re-shapes");
+        assert_eq!(
+            builder.shape_cache_stats().hits,
+            2,
+            "the two flanking runs hit the cache"
+        );
+    }
+
+    #[test]
+    fn unsplit_row_reshapes_entirely_on_edit() {
+        // Contrast with the split case: without a cursor break, a one-cell
+        // edit invalidates the whole-row run and re-shapes everything.
+        let theme = Theme::blank();
+        let mut backend = StubBackend::new();
+        let mut builder = CellBuilder::new();
+
+        let cells1 = ascii_row(&["h", "e", "l", "l", "o"]);
+        let mut s1 = FakeFrame::new(5, 1, &cells1);
+        builder.build_frame(&mut s1, &mut backend, build_config(&theme));
+        assert_eq!(backend.shape_calls, 1, "one whole-row run");
+
+        let cells2 = ascii_row(&["h", "e", "L", "l", "o"]);
+        let mut s2 = FakeFrame::new(5, 1, &cells2);
+        builder.build_frame(&mut s2, &mut backend, build_config(&theme));
+        assert_eq!(backend.shape_calls, 2, "whole row re-shaped");
+        assert_eq!(
+            builder.shape_cache_stats().hits,
+            0,
+            "no flanking runs to reuse"
+        );
     }
 }
