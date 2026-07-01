@@ -9,8 +9,10 @@
 //!   bucket the lowest-generation slot is evicted.
 //! - Total capacity is 2048 entries — comfortable for typical terminal
 //!   working sets (~300–400 unique runs × style flags).
-//! - Inline key storage of [`KEY_INLINE_BYTES`] bytes. Keys longer than
-//!   that bypass the cache and call the backend directly.
+//! - Run keys up to [`KEY_INLINE_BYTES`] bytes are stored inline; longer
+//!   runs spill their key bytes to the heap so every run still caches,
+//!   including a full-width same-style row or a long path. Matches compare
+//!   the full byte string, so the stored hash never decides a hit alone.
 //!
 //! The key omits fg/bg because color is applied post-shape in
 //! [`super::cell_builder`]: `CellText.color` is baked from `req.fg`
@@ -49,28 +51,54 @@ fn hash_key(flags: u8, text: &[u8]) -> u64 {
     h.finish()
 }
 
-#[derive(Clone, Copy)]
+/// Run key bytes: inline for the common short-run case, spilled to the heap
+/// only when a run exceeds [`KEY_INLINE_BYTES`] (a long path, a full-width
+/// same-style row) so those runs cache instead of re-shaping every frame.
+enum KeyBytes {
+    Inline {
+        len: u8,
+        buf: [u8; KEY_INLINE_BYTES],
+    },
+    Heap(Box<[u8]>),
+}
+
+impl KeyBytes {
+    fn new(text: &[u8]) -> Self {
+        if text.len() <= KEY_INLINE_BYTES {
+            let mut buf = [0u8; KEY_INLINE_BYTES];
+            buf[..text.len()].copy_from_slice(text);
+            Self::Inline {
+                len: text.len() as u8,
+                buf,
+            }
+        } else {
+            Self::Heap(Box::from(text))
+        }
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Inline { len, buf } => &buf[..usize::from(*len)],
+            Self::Heap(bytes) => bytes,
+        }
+    }
+}
+
 struct SlotKey {
     flags: u8,
-    len: u8,
-    bytes: [u8; KEY_INLINE_BYTES],
+    bytes: KeyBytes,
 }
 
 impl SlotKey {
     fn write(flags: u8, text: &[u8]) -> Self {
-        let mut bytes = [0u8; KEY_INLINE_BYTES];
-        bytes[..text.len()].copy_from_slice(text);
         Self {
             flags,
-            len: text.len() as u8,
-            bytes,
+            bytes: KeyBytes::new(text),
         }
     }
 
     fn matches(&self, flags: u8, text: &[u8]) -> bool {
-        self.flags == flags
-            && usize::from(self.len) == text.len()
-            && self.bytes[..text.len()] == *text
+        self.flags == flags && self.bytes.as_bytes() == text
     }
 }
 
@@ -89,8 +117,10 @@ impl Slot {
             hash: 0,
             key: SlotKey {
                 flags: 0,
-                len: 0,
-                bytes: [0; KEY_INLINE_BYTES],
+                bytes: KeyBytes::Inline {
+                    len: 0,
+                    buf: [0; KEY_INLINE_BYTES],
+                },
             },
             value: Vec::new(),
             generation: 0,
@@ -125,10 +155,6 @@ pub(crate) struct CacheStats {
     pub misses: u64,
     pub inserts: u64,
     pub evictions: u64,
-    /// Lookups that bypassed the cache because the key exceeded
-    /// [`KEY_INLINE_BYTES`]. Watching this should stay near zero on
-    /// realistic content.
-    pub bypass: u64,
 }
 
 pub(crate) struct ShapeCache {
@@ -176,8 +202,8 @@ impl ShapeCache {
     }
 
     /// Look up a shape result; on hit, copy the cached glyphs into
-    /// `out` and return `true`. On miss (or oversized-key bypass), `out`
-    /// is left untouched and the caller should run the backend.
+    /// `out` and return `true`. On miss, `out` is left untouched and the
+    /// caller should run the backend.
     pub fn lookup_into(
         &mut self,
         text: &str,
@@ -185,10 +211,6 @@ impl ShapeCache {
         out: &mut Vec<ShapedGlyph>,
     ) -> bool {
         let bytes = text.as_bytes();
-        if bytes.len() > KEY_INLINE_BYTES {
-            self.stats.bypass += 1;
-            return false;
-        }
         let flags = pack_flags(attrs);
         let hash = hash_key(flags, bytes);
         let bucket = &mut self.buckets[(hash as usize) & self.bucket_mask];
@@ -206,15 +228,9 @@ impl ShapeCache {
         false
     }
 
-    /// Insert a shape result. No-op for oversized keys; those paths
-    /// never reach this function in normal flow because `lookup_into`
-    /// returns `false` for them and the call site falls through to the
-    /// backend without calling `insert`.
+    /// Insert a shape result, keyed on the run's `(flags, bytes)`.
     pub fn insert(&mut self, text: &str, attrs: FontAttrs, value: &[ShapedGlyph]) {
         let bytes = text.as_bytes();
-        if bytes.len() > KEY_INLINE_BYTES {
-            return;
-        }
         let flags = pack_flags(attrs);
         let hash = hash_key(flags, bytes);
         let bucket = &mut self.buckets[(hash as usize) & self.bucket_mask];
@@ -383,7 +399,6 @@ mod tests {
         assert_eq!(cache.stats().misses, 0);
         assert_eq!(cache.stats().inserts, 0);
         assert_eq!(cache.stats().evictions, 0);
-        assert_eq!(cache.stats().bypass, 0);
 
         assert!(!cache.lookup_into("A", attrs(false, false), &mut out));
         assert!(!cache.lookup_into("B", attrs(true, false), &mut out));
@@ -415,21 +430,64 @@ mod tests {
     }
 
     #[test]
-    fn oversized_key_bypasses_cache() {
+    fn oversized_key_caches_via_heap_spill() {
+        // Runs longer than the inline key length previously bypassed the
+        // cache and re-shaped every frame; they now spill their key bytes
+        // to the heap and cache like any other run.
         let mut cache = ShapeCache::new();
         let big = "X".repeat(KEY_INLINE_BYTES + 1);
         let mut out = Vec::new();
 
         assert!(!cache.lookup_into(&big, attrs(false, false), &mut out));
-        assert_eq!(cache.stats().bypass, 1);
-        assert_eq!(cache.stats().misses, 0);
+        assert_eq!(cache.stats().misses, 1);
 
-        // Insert is a no-op for oversized keys.
         cache.insert(&big, attrs(false, false), &[g(1)]);
-        assert_eq!(cache.stats().inserts, 0);
+        assert_eq!(cache.stats().inserts, 1);
 
-        assert!(!cache.lookup_into(&big, attrs(false, false), &mut out));
-        assert_eq!(cache.stats().bypass, 2);
+        assert!(cache.lookup_into(&big, attrs(false, false), &mut out));
+        assert_eq!(cache.stats().hits, 1);
+        assert_eq!(out[0].id.0, 1);
+    }
+
+    #[test]
+    fn long_run_reused_across_positions() {
+        // The #205 goal for long runs: identical run text served from one
+        // entry no matter where it recurs, so a `cat large.log` row of
+        // repeated same-style text shapes once, not once per occurrence.
+        let mut cache = ShapeCache::new();
+        let run = "the quick brown fox jumps over".repeat(3);
+        assert!(run.len() > KEY_INLINE_BYTES);
+        let mut out = Vec::new();
+
+        assert!(!cache.lookup_into(&run, attrs(false, false), &mut out));
+        cache.insert(&run, attrs(false, false), &[g(5), g(6)]);
+
+        for _ in 0..4 {
+            out.clear();
+            assert!(cache.lookup_into(&run, attrs(false, false), &mut out));
+        }
+        assert_eq!(cache.stats().hits, 4);
+        assert_eq!(cache.stats().inserts, 1);
+    }
+
+    #[test]
+    fn heap_key_and_its_inline_prefix_do_not_collide() {
+        // A run longer than the inline length must not be confused with its
+        // own truncation to the inline length: matches compare the full
+        // byte string, not a length-capped prefix.
+        let mut cache = ShapeCache::new();
+        let long = "Z".repeat(KEY_INLINE_BYTES + 6);
+        let prefix = "Z".repeat(KEY_INLINE_BYTES);
+        let mut out = Vec::new();
+
+        cache.insert(&long, attrs(false, false), &[g(1)]);
+        cache.insert(&prefix, attrs(false, false), &[g(2)]);
+
+        assert!(cache.lookup_into(&long, attrs(false, false), &mut out));
+        assert_eq!(out[0].id.0, 1);
+        out.clear();
+        assert!(cache.lookup_into(&prefix, attrs(false, false), &mut out));
+        assert_eq!(out[0].id.0, 2);
     }
 
     #[test]
@@ -442,7 +500,6 @@ mod tests {
         cache.insert(&exact, attrs(false, false), &[g(42)]);
         assert!(cache.lookup_into(&exact, attrs(false, false), &mut out));
         assert_eq!(out[0].id.0, 42);
-        assert_eq!(cache.stats().bypass, 0);
     }
 
     #[test]
