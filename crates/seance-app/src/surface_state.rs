@@ -85,6 +85,16 @@ impl SurfaceState {
         self.request_redraw();
     }
 
+    /// Force the caret solid and restart the blink cycle. Called on every
+    /// keystroke that reaches the PTY so the cursor stays visible during a
+    /// typing burst, then resumes blinking one half-period after the last
+    /// keypress — matching Ghostty's blink-resets-on-input behavior.
+    pub(crate) fn reset_blink(&mut self) {
+        self.blink_on = true;
+        self.last_blink_edge = Instant::now();
+        self.mark_dirty();
+    }
+
     pub(crate) fn refresh_updates(
         &mut self,
     ) -> Result<ClientRefresh, seance_mux_client::PaneError> {

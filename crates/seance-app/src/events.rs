@@ -56,6 +56,7 @@ impl App {
 
         let input = self.input.handle_key(event, &modifiers, modes);
 
+        let blink_enabled = self.config.cursor.blink;
         if let Some(surface) = self.surface_mut() {
             let mut selection_changed = false;
             if event.state == ElementState::Pressed
@@ -67,6 +68,9 @@ impl App {
             }
             if let VtInput::Write(bytes) = input {
                 surface.write_to_pty(Bytes::from(bytes));
+                if blink_enabled {
+                    surface.reset_blink();
+                }
             }
             if selection_changed {
                 surface.mark_dirty();
