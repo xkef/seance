@@ -73,6 +73,31 @@ impl Default for FontConfig {
     }
 }
 
+/// Whether closing a surface with a live foreground process asks first.
+///
+/// Mirrors Ghostty's [`confirm-close-surface`] (`true` / `false` / `always`),
+/// mapped onto seance's string-enum config style. Consulted at close time, so a
+/// live edit needs no cache invalidation — see the note in [`crate::ConfigDiff`].
+///
+/// The confirm-prompt UI lands with the modal-overlay work (M3, #6); until it
+/// ships the runtime treats [`Auto`](Self::Auto) and [`Always`](Self::Always)
+/// as [`Never`](Self::Never) and logs a one-shot hint, so no close is ever
+/// swallowed by a modal that cannot yet render.
+///
+/// [`confirm-close-surface`]: https://ghostty.org/docs/config/reference#confirm-close-surface
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ConfirmCloseSurface {
+    /// Confirm only when a foreground process other than the shell is still
+    /// running. Default — matches Ghostty's `true`.
+    #[default]
+    Auto,
+    /// Always confirm, even at an idle shell prompt.
+    Always,
+    /// Never confirm; close fires the PTY immediately.
+    Never,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct WindowConfig {
@@ -80,6 +105,7 @@ pub struct WindowConfig {
     pub padding_y: u16,
     pub decoration: bool,
     pub background_opacity: f32,
+    pub confirm_close_surface: ConfirmCloseSurface,
 }
 
 impl Default for WindowConfig {
@@ -89,6 +115,7 @@ impl Default for WindowConfig {
             padding_y: 0,
             decoration: true,
             background_opacity: 1.0,
+            confirm_close_surface: ConfirmCloseSurface::Auto,
         }
     }
 }

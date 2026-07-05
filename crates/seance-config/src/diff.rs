@@ -77,6 +77,10 @@ impl ConfigDiff {
             || old.cursor.style != new.cursor.style
             || old.cursor.blink != new.cursor.blink;
 
+        // `window.confirm_close_surface` is deliberately absent: it is read
+        // fresh when a close is requested, so a live edit needs no cache
+        // invalidation. The empty-diff path in `reload_config` still swaps the
+        // new `Config` in, so the updated value takes effect on the next close.
         let input_changed = old.input.macos_option_as_alt != new.input.macos_option_as_alt;
         let links_changed = old.links != new.links;
         let keybinds_changed = old.keybind != new.keybind;

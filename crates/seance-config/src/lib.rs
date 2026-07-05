@@ -13,9 +13,9 @@ pub mod theme;
 
 pub use diff::ConfigDiff;
 pub use schema::{
-    ClipboardConfig, ClipboardPolicy, Config, CursorConfig, CursorStyle, FontConfig, InputConfig,
-    KeybindConfig, LinkModifiersConfig, LinksConfig, MacosOptionAsAlt, ScrollbackConfig,
-    WindowConfig,
+    ClipboardConfig, ClipboardPolicy, Config, ConfirmCloseSurface, CursorConfig, CursorStyle,
+    FontConfig, InputConfig, KeybindConfig, LinkModifiersConfig, LinksConfig, MacosOptionAsAlt,
+    ScrollbackConfig, WindowConfig,
 };
 pub use theme::{Theme, load as load_theme};
 
@@ -198,6 +198,30 @@ mod tests {
             let cfg: Config = toml::from_str(&src).unwrap();
             assert_eq!(cfg.clipboard.read, want);
             assert_eq!(cfg.clipboard.write, want);
+        }
+    }
+
+    #[test]
+    fn window_confirm_close_surface_defaults_to_auto() {
+        let cfg = Config::default();
+        assert_eq!(cfg.window.confirm_close_surface, ConfirmCloseSurface::Auto);
+    }
+
+    #[test]
+    fn window_confirm_close_surface_parses_each_variant() {
+        for (raw, want) in [
+            ("auto", ConfirmCloseSurface::Auto),
+            ("always", ConfirmCloseSurface::Always),
+            ("never", ConfirmCloseSurface::Never),
+        ] {
+            let src = format!(
+                r#"
+                [window]
+                confirm_close_surface = "{raw}"
+                "#
+            );
+            let cfg: Config = toml::from_str(&src).unwrap();
+            assert_eq!(cfg.window.confirm_close_surface, want, "raw={raw}");
         }
     }
 
