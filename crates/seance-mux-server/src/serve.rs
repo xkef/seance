@@ -185,6 +185,7 @@ where
             pixel_height,
             initial_cursor_shape,
             max_scrollback,
+            coalesce_delay_ms,
         } => {
             let options = PaneSpawnOptions {
                 cols,
@@ -193,6 +194,7 @@ where
                 pixel_height,
                 initial_cursor_shape,
                 max_scrollback: usize::try_from(max_scrollback).unwrap_or(usize::MAX),
+                coalesce_delay_ms,
             };
             match domain.spawn_pane(options) {
                 Ok(pane_ref) => {

@@ -360,8 +360,12 @@ palette.
 
 `~/.config/seance/config.toml` (or `$XDG_CONFIG_HOME/seance/config.toml`) with
 sections `[font]`, `[window]`, `[cursor]`, `[clipboard]`, `[scrollback]`,
-`[input]`, `[[keybind]]`, `[renderer]`, plus a top-level `theme = "<name>"` that
-resolves against `~/.config/seance/themes/`.
+`[input]`, `[io]`, `[[keybind]]`, `[renderer]`, plus a top-level
+`theme = "<name>"` that resolves against `~/.config/seance/themes/`. `[io]`
+carries `coalesce_delay_ms` (default 2): the VT actor waits up to this long for
+more PTY bytes after a drain before publishing a frame, batching bursty output
+(e.g. an `htop` refresh) into one redraw; `0` disables it and a recent keystroke
+caps the wait to a 1 ms floor so echo latency is unaffected.
 
 Canonical schema:
 [`seance_config::Config`](../crates/seance-config/src/schema.rs) and its

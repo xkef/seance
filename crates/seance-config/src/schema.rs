@@ -18,6 +18,7 @@ pub struct Config {
     pub clipboard: ClipboardConfig,
     pub scrollback: ScrollbackConfig,
     pub input: InputConfig,
+    pub io: IoConfig,
     pub links: LinksConfig,
     pub keybind: Vec<KeybindConfig>,
 }
@@ -32,6 +33,7 @@ impl Default for Config {
             clipboard: ClipboardConfig::default(),
             scrollback: ScrollbackConfig::default(),
             input: InputConfig::default(),
+            io: IoConfig::default(),
             links: LinksConfig::default(),
             keybind: Vec::new(),
         }
@@ -165,6 +167,26 @@ pub struct ScrollbackConfig {
 impl Default for ScrollbackConfig {
     fn default() -> Self {
         Self { limit: 50_000 }
+    }
+}
+
+/// PTY read-loop tuning.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct IoConfig {
+    /// After the PTY drains, the VT actor waits up to this long for further
+    /// bytes before publishing a snapshot, coalescing bursty output (e.g. an
+    /// `htop` refresh that dirties dozens of rows) into a single redraw. `0`
+    /// disables the wait. A recent keystroke caps the wait to a 1 ms floor so
+    /// echo latency is unaffected.
+    pub coalesce_delay_ms: u16,
+}
+
+impl Default for IoConfig {
+    fn default() -> Self {
+        Self {
+            coalesce_delay_ms: 2,
+        }
     }
 }
 
