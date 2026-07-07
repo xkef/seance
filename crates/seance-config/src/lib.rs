@@ -15,7 +15,7 @@ pub use diff::ConfigDiff;
 pub use schema::{
     ClipboardConfig, ClipboardPolicy, Config, CursorConfig, CursorStyle, FontConfig, InputConfig,
     KeybindConfig, LinkModifiersConfig, LinksConfig, MacosOptionAsAlt, ScrollbackConfig,
-    WindowConfig,
+    WindowAppearance, WindowConfig, WindowTheme,
 };
 pub use theme::{Theme, load as load_theme};
 

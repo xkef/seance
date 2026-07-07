@@ -38,6 +38,9 @@ pub struct ConfigDiff {
     /// `window.padding_x|y` changed — caller must push the new padding to
     /// the renderer and reflow the PTY (cols/rows shrink when padding grows).
     pub window_padding_changed: bool,
+    /// `window.theme` changed — caller must re-resolve the window
+    /// decoration appearance and re-apply it to the platform window.
+    pub window_theme_changed: bool,
     /// Min-contrast, cursor, or opacity changed — a plain repaint is
     /// enough once the renderer has consumed the new values.
     pub repaint_only: bool,
@@ -69,6 +72,8 @@ impl ConfigDiff {
         let window_padding_changed = old.window.padding_x != new.window.padding_x
             || old.window.padding_y != new.window.padding_y;
 
+        let window_theme_changed = old.window.theme != new.window.theme;
+
         // Fields whose consumers will pick up changes on the next paint.
         // Grouped together so we can request a single redraw if any of them
         // moved — we don't need a more granular signal than that.
@@ -90,6 +95,7 @@ impl ConfigDiff {
             font_adjust_cell_width_changed,
             font_features_changed,
             window_padding_changed,
+            window_theme_changed,
             repaint_only,
             input_changed,
             links_changed,
@@ -107,6 +113,7 @@ impl ConfigDiff {
             || self.font_adjust_cell_width_changed
             || self.font_features_changed
             || self.window_padding_changed
+            || self.window_theme_changed
             || self.repaint_only
             || self.input_changed
             || self.links_changed
@@ -222,6 +229,19 @@ mod tests {
         let d = ConfigDiff::between(&a, &b);
         assert!(d.window_padding_changed);
         assert!(!d.repaint_only);
+    }
+
+    #[test]
+    fn window_theme_change_is_detected_separately() {
+        use crate::WindowTheme;
+        let a = Config::default();
+        let mut b = Config::default();
+        b.window.theme = WindowTheme::Dark;
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.window_theme_changed);
+        assert!(!d.window_padding_changed);
+        assert!(!d.repaint_only);
+        assert!(!d.is_empty());
     }
 
     #[test]
