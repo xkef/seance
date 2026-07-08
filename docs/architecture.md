@@ -143,8 +143,13 @@ without libghostty linked. The local-mode binary pairs `seance-mux-client`
   ships).
 - **Kitty graphics protocol** [IMPLEMENTED] — transmission, decode (PNG and raw
   24/32-bit), per-image cache with 320 MB storage cap, placement resolution.
-  Virtual placeholders (U+10EEEE), animation, and iTerm2 inline images remain
-  [PLANNED: [M5][m5]].
+  Virtual placeholders (U+10EEEE) and animation remain [PLANNED: [M5][m5]].
+- **iTerm2 inline images (OSC 1337)** [IMPLEMENTED] — VT Core intercepts
+  `OSC 1337 ; File = <args> : <base64> ST` alongside OSC 7/52 and, for
+  `inline=1` PNG payloads, synthesizes an equivalent Kitty transmit-and-display
+  (`a=T, f=100`) command routed back into the parser, so inline images reuse the
+  Kitty storage/placement path. `width`/`height` cell counts map to Kitty
+  `c`/`r`; non-PNG payloads are left untranslated.
 
 ---
 
