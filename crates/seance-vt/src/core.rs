@@ -273,10 +273,8 @@ impl VtCore {
             self.clipboard_requests.push_back(request);
             return;
         }
-        if content.starts_with(b"1337;") {
-            if let Some(apc) = crate::iterm::osc1337_to_kitty(content) {
-                self.pending_injection.extend_from_slice(&apc);
-            }
+        if let Some(apc) = crate::iterm::osc1337_to_kitty(content) {
+            self.pending_injection.extend_from_slice(&apc);
         }
     }
 

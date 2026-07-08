@@ -88,7 +88,7 @@ fn parse_cell_dimension(value: &[u8]) -> Option<u32> {
 
 fn encode_kitty(b64: &[u8], columns: Option<u32>, rows: Option<u32>) -> Vec<u8> {
     let chunks: Vec<&[u8]> = if b64.is_empty() {
-        vec![&b64[..]]
+        vec![b64]
     } else {
         b64.chunks(KITTY_CHUNK).collect()
     };
