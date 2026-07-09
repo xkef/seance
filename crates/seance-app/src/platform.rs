@@ -23,8 +23,7 @@ pub fn configure_window(
     use objc2::MainThreadMarker;
     use objc2::runtime::{AnyClass, NSObjectProtocol};
     use objc2_app_kit::{
-        NSApplication, NSTitlebarSeparatorStyle, NSView, NSWindowButton, NSWindowStyleMask,
-        NSWindowTitleVisibility,
+        NSApplication, NSTitlebarSeparatorStyle, NSView, NSWindowStyleMask, NSWindowTitleVisibility,
     };
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use seance_config::{TitlebarStyle, WindowDecoration};
