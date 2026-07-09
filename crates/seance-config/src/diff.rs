@@ -38,6 +38,10 @@ pub struct ConfigDiff {
     /// `window.padding_x|y` changed — caller must push the new padding to
     /// the renderer and reflow the PTY (cols/rows shrink when padding grows).
     pub window_padding_changed: bool,
+    /// `window.decoration` or `window.titlebar_style` changed — the chrome is
+    /// applied once at window creation, and several AppKit style flags require
+    /// recreating the window, so the live path only logs a restart notice.
+    pub window_chrome_changed: bool,
     /// Min-contrast, cursor, or opacity changed — a plain repaint is
     /// enough once the renderer has consumed the new values.
     pub repaint_only: bool,
@@ -69,6 +73,9 @@ impl ConfigDiff {
         let window_padding_changed = old.window.padding_x != new.window.padding_x
             || old.window.padding_y != new.window.padding_y;
 
+        let window_chrome_changed = old.window.decoration != new.window.decoration
+            || old.window.titlebar_style != new.window.titlebar_style;
+
         // Fields whose consumers will pick up changes on the next paint.
         // Grouped together so we can request a single redraw if any of them
         // moved — we don't need a more granular signal than that.
@@ -90,6 +97,7 @@ impl ConfigDiff {
             font_adjust_cell_width_changed,
             font_features_changed,
             window_padding_changed,
+            window_chrome_changed,
             repaint_only,
             input_changed,
             links_changed,
@@ -107,6 +115,7 @@ impl ConfigDiff {
             || self.font_adjust_cell_width_changed
             || self.font_features_changed
             || self.window_padding_changed
+            || self.window_chrome_changed
             || self.repaint_only
             || self.input_changed
             || self.links_changed
@@ -221,6 +230,29 @@ mod tests {
         b.window.padding_x = 20;
         let d = ConfigDiff::between(&a, &b);
         assert!(d.window_padding_changed);
+        assert!(!d.repaint_only);
+    }
+
+    #[test]
+    fn window_decoration_change_sets_chrome_flag() {
+        let a = Config::default();
+        let mut b = Config::default();
+        // `ButtonsOnly` is never the platform default, so this always differs.
+        b.window.decoration = crate::WindowDecoration::ButtonsOnly;
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.window_chrome_changed);
+        assert!(!d.window_padding_changed);
+        assert!(!d.repaint_only);
+        assert!(!d.is_empty());
+    }
+
+    #[test]
+    fn titlebar_style_change_sets_chrome_flag() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.window.titlebar_style = crate::TitlebarStyle::Native;
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.window_chrome_changed);
         assert!(!d.repaint_only);
     }
 

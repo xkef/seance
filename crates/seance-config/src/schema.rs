@@ -73,12 +73,67 @@ impl Default for FontConfig {
     }
 }
 
+/// Window chrome preset. Governs the titlebar and the traffic-light /
+/// window-control buttons as a unit; `titlebar_style` tunes the titlebar
+/// appearance for the non-`System` presets.
+///
+/// Only `macos` acts on the full three-way distinction. Other platforms
+/// collapse it to a single bit — `System` keeps server-side decorations,
+/// `Hidden`/`ButtonsOnly` request a borderless window — because there is no
+/// cross-platform equivalent of macOS traffic-light buttons.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WindowDecoration {
+    /// Native OS chrome: standard titlebar and window-control buttons.
+    System,
+    /// No titlebar chrome and the window-control buttons hidden too — a
+    /// clean, full-bleed content window.
+    Hidden,
+    /// Titlebar chrome hidden but the traffic-light buttons stay visible
+    /// (the iTerm2 / Ghostty look). macOS-only; treated as `Hidden`
+    /// elsewhere.
+    ButtonsOnly,
+}
+
+impl Default for WindowDecoration {
+    /// macOS defaults to the full-bleed `Hidden` chrome that seance has always
+    /// shipped; other platforms keep native decorations, since they have no
+    /// AppKit-style hidden-titlebar path and a borderless window can be
+    /// unmovable under some window managers.
+    fn default() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::Hidden
+        } else {
+            Self::System
+        }
+    }
+}
+
+/// How the titlebar itself is drawn for the `Hidden` / `ButtonsOnly`
+/// decoration presets. Ignored under `WindowDecoration::System`, which always
+/// gets the opaque native titlebar. macOS-only.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TitlebarStyle {
+    /// Opaque, system-drawn titlebar that reserves its own strip above the
+    /// content.
+    Native,
+    /// Titlebar draws transparent and the content view extends underneath it
+    /// (`fullSizeContentView`). The default.
+    #[default]
+    Transparent,
+    /// Title text and the titlebar separator suppressed, on top of the
+    /// transparent full-size-content treatment.
+    Hidden,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct WindowConfig {
     pub padding_x: u16,
     pub padding_y: u16,
-    pub decoration: bool,
+    pub decoration: WindowDecoration,
+    pub titlebar_style: TitlebarStyle,
     pub background_opacity: f32,
 }
 
@@ -87,7 +142,8 @@ impl Default for WindowConfig {
         Self {
             padding_x: 12,
             padding_y: 0,
-            decoration: true,
+            decoration: WindowDecoration::default(),
+            titlebar_style: TitlebarStyle::default(),
             background_opacity: 1.0,
         }
     }

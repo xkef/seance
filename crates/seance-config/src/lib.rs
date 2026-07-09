@@ -15,7 +15,7 @@ pub use diff::ConfigDiff;
 pub use schema::{
     ClipboardConfig, ClipboardPolicy, Config, CursorConfig, CursorStyle, FontConfig, InputConfig,
     KeybindConfig, LinkModifiersConfig, LinksConfig, MacosOptionAsAlt, ScrollbackConfig,
-    WindowConfig,
+    TitlebarStyle, WindowConfig, WindowDecoration,
 };
 pub use theme::{Theme, load as load_theme};
 
@@ -199,6 +199,66 @@ mod tests {
             assert_eq!(cfg.clipboard.read, want);
             assert_eq!(cfg.clipboard.write, want);
         }
+    }
+
+    #[test]
+    fn window_chrome_defaults_are_platform_appropriate() {
+        let cfg = Config::default();
+        let want_decoration = if cfg!(target_os = "macos") {
+            WindowDecoration::Hidden
+        } else {
+            WindowDecoration::System
+        };
+        assert_eq!(cfg.window.decoration, want_decoration);
+        assert_eq!(cfg.window.titlebar_style, TitlebarStyle::Transparent);
+    }
+
+    #[test]
+    fn window_decoration_parses_each_variant() {
+        for (raw, want) in [
+            ("system", WindowDecoration::System),
+            ("hidden", WindowDecoration::Hidden),
+            ("buttons-only", WindowDecoration::ButtonsOnly),
+        ] {
+            let src = format!(
+                r#"
+                [window]
+                decoration = "{raw}"
+                "#,
+            );
+            let cfg: Config = toml::from_str(&src).unwrap();
+            assert_eq!(cfg.window.decoration, want);
+        }
+    }
+
+    #[test]
+    fn window_titlebar_style_parses_each_variant() {
+        for (raw, want) in [
+            ("native", TitlebarStyle::Native),
+            ("transparent", TitlebarStyle::Transparent),
+            ("hidden", TitlebarStyle::Hidden),
+        ] {
+            let src = format!(
+                r#"
+                [window]
+                titlebar_style = "{raw}"
+                "#,
+            );
+            let cfg: Config = toml::from_str(&src).unwrap();
+            assert_eq!(cfg.window.titlebar_style, want);
+        }
+    }
+
+    #[test]
+    fn window_decoration_rejects_unknown_variant() {
+        let err = toml::from_str::<Config>(
+            r#"
+            [window]
+            decoration = "borderless"
+            "#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("borderless"), "{err}");
     }
 
     #[test]
