@@ -46,6 +46,104 @@ pub enum LinkTarget {
     Path(String),
 }
 
+/// A filesystem location parsed from a link target, carrying the optional
+/// line/column anchor that tools like `rg --hyperlink-format=default` emit.
+///
+/// The opener uses `line`/`col` to jump an editor to the exact hit; without
+/// them it would open the file at line 1. `path` is the raw path from the URL
+/// (no percent-decoding — anchors never contain reserved characters, so the
+/// trailing `:LINE:COL` split is unambiguous on the encoded form).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileLocation {
+    pub path: String,
+    pub line: Option<u32>,
+    pub col: Option<u32>,
+}
+
+impl LinkTarget {
+    /// Resolve this target to a [`FileLocation`] when it names a local file.
+    ///
+    /// Returns `Some` for `file://` URLs and for plain path targets, splitting
+    /// off any `:LINE`, `:LINE:COL`, `#LINE`, or `#LLINE` anchor. Returns
+    /// `None` for non-`file` URLs (e.g. `https://…`).
+    pub fn file_location(&self) -> Option<FileLocation> {
+        match self {
+            Self::Url(url) => parse_file_location(url),
+            Self::Path(path) => Some(split_anchor(path)),
+        }
+    }
+}
+
+/// Parse a `file://` URL into a [`FileLocation`], recognizing the location
+/// anchors ripgrep, `fd`, and editors emit:
+///
+/// - `file:///abs/path` → no anchor
+/// - `file:///abs/path:42` → line 42
+/// - `file:///abs/path:42:7` → line 42, column 7
+/// - `file:///abs/path#42` / `file:///abs/path#L42` → line 42
+///
+/// Returns `None` when `url` does not start with `file://`.
+pub fn parse_file_location(url: &str) -> Option<FileLocation> {
+    let rest = url.strip_prefix("file://")?;
+    // Strip the optional authority: `file://host/path` keeps `/path`,
+    // `file:///path` keeps `/path`. A bare `file://relative` has no slash and
+    // is taken whole.
+    let path = match rest.find('/') {
+        Some(idx) => &rest[idx..],
+        None => rest,
+    };
+    Some(split_anchor(path))
+}
+
+/// Split a `#LINE` / `#LLINE` fragment or a trailing `:LINE[:COL]` off a raw
+/// path. Digit groups are only peeled when the remaining path stays non-empty,
+/// so `:42` on a path that is *only* digits is left intact.
+fn split_anchor(raw: &str) -> FileLocation {
+    if let Some((base, frag)) = raw.rsplit_once('#')
+        && !base.is_empty()
+    {
+        let digits = frag.strip_prefix(['L', 'l']).unwrap_or(frag);
+        if let Some(line) = parse_u32(digits) {
+            return FileLocation {
+                path: base.to_owned(),
+                line: Some(line),
+                col: None,
+            };
+        }
+    }
+
+    let segs: Vec<&str> = raw.split(':').collect();
+    let mut trailing = 0;
+    while trailing < 2
+        && segs.len() - trailing > 1
+        && parse_u32(segs[segs.len() - 1 - trailing]).is_some()
+    {
+        trailing += 1;
+    }
+
+    let (line, col) = match trailing {
+        1 => (parse_u32(segs[segs.len() - 1]), None),
+        2 => (
+            parse_u32(segs[segs.len() - 2]),
+            parse_u32(segs[segs.len() - 1]),
+        ),
+        _ => (None, None),
+    };
+
+    FileLocation {
+        path: segs[..segs.len() - trailing].join(":"),
+        line,
+        col,
+    }
+}
+
+fn parse_u32(s: &str) -> Option<u32> {
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse().ok()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridRange {
     pub start: GridPos,
@@ -476,5 +574,84 @@ mod tests {
     fn row_with_no_link_leaves_no_hyperlink_sentinel() {
         let snapshot = snapshot(1, 1, &["x"]);
         assert_eq!(snapshot.cells[0].hyperlink_idx, NO_HYPERLINK);
+    }
+
+    fn loc(path: &str, line: Option<u32>, col: Option<u32>) -> FileLocation {
+        FileLocation {
+            path: path.to_owned(),
+            line,
+            col,
+        }
+    }
+
+    #[test]
+    fn file_url_without_anchor_parses_bare_path() {
+        assert_eq!(
+            parse_file_location("file:///abs/path"),
+            Some(loc("/abs/path", None, None))
+        );
+    }
+
+    #[test]
+    fn file_url_trailing_line_anchor() {
+        assert_eq!(
+            parse_file_location("file:///abs/path:42"),
+            Some(loc("/abs/path", Some(42), None))
+        );
+    }
+
+    #[test]
+    fn file_url_trailing_line_and_col_anchor() {
+        assert_eq!(
+            parse_file_location("file:///abs/path:42:7"),
+            Some(loc("/abs/path", Some(42), Some(7)))
+        );
+    }
+
+    #[test]
+    fn file_url_fragment_line_anchors() {
+        assert_eq!(
+            parse_file_location("file:///abs/path#42"),
+            Some(loc("/abs/path", Some(42), None))
+        );
+        assert_eq!(
+            parse_file_location("file:///abs/path#L42"),
+            Some(loc("/abs/path", Some(42), None))
+        );
+    }
+
+    #[test]
+    fn file_url_with_authority_keeps_absolute_path() {
+        assert_eq!(
+            parse_file_location("file://host/abs/path:9"),
+            Some(loc("/abs/path", Some(9), None))
+        );
+    }
+
+    #[test]
+    fn non_file_url_has_no_location() {
+        assert_eq!(parse_file_location("https://example.com:8080/x"), None);
+    }
+
+    #[test]
+    fn link_target_dispatches_by_variant() {
+        assert_eq!(
+            LinkTarget::Url("https://example.com".into()).file_location(),
+            None
+        );
+        assert_eq!(
+            LinkTarget::Path("src/main.rs:42:7".into()).file_location(),
+            Some(loc("src/main.rs", Some(42), Some(7)))
+        );
+    }
+
+    #[test]
+    fn all_digit_path_is_not_mistaken_for_anchor() {
+        // A path segment that is only digits must survive as the path when
+        // stripping it would leave nothing before the colon.
+        assert_eq!(
+            parse_file_location("file://123"),
+            Some(loc("123", None, None))
+        );
     }
 }
