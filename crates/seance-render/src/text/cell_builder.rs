@@ -25,6 +25,7 @@ use super::atlas::{AtlasEntry, GlyphAtlas};
 use super::backend::{CellMetrics, FontAttrs, GlyphFormat, GlyphId, ShapedGlyph, TextBackend};
 use super::procedural;
 use super::shape_cache::ShapeCache;
+use crate::renderer::HoveredLinkRange;
 
 /// GPU instance record (32 bytes, matches the WGSL vertex buffer).
 #[repr(C)]
@@ -64,6 +65,11 @@ pub struct BuildFrameConfig<'a> {
     pub theme: &'a Theme,
     pub bg_color: [u8; 4],
     pub min_contrast: f32,
+    /// Inclusive grid range to draw a hovered-link underline over, or `None`.
+    /// Emitted as underline cells in the text path rather than a shader
+    /// branch, so a hover change must re-upload the text buffer — see
+    /// [`CellBuilder::build_frame`].
+    pub hovered_link: Option<HoveredLinkRange>,
 }
 
 type GlyphSlots = HashMap<GlyphId, AtlasEntry, FxBuildHasher>;
@@ -175,6 +181,14 @@ pub struct CellBuilder {
     /// given `CellMetrics`. Cleared whenever the cell size changes, via
     /// [`Self::reset_glyphs`].
     procedural_slots: ProceduralSlots,
+    /// Atlas slot for the hovered-link underline sprite. Metric-stable like
+    /// the procedural slots, so cached across frames and dropped on
+    /// [`Self::reset_glyphs`].
+    underline_slot: Option<AtlasEntry>,
+    /// Hovered-link range from the previous build. A change with no VT
+    /// content change reports `Clean`, so the build forces a re-upload to
+    /// refresh the underline cells (see [`Self::build_frame`]).
+    last_hovered: Option<HoveredLinkRange>,
     shape_cache: ShapeCache,
     bg_cells: Vec<[u8; 4]>,
     text_cells: Vec<CellText>,
@@ -191,6 +205,8 @@ impl CellBuilder {
             atlas: GlyphAtlas::new(),
             glyph_slots: HashMap::with_hasher(FxBuildHasher),
             procedural_slots: HashMap::with_hasher(FxBuildHasher),
+            underline_slot: None,
+            last_hovered: None,
             shape_cache: ShapeCache::new(),
             bg_cells: Vec::new(),
             text_cells: Vec::new(),
@@ -215,6 +231,18 @@ impl CellBuilder {
         // acknowledges rendered generations through the VT actor after present.
         self.last_dirty = source.dirty_rows();
         source.clear_dirty();
+
+        // The hovered-link underline lives in `text_cells`, which only
+        // re-uploads when the frame is non-`Clean`. A hover change with no VT
+        // content change reports `Clean`, so force a re-upload to refresh the
+        // underline. Hover transitions are infrequent, so a full upload here
+        // is acceptable.
+        if config.hovered_link != self.last_hovered
+            && matches!(self.last_dirty, DirtySnapshot::Clean)
+        {
+            self.last_dirty = DirtySnapshot::Full;
+        }
+        self.last_hovered = config.hovered_link;
 
         let (baseline, geom) = {
             let m = backend.metrics();
@@ -256,6 +284,21 @@ impl CellBuilder {
             &mut self.procedural_slots,
             &mut self.text_cells,
         );
+        // Emitted last so the underline instances draw after the glyphs in the
+        // shared cell-text pass, landing over them.
+        if let Some(range) = config.hovered_link {
+            let fg = config.theme.fg;
+            emit_hovered_link_underline(
+                range,
+                geom.grid_cols,
+                geom.grid_rows,
+                backend.metrics(),
+                &mut self.atlas,
+                &mut self.underline_slot,
+                [fg[0], fg[1], fg[2], 255],
+                &mut self.text_cells,
+            );
+        }
 
         self.atlas.clear_dirty();
 
@@ -287,6 +330,7 @@ impl CellBuilder {
         self.atlas.reset();
         self.glyph_slots.clear();
         self.procedural_slots.clear();
+        self.underline_slot = None;
         self.shape_cache.clear();
     }
 
@@ -623,6 +667,75 @@ fn emit_procedural_cells(
     }
 }
 
+/// Rasterize the underline sprite once, then emit one [`CellText`] per cell in
+/// the inclusive hovered-link `range`, colored `link_color`. Anchored like a
+/// full-cell procedural glyph, so the bar lands at the cell's bottom edge.
+#[allow(clippy::too_many_arguments)]
+fn emit_hovered_link_underline(
+    range: HoveredLinkRange,
+    grid_cols: u16,
+    grid_rows: u16,
+    metrics: &CellMetrics,
+    atlas: &mut GlyphAtlas,
+    underline_slot: &mut Option<AtlasEntry>,
+    link_color: [u8; 4],
+    out: &mut Vec<CellText>,
+) {
+    if grid_cols == 0 || grid_rows == 0 {
+        return;
+    }
+    let entry = match *underline_slot {
+        Some(e) => e,
+        None => {
+            let Some(rast) = procedural::underline(metrics) else {
+                return;
+            };
+            let Some(entry) = atlas.insert(
+                &rast.data,
+                rast.width,
+                rast.height,
+                rast.bearing_x,
+                rast.bearing_y,
+                matches!(rast.format, GlyphFormat::Color),
+            ) else {
+                return;
+            };
+            *underline_slot = Some(entry);
+            entry
+        }
+    };
+
+    let atlas_and_flags = u32::from(entry.is_color);
+    let last_col = grid_cols - 1;
+    let last_row = grid_rows - 1;
+    let start_row = range.start.row.min(last_row);
+    let end_row = range.end.row.min(last_row);
+    for row in start_row..=end_row {
+        // Column span per row: the range covers whole rows between its
+        // endpoints, and a partial span on the first and last rows.
+        let (c0, c1) = if range.start.row == range.end.row {
+            (range.start.col, range.end.col)
+        } else if row == range.start.row {
+            (range.start.col, last_col)
+        } else if row == range.end.row {
+            (0, range.end.col)
+        } else {
+            (0, last_col)
+        };
+        let c1 = c1.min(last_col);
+        for col in c0..=c1 {
+            out.push(CellText {
+                glyph_pos: entry.pos,
+                glyph_size: entry.size,
+                bearings: [entry.bearing_x as i16, entry.bearing_y as i16],
+                grid_pos: [col, row],
+                color: link_color,
+                atlas_and_flags,
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -743,6 +856,7 @@ mod tests {
             theme,
             bg_color: [0, 0, 0, 255],
             min_contrast: 1.0,
+            hovered_link: None,
         }
     }
 
@@ -1537,5 +1651,111 @@ mod tests {
         // and land at the start of the grayscale plane again.
         assert_eq!(second.glyph_pos, first.glyph_pos);
         assert_eq!(second.glyph_size, first.glyph_size);
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // Hovered-link underline cells (issue #264)
+    // ────────────────────────────────────────────────────────────────────
+
+    fn link(s: (u16, u16), e: (u16, u16)) -> HoveredLinkRange {
+        HoveredLinkRange {
+            start: GridPos { col: s.0, row: s.1 },
+            end: GridPos { col: e.0, row: e.1 },
+        }
+    }
+
+    #[test]
+    fn hovered_link_emits_one_underline_cell_per_covered_cell() {
+        let theme = Theme::blank();
+        let cells = [
+            ("a", CellColor::Rgb(1, 2, 3), CellColor::Default, plain()),
+            ("b", CellColor::Rgb(1, 2, 3), CellColor::Default, plain()),
+            ("c", CellColor::Rgb(1, 2, 3), CellColor::Default, plain()),
+        ];
+        let mut source = FakeFrame::new(3, 1, &cells);
+        let mut backend = distributing_backend();
+        let mut builder = CellBuilder::new();
+
+        let mut config = build_config(&theme);
+        config.hovered_link = Some(link((0, 0), (2, 0)));
+        builder.build_frame(&mut source, &mut backend, config);
+
+        // 3 glyph cells + 3 underline cells, underline appended last.
+        assert_eq!(builder.text_cells().len(), 6);
+        let underline = &builder.text_cells()[3..];
+        let cols: Vec<u16> = underline.iter().map(|c| c.grid_pos[0]).collect();
+        assert_eq!(cols, vec![0, 1, 2]);
+        // All underline cells share the single sprite slot and carry the
+        // theme fg as the link color at full opacity.
+        let fg = theme.fg;
+        for cell in underline {
+            assert_eq!(cell.grid_pos[1], 0);
+            assert_eq!(cell.color, [fg[0], fg[1], fg[2], 255]);
+            assert_eq!(cell.glyph_pos, underline[0].glyph_pos);
+        }
+    }
+
+    #[test]
+    fn hovered_link_spans_partial_rows_at_the_endpoints() {
+        let theme = Theme::blank();
+        // 3 cols × 3 rows, all blank cells (no glyphs) so text_cells holds
+        // only underline output.
+        let cells: Vec<FakeCell> = (0..9)
+            .map(|_| ("", CellColor::Default, CellColor::Default, plain()))
+            .collect();
+        let mut source = FakeFrame::new(3, 3, &cells);
+        let mut backend = distributing_backend();
+        let mut builder = CellBuilder::new();
+
+        let mut config = build_config(&theme);
+        // Start mid-row-0, end mid-row-2.
+        config.hovered_link = Some(link((1, 0), (1, 2)));
+        builder.build_frame(&mut source, &mut backend, config);
+
+        let positions: Vec<[u16; 2]> = builder.text_cells().iter().map(|c| c.grid_pos).collect();
+        // Row 0: cols 1..=2; row 1 (middle): all cols 0..=2; row 2: cols 0..=1.
+        assert_eq!(
+            positions,
+            vec![[1, 0], [2, 0], [0, 1], [1, 1], [2, 1], [0, 2], [1, 2],]
+        );
+    }
+
+    #[test]
+    fn hovered_link_change_forces_reupload_on_otherwise_clean_frame() {
+        let theme = Theme::blank();
+        let cells = [("a", CellColor::Default, CellColor::Default, plain())];
+        let mut source = FakeFrame::new(1, 1, &cells);
+        let mut backend = distributing_backend();
+        let mut builder = CellBuilder::new();
+
+        // Frame 1: Full (initial), no link.
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        assert_eq!(*builder.last_dirty(), DirtySnapshot::Full);
+
+        // Frame 2: VT reports Clean, but a link appears → force Full so the
+        // text buffer (now carrying the underline) re-uploads.
+        let mut config = build_config(&theme);
+        config.hovered_link = Some(link((0, 0), (0, 0)));
+        builder.build_frame(&mut source, &mut backend, config);
+        assert_eq!(*builder.last_dirty(), DirtySnapshot::Full);
+
+        // Frame 3: link unchanged and VT still Clean → stays Clean.
+        let mut config = build_config(&theme);
+        config.hovered_link = Some(link((0, 0), (0, 0)));
+        builder.build_frame(&mut source, &mut backend, config);
+        assert_eq!(*builder.last_dirty(), DirtySnapshot::Clean);
+    }
+
+    #[test]
+    fn no_hovered_link_emits_no_underline_cells() {
+        let theme = Theme::blank();
+        let cells = [("a", CellColor::Default, CellColor::Default, plain())];
+        let mut source = FakeFrame::new(1, 1, &cells);
+        let mut backend = distributing_backend();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        // One glyph cell only.
+        assert_eq!(builder.text_cells().len(), 1);
     }
 }
