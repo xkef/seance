@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use seance_frame::FrameSource;
@@ -16,9 +17,10 @@ use seance_protocol::transport::{
 };
 
 use crate::{
-    CursorShape, Domain, DomainEvent, LinkDetector, LinkModifiers, LinkSource, LinkTarget,
-    MuxClient, PaneError, PaneFrameHistory, PaneSpawnOptions, PaneView, ProtocolDomain,
-    ReplayBatch, Resize, SpawnError, ThemeColors,
+    ContentMatcher, ContentWait, CursorShape, Domain, DomainEvent, LinkDetector, LinkModifiers,
+    LinkSource, LinkTarget, MuxClient, PaneError, PaneFrameHistory, PaneSpawnOptions, PaneView,
+    ProtocolDomain, ReplayBatch, Resize, SNAPSHOT_SCHEMA_VERSION, SpawnError, ThemeColors,
+    WaitPoll,
 };
 
 fn pane_ref() -> PaneRef {
@@ -39,6 +41,111 @@ fn snapshot(generation: u64, text: &str) -> VtSnapshot {
         CellAttrs::default(),
     );
     snapshot
+}
+
+fn row_snapshot(generation: u64, text: &str) -> VtSnapshot {
+    let chars: Vec<char> = text.chars().collect();
+    let mut snapshot = VtSnapshot::empty(chars.len() as u16, 1);
+    snapshot.generation = generation;
+    for ch in chars {
+        snapshot.push_cell(
+            &ch.to_string(),
+            CellColor::Default,
+            CellColor::Default,
+            CellAttrs::default(),
+        );
+    }
+    snapshot
+}
+
+fn client_showing(text: &str) -> (MuxClient<ScriptedDomain>, PaneRef) {
+    let pane = pane_ref();
+    let mut client = MuxClient::new(ScriptedDomain {
+        events: VecDeque::from([DomainEvent::PaneUpdate(PaneUpdate {
+            pane,
+            seq: ServerSeq(1),
+            image_events: Vec::new(),
+            frame: Some(FrameDelta::Full {
+                generation: 1,
+                snapshot: row_snapshot(1, text),
+            }),
+        })]),
+        ..ScriptedDomain::default()
+    });
+    let pane = client.spawn_pane(PaneSpawnOptions::default()).unwrap();
+    client.refresh_updates().unwrap();
+    (client, pane)
+}
+
+#[test]
+fn find_in_pane_locates_substring() {
+    let (client, pane) = client_showing("build ok");
+    let matcher = ContentMatcher::substring("ok");
+    let matched = client.find_in_pane(pane, &matcher).unwrap();
+    assert_eq!(matched.text, "ok");
+    assert_eq!(matched.range.start.col, 6);
+}
+
+#[test]
+fn find_in_pane_without_match_is_none() {
+    let (client, pane) = client_showing("waiting");
+    let matcher = ContentMatcher::substring("done");
+    assert!(client.find_in_pane(pane, &matcher).is_none());
+}
+
+#[test]
+fn pane_snapshot_projects_stable_schema() {
+    let (client, pane) = client_showing("hello");
+    let snapshot = client.pane_snapshot(pane).unwrap();
+    assert_eq!(snapshot.schema_version, SNAPSHOT_SCHEMA_VERSION);
+    assert_eq!(snapshot.generation, 1);
+    assert_eq!(snapshot.rows_text, vec!["hello".to_string()]);
+}
+
+#[test]
+fn content_wait_reports_pending_then_matched() {
+    let (mut client, pane) = client_showing("loading");
+    let wait = ContentWait::new(
+        pane,
+        ContentMatcher::substring("ready"),
+        Instant::now() + Duration::from_secs(60),
+    );
+
+    assert_eq!(wait.poll(&client, Instant::now()), WaitPoll::Pending);
+
+    client
+        .domain_mut()
+        .events
+        .push_back(DomainEvent::PaneUpdate(PaneUpdate {
+            pane,
+            seq: ServerSeq(2),
+            image_events: Vec::new(),
+            frame: Some(FrameDelta::Full {
+                generation: 2,
+                snapshot: row_snapshot(2, "ready"),
+            }),
+        }));
+    client.refresh_updates().unwrap();
+
+    match wait.poll(&client, Instant::now()) {
+        WaitPoll::Matched { matched, snapshot } => {
+            assert_eq!(matched.text, "ready");
+            assert_eq!(snapshot.generation, 2);
+            assert_eq!(snapshot.rows_text, vec!["ready".to_string()]);
+        }
+        other => panic!("expected a match, got {other:?}"),
+    }
+}
+
+#[test]
+fn content_wait_times_out_without_match() {
+    let (client, pane) = client_showing("still working");
+    let deadline = Instant::now();
+    let wait = ContentWait::new(pane, ContentMatcher::substring("finished"), deadline);
+    assert_eq!(
+        wait.poll(&client, deadline + Duration::from_millis(1)),
+        WaitPoll::TimedOut
+    );
 }
 
 #[test]

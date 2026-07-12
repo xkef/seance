@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
 use bytes::Bytes;
+use seance_protocol::agent::PaneSnapshot;
 use seance_protocol::frame::{CursorShape, GridPos, Resize, TerminalModes, ThemeColors};
 use seance_protocol::identity::PaneRef;
 
 use crate::{
-    ClientRefresh, DetectedLink, Domain, DomainEvent, GridRange, LinkDetector, LinkModifiers,
-    PaneError, PaneFrame, PaneSpawnOptions, PaneView, SpawnError,
+    ClientRefresh, ContentMatch, ContentMatcher, DetectedLink, Domain, DomainEvent, GridRange,
+    LinkDetector, LinkModifiers, PaneError, PaneFrame, PaneSpawnOptions, PaneView, SpawnError,
 };
 
 /// Client-side state of the mux: owns the active [`Domain`] and a
@@ -97,6 +98,20 @@ impl<D> MuxClient<D> {
 
     pub fn hovered_link_range(&self, pane: PaneRef) -> Option<GridRange> {
         self.hovered_link(pane).map(|link| link.range)
+    }
+
+    /// Locate the first match of `matcher` in a pane's current content.
+    pub fn find_in_pane(&self, pane: PaneRef, matcher: &ContentMatcher) -> Option<ContentMatch> {
+        self.views
+            .get(&pane)
+            .and_then(|view| view.find_content(matcher))
+    }
+
+    /// Project a pane's current content into the stable [`PaneSnapshot`] schema.
+    pub fn pane_snapshot(&self, pane: PaneRef) -> Option<PaneSnapshot> {
+        self.views
+            .get(&pane)
+            .and_then(|view| view.stable_snapshot())
     }
 
     pub fn pane(&mut self, pane: PaneRef) -> PaneHandle<'_, D> {

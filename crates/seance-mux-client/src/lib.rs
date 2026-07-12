@@ -24,6 +24,7 @@ mod events;
 mod history;
 mod interaction;
 pub mod links;
+mod locator;
 mod pane_view;
 mod protocol_domain;
 
@@ -37,9 +38,11 @@ pub use links::{
     DetectedLink, GridRange, LinkAction, LinkDetector, LinkHighlight, LinkModifiers, LinkRule,
     LinkSource, LinkTarget,
 };
+pub use locator::{ContentMatch, ContentMatcher, ContentWait, WaitPoll};
 pub use pane_view::{PaneFrame, PaneView};
 pub use protocol_domain::ProtocolDomain;
 pub use seance_frame::SnapshotFrameSource;
+pub use seance_protocol::agent::{PaneSnapshot, SNAPSHOT_SCHEMA_VERSION, SnapshotCursor};
 pub use seance_protocol::clipboard::{ClipboardRequest, encode_osc52_reply};
 pub use seance_protocol::frame::{
     CellAttrs, CellColor, CursorInfo, CursorShape, GridPos, PlacementSnapshot, Resize, Selection,
