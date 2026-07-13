@@ -2580,6 +2580,7 @@ dependencies = [
  "bytemuck",
  "cosmic-text",
  "etagere",
+ "naga",
  "rustc-hash 2.1.2",
  "seance-config",
  "seance-frame",

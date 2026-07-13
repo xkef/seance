@@ -8,6 +8,7 @@ use super::atlas_texture::{atlas_view, write_atlas_plane};
 use super::dynamic_buffer::DynamicBuffer;
 use super::layers::{DrawOp, LayerSchedule, SubRole, Z_MAIN};
 use super::pipeline::Pipelines;
+use super::quads::{QuadBatch, QuadDraw};
 use super::uniforms::Uniforms;
 use crate::image::ImageRenderer;
 use crate::renderer::RenderInputs;
@@ -41,6 +42,9 @@ pub(crate) struct GpuState {
     bg_cells: DynamicBuffer,
     text_instances: DynamicBuffer,
     text_instance_count: u32,
+
+    quads: DynamicBuffer,
+    quad_draws: Vec<QuadDraw>,
 
     atlas_grayscale: Option<Texture>,
     atlas_color: Option<Texture>,
@@ -141,6 +145,8 @@ impl GpuState {
                 "text_instances",
             ),
             text_instance_count: 0,
+            quads: DynamicBuffer::new(BufferUsages::VERTEX | BufferUsages::COPY_DST, "quads"),
+            quad_draws: Vec::new(),
             atlas_grayscale: None,
             atlas_color: None,
             atlas_bind_group: None,
@@ -179,6 +185,7 @@ impl GpuState {
         atlas: &GlyphAtlas,
         inputs: &RenderInputs,
         theme: &Theme,
+        quads: &QuadBatch,
     ) -> bool {
         let _span = tracing::trace_span!("gpu::submit").entered();
         if self.surface_dirty {
@@ -199,6 +206,7 @@ impl GpuState {
         );
         self.upload_atlas(atlas);
         self.ensure_atlas_bind_group();
+        self.upload_quads(quads);
 
         let view = output
             .texture
@@ -386,6 +394,19 @@ impl GpuState {
         }));
     }
 
+    /// Flatten the retained quad batch into the instance buffer and record
+    /// the per-layer draw ranges for `build_schedule` to place.
+    fn upload_quads(&mut self, batch: &QuadBatch) {
+        if batch.is_empty() {
+            self.quad_draws.clear();
+            return;
+        }
+        let (instances, draws) = batch.flatten();
+        self.quad_draws = draws;
+        self.quads
+            .upload(&self.device, &self.queue, bytemuck::cast_slice(&instances));
+    }
+
     fn record_passes(&self, encoder: &mut CommandEncoder, view: &TextureView) {
         let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("seance_frame"),
@@ -438,6 +459,19 @@ impl GpuState {
             SubRole::Above,
             DrawOp::Images(PlacementLayer::AboveText),
         );
+        // Floating quads sit above cell content within their own layer, so an
+        // overlay at Z_MAIN paints over text while one at a higher z sorts
+        // above everything below it.
+        for draw in &self.quad_draws {
+            schedule.push(
+                draw.z,
+                SubRole::Above,
+                DrawOp::Quads {
+                    start: draw.start,
+                    count: draw.count,
+                },
+            );
+        }
         schedule
     }
 
@@ -474,6 +508,16 @@ impl GpuState {
             DrawOp::Images(layer) => {
                 self.images
                     .record_layer(pass, layer, &self.uniform_bind_group);
+            }
+            DrawOp::Quads { start, count } => {
+                if count > 0
+                    && let Some(quad_buf) = self.quads.buffer.as_ref()
+                {
+                    pass.set_pipeline(&self.pipelines.quads);
+                    pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                    pass.set_vertex_buffer(0, quad_buf.slice(..));
+                    pass.draw(0..4, start..start + count);
+                }
             }
         }
     }

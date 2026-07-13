@@ -11,4 +11,6 @@ mod image;
 mod renderer;
 mod text;
 
-pub use renderer::{CursorShape, HoveredLinkRange, RenderInputs, RendererConfig, TerminalRenderer};
+pub use renderer::{
+    CursorShape, HoveredLinkRange, PixelRect, RenderInputs, RendererConfig, TerminalRenderer,
+};

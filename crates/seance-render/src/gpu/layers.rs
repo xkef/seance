@@ -40,6 +40,12 @@ pub(crate) enum DrawOp {
     CellBg,
     CellText,
     Images(PlacementLayer),
+    /// A contiguous run of floating-quad instances (`start..start + count`)
+    /// in the shared quad instance buffer.
+    Quads {
+        start: u32,
+        count: u32,
+    },
 }
 
 struct Layer {
