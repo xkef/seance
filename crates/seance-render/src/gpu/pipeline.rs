@@ -5,11 +5,13 @@ use wgpu::*;
 use super::uniforms::Uniforms;
 
 const CELL_TEXT_INSTANCE_STRIDE: u64 = 32;
+const QUAD_INSTANCE_STRIDE: u64 = 36;
 
 pub(crate) struct Pipelines {
     pub(crate) bg_color: RenderPipeline,
     pub(crate) cell_bg: RenderPipeline,
     pub(crate) cell_text: RenderPipeline,
+    pub(crate) quads: RenderPipeline,
     pub(crate) uniform_bgl: BindGroupLayout,
     pub(crate) bg_cells_bgl: BindGroupLayout,
     pub(crate) atlas_bgl: BindGroupLayout,
@@ -51,10 +53,17 @@ impl Pipelines {
             &[&uniform_bgl, &bg_cells_bgl, &atlas_bgl],
         );
 
+        let quad_shader = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("quad_shader"),
+            source: ShaderSource::Wgsl(include_str!("shaders/quads.wgsl").into()),
+        });
+        let quads = make_quads_pipeline(device, &quad_shader, format, &uniform_bgl);
+
         Self {
             bg_color,
             cell_bg,
             cell_text,
+            quads,
             uniform_bgl,
             bg_cells_bgl,
             atlas_bgl,
@@ -167,6 +176,70 @@ fn make_fullscreen_pipeline(
         }),
         primitive: PrimitiveState {
             topology: PrimitiveTopology::TriangleList,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+fn make_quads_pipeline(
+    device: &Device,
+    shader: &ShaderModule,
+    format: TextureFormat,
+    uniform_bgl: &BindGroupLayout,
+) -> RenderPipeline {
+    let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+        label: Some("quads_layout"),
+        bind_group_layouts: &[Some(uniform_bgl)],
+        immediate_size: 0,
+    });
+
+    let instance_layout = VertexBufferLayout {
+        array_stride: QUAD_INSTANCE_STRIDE,
+        step_mode: VertexStepMode::Instance,
+        attributes: &[
+            VertexAttribute {
+                format: VertexFormat::Float32x4,
+                offset: 0,
+                shader_location: 0,
+            },
+            VertexAttribute {
+                format: VertexFormat::Float32x4,
+                offset: 16,
+                shader_location: 1,
+            },
+            VertexAttribute {
+                format: VertexFormat::Float32,
+                offset: 32,
+                shader_location: 2,
+            },
+        ],
+    };
+
+    device.create_render_pipeline(&RenderPipelineDescriptor {
+        label: Some("quads"),
+        layout: Some(&layout),
+        vertex: VertexState {
+            module: shader,
+            entry_point: Some("vs_quad"),
+            buffers: &[instance_layout],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(FragmentState {
+            module: shader,
+            entry_point: Some("fs_quad"),
+            targets: &[Some(ColorTargetState {
+                format,
+                blend: Some(premultiplied_blend()),
+                write_mask: ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: PrimitiveState {
+            topology: PrimitiveTopology::TriangleStrip,
             ..Default::default()
         },
         depth_stencil: None,

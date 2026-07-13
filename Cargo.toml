@@ -44,6 +44,7 @@ fancy-regex = "0.11"
 include_dir = "0.7"
 insta = { version = "1", features = ["glob", "yaml"] }
 libc = "0.2"
+naga = "29"
 libghostty-vt = {
     git = "https://github.com/Uzaaft/libghostty-rs",
     rev = "5ac47e9eb166add2c00c432bc65c279133629712",

@@ -6,8 +6,9 @@ use seance_protocol::frame::{GridPos, MouseSize};
 use seance_protocol::image_cache::ImageCacheEvent;
 use winit::window::Window;
 
+pub use crate::gpu::PixelRect;
 pub use crate::gpu::uniforms::CursorShape;
-use crate::gpu::{CellFrame, GpuState};
+use crate::gpu::{CellFrame, GpuState, QuadBatch};
 use crate::text::backend::TextBackend;
 use crate::text::cosmic::{BackendConfig, CosmicTextBackend};
 use crate::text::{BuildFrameConfig, CellBuilder};
@@ -70,6 +71,7 @@ pub struct TerminalRenderer {
     surface_width: u32,
     surface_height: u32,
     window_padding: [u16; 2],
+    quads: QuadBatch,
 }
 
 impl TerminalRenderer {
@@ -97,6 +99,7 @@ impl TerminalRenderer {
             surface_width: config.width,
             surface_height: config.height,
             window_padding: config.window_padding,
+            quads: QuadBatch::default(),
         })
     }
 
@@ -193,7 +196,22 @@ impl TerminalRenderer {
             self.cell_builder.atlas(),
             inputs,
             &self.theme,
+            &self.quads,
         )
+    }
+
+    /// Emit a filled (optionally rounded) rectangle drawn over the terminal
+    /// grid at layer `z` (see the layer-schedule constants). Emission is
+    /// retained: quads persist across frames until [`clear_quads`] is called,
+    /// so a static overlay is emitted once. `color` is straight-alpha sRGBA.
+    ///
+    /// [`clear_quads`]: Self::clear_quads
+    pub fn emit_rect(&mut self, z: i32, rect: PixelRect, color: [f32; 4], corner_radius: f32) {
+        self.quads.emit_rect(z, rect, color, corner_radius);
+    }
+
+    pub fn clear_quads(&mut self) {
+        self.quads.clear();
     }
 
     pub fn set_font_size(&mut self, points: f32) {
