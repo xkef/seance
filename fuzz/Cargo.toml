@@ -1,0 +1,26 @@
+[package]
+name = "seance-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+seance-vt = { path = "../crates/seance-vt" }
+
+[[bin]]
+name = "vt_feed"
+path = "fuzz_targets/vt_feed.rs"
+test = false
+doc = false
+bench = false
+
+# Standalone workspace: fuzz targets build only under `cargo fuzz`
+# (nightly + sanitizer flags), never as part of the main workspace.
+[workspace]
+
+[profile.release]
+debug = 1
