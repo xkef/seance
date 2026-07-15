@@ -1,0 +1,46 @@
+name: Fuzz
+
+on:
+  pull_request:
+    paths:
+      - "fuzz/**"
+      - "crates/seance-vt/**"
+  schedule:
+    - cron: "10 4 * * 1"
+  workflow_dispatch:
+
+permissions: read-all
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vt-feed:
+    name: fuzz vt_feed (smoke)
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          experimental: true
+      - name: Install nightly toolchain
+        run: rustup toolchain install nightly --profile minimal
+      - name: Setup vendored ghostty-src
+        run: tools/setup-ghostty-src.sh
+      - name: Setup vendored ghostty themes
+        run: tools/setup-themes.sh
+      - name: Setup macOS sysroot
+        run: tools/setup-sysroot.sh
+      - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
+        with:
+          tool: cargo-fuzz
+      - name: Fuzz VT input path
+        # Apple's ld-prime cannot link libFuzzer's C++ runtime
+        # (___dso_handle fixup error); use the classic linker.
+        env:
+          RUSTFLAGS: "-Clink-arg=-Wl,-ld_classic"
+        run: cargo +nightly fuzz run vt_feed -- -max_total_time=120

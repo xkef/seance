@@ -1,5 +1,7 @@
 # séance
 
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/xkef/seance/badge)](https://scorecard.dev/viewer/?uri=github.com/xkef/seance)
+
 A GPU-rendered terminal aiming at built-in multiplexing — tabs, splits, and
 persistent sessions, **without a terminal inside a terminal**. macOS-first;
 Linux is a target.

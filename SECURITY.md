@@ -21,6 +21,9 @@ This repository is a GPU-rendered terminal emulator. Reports of interest:
   another pane's contents.
 - Workflow or token-permission weaknesses in `.github/workflows/`.
 
+The threat model is documented in
+[`docs/threat-model.md`](docs/threat-model.md).
+
 ## Supported versions
 
 Only the current state of `main` is supported. There are no releases or
