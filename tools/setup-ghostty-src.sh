@@ -25,7 +25,7 @@ set -euo pipefail
 # libghostty-vt git revision in Cargo.toml). Mismatch means the FFI bindings
 # in libghostty-vt-sys/src/bindings.rs will disagree with the C headers
 # produced by zig build, resulting in link errors or UB at runtime.
-GHOSTTY_COMMIT="a1e75daef8b64426dbca551c6e41b1fbc2b7ae24"
+GHOSTTY_COMMIT="6590196661f769dd8f2b3e85d6c98262c4ec5b3b"
 GHOSTTY_REPO="https://github.com/ghostty-org/ghostty.git"
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
