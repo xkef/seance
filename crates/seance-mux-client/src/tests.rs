@@ -356,6 +356,7 @@ fn frame_history_replays_retained_updates() {
             cursor: CursorInfo::default(),
             modes: TerminalModes::default(),
             pwd: None,
+            last_command_exit: None,
             placements: Vec::new(),
             dirty_rows: vec![RowDelta::from_snapshot_row(&snapshot(2, "b"), 0).unwrap()],
             hyperlinks: Vec::new(),

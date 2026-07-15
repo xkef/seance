@@ -205,6 +205,11 @@ pub struct VtSnapshot {
     pub text: String,
     pub rows_meta: Vec<RowMeta>,
     pub pwd: Option<String>,
+    /// Exit code of the most recently finished shell command, from the OSC 133
+    /// `D` semantic-prompt marker. `None` until a command completes, or when
+    /// the shell reports a command with no status. Distinct from a pane
+    /// process's own exit (see [`crate::mux::ServerMessage::PaneExited`]).
+    pub last_command_exit: Option<i32>,
     pub cursor: CursorInfo,
     pub modes: TerminalModes,
     pub dirty: DirtySnapshot,
@@ -226,6 +231,7 @@ impl VtSnapshot {
             text: String::new(),
             rows_meta: vec![RowMeta::default(); usize::from(rows)],
             pwd: None,
+            last_command_exit: None,
             cursor: CursorInfo::default(),
             modes: TerminalModes::default(),
             dirty: DirtySnapshot::Full,
@@ -529,6 +535,7 @@ pub enum FrameDelta {
         cursor: CursorInfo,
         modes: TerminalModes,
         pwd: Option<String>,
+        last_command_exit: Option<i32>,
         placements: Vec<PlacementSnapshot>,
         dirty_rows: Vec<RowDelta>,
         /// OSC 8 URL table for the resulting snapshot. Partial frames keep
@@ -583,6 +590,7 @@ impl FrameDelta {
             cursor: snapshot.cursor,
             modes: snapshot.modes,
             pwd: snapshot.pwd.clone(),
+            last_command_exit: snapshot.last_command_exit,
             placements: snapshot.placements.clone(),
             dirty_rows,
             hyperlinks,
@@ -792,6 +800,7 @@ pub fn apply_frame_delta(
             cursor,
             modes,
             pwd,
+            last_command_exit,
             placements,
             dirty_rows,
             hyperlinks,
@@ -820,6 +829,7 @@ pub fn apply_frame_delta(
                 text: String::new(),
                 rows_meta: Vec::with_capacity(usize::from(*rows)),
                 pwd: pwd.clone(),
+                last_command_exit: *last_command_exit,
                 cursor: *cursor,
                 modes: *modes,
                 dirty: if dirty_rows.is_empty() {
@@ -1137,6 +1147,7 @@ mod tests {
             cursor: CursorInfo::default(),
             modes: TerminalModes::default(),
             pwd: None,
+            last_command_exit: None,
             placements: Vec::new(),
             dirty_rows: vec![
                 RowDelta {
@@ -1167,6 +1178,7 @@ mod tests {
             cursor: CursorInfo::default(),
             modes: TerminalModes::default(),
             pwd: None,
+            last_command_exit: None,
             placements: Vec::new(),
             dirty_rows: vec![RowDelta {
                 row: 0,
@@ -1208,6 +1220,7 @@ mod tests {
                 ..TerminalModes::default()
             },
             pwd: Some("/tmp".to_string()),
+            last_command_exit: Some(130),
             placements: vec![PlacementSnapshot {
                 image_id: ImageId(1),
                 placement_id: 1,
@@ -1231,6 +1244,7 @@ mod tests {
         assert_eq!(applied.cursor.shape, Some(CursorShape::Bar));
         assert!(applied.modes.bracketed_paste);
         assert_eq!(applied.pwd.as_deref(), Some("/tmp"));
+        assert_eq!(applied.last_command_exit, Some(130));
         assert_eq!(applied.placements.len(), 1);
         assert_eq!(applied.dirty, DirtySnapshot::Clean);
     }
@@ -1319,6 +1333,28 @@ mod tests {
         // No hyperlink at col 4 or anywhere on row 1.
         assert!(snap.osc8_run_at(4, 0).is_none());
         assert!(snap.osc8_run_at(0, 1).is_none());
+    }
+
+    #[test]
+    fn from_snapshot_propagates_last_command_exit() {
+        let mut base = snapshot(1, 1, 1, &["x"]);
+        base.dirty = DirtySnapshot::Clean;
+        let mut next = base.clone();
+        next.generation = 2;
+        next.dirty = DirtySnapshot::Partial(vec![0]);
+        next.last_command_exit = Some(1);
+
+        let delta = FrameDelta::from_snapshot(Some(&base), &next);
+        let FrameDelta::Partial {
+            last_command_exit, ..
+        } = &delta
+        else {
+            panic!("expected partial delta");
+        };
+        assert_eq!(*last_command_exit, Some(1));
+
+        let applied = apply_frame_delta(Some(&base), &delta).unwrap();
+        assert_eq!(applied.last_command_exit, Some(1));
     }
 
     #[test]

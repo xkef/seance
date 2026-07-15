@@ -8,6 +8,7 @@ use libghostty_vt::terminal::{Mode, ScrollViewport};
 use libghostty_vt::{RenderState, Terminal as VtTerminal, TerminalOptions};
 
 use crate::clipboard::{ClipboardRequest, parse_osc52};
+use crate::osc133::{self, PromptState};
 use crate::snapshot_extraction::{SnapshotExtraction, extract_snapshot};
 use crate::terminal::install_png_decoder_for_this_thread;
 use crate::{CursorInfo, CursorShape, DirtySnapshot, VtSnapshot};
@@ -67,6 +68,7 @@ pub(crate) struct VtCore {
     last_cursor: Option<CursorInfo>,
     force_full_next_snapshot: bool,
     pwd: Option<String>,
+    prompt: PromptState,
     osc_state: OscState,
     clipboard_requests: VecDeque<ClipboardRequest>,
 }
@@ -114,6 +116,7 @@ impl VtCore {
             last_cursor: None,
             force_full_next_snapshot: false,
             pwd: None,
+            prompt: PromptState::default(),
             osc_state: OscState::Ground,
             clipboard_requests: VecDeque::new(),
         };
@@ -191,6 +194,7 @@ impl VtCore {
             self.cell_height_px,
         )?;
         snapshot.pwd = self.pwd.clone().or(snapshot.pwd);
+        snapshot.last_command_exit = self.prompt.last_command_exit;
         let dirty_delta = self.snapshot_dirty_delta(&snapshot, dirty_delta);
         let generation = self.dirty.next_generation();
         let dirty = self.dirty.record(generation, dirty_delta);
@@ -258,6 +262,10 @@ impl VtCore {
         // never tries to render escape bytes that should drive clipboard I/O.
         if let Some(rest) = content.strip_prefix(b"7;") {
             self.apply_osc7(rest);
+            return;
+        }
+        if let Some(event) = osc133::parse(content) {
+            self.prompt.apply(event);
             return;
         }
         if let Some(request) = parse_osc52(content) {
