@@ -43,4 +43,10 @@ jobs:
         # (___dso_handle fixup error); use the classic linker.
         env:
           RUSTFLAGS: "-Clink-arg=-Wl,-ld_classic"
-        run: cargo +nightly fuzz run vt_feed -- -max_total_time=120
+        # --target pins the host triple: cargo-fuzz otherwise defaults to
+        # the triple its own binary was built for (x86_64 from the
+        # prebuilt download), which has no installed std.
+        run: |
+          cargo +nightly fuzz run vt_feed \
+            --target "$(rustc +nightly -vV | sed -n 's/^host: //p')" \
+            -- -max_total_time=120
