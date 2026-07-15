@@ -4,7 +4,7 @@
 //! wrapper exists so later phases can swap implementations without
 //! touching every call site.
 
-use rand_core::{RngCore, SeedableRng};
+use rand_core::{Rng, SeedableRng};
 use rand_pcg::Pcg64Mcg;
 
 pub struct DeterministicRng(Pcg64Mcg);

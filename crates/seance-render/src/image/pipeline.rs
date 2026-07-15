@@ -69,7 +69,7 @@ impl ImagePipeline {
             vertex: VertexState {
                 module: &shader,
                 entry_point: Some("vs_image"),
-                buffers: &[instance_layout],
+                buffers: &[Some(instance_layout)],
                 compilation_options: Default::default(),
             },
             fragment: Some(FragmentState {

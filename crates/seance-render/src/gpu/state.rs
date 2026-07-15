@@ -64,6 +64,7 @@ impl GpuState {
                 power_preference: PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
+                apply_limit_buckets: false,
             })
             .await
             .expect("no suitable GPU adapter");
@@ -90,6 +91,7 @@ impl GpuState {
         let config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
             format,
+            color_space: SurfaceColorSpace::Auto,
             width: size.width.max(1),
             height: size.height.max(1),
             present_mode: PresentMode::AutoVsync,
@@ -210,7 +212,7 @@ impl GpuState {
             });
         self.record_passes(&mut encoder, &view);
         self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
+        self.queue.present(output);
         true
     }
 

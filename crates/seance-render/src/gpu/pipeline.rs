@@ -231,7 +231,7 @@ fn make_cell_text_pipeline(
         vertex: VertexState {
             module: shader,
             entry_point: Some("vs_cell_text"),
-            buffers: &[instance_layout],
+            buffers: &[Some(instance_layout)],
             compilation_options: Default::default(),
         },
         fragment: Some(FragmentState {
