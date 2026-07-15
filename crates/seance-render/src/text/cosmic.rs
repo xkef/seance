@@ -173,7 +173,7 @@ impl TextBackend for CosmicTextBackend {
             .font_features(self.font_features.clone());
 
         let mut buffer = Buffer::new(&mut self.fs, cosmic_metrics);
-        buffer.set_text(&mut self.fs, text, &attrs, Shaping::Advanced, None);
+        buffer.set_text(text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.fs, false);
 
         let entries: Vec<(CacheKey, u32)> = buffer
@@ -316,7 +316,7 @@ fn measure_cell_width_and_baseline(
 ) -> (f32, f32) {
     let attrs = Attrs::new().family(Family::Name(family));
     let mut buffer = Buffer::new(fs, Metrics::new(scaled_font_size, line_height));
-    buffer.set_text(fs, "M", &attrs, Shaping::Advanced, None);
+    buffer.set_text("M", &attrs, Shaping::Advanced, None);
     buffer.shape_until_scroll(fs, false);
 
     match buffer.layout_runs().next() {

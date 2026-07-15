@@ -35,12 +35,12 @@ seance-vt = { path = "crates/seance-vt" }
 arboard = "3"
 bytes = "1"
 bytemuck = { version = "1", features = ["derive"] }
-cosmic-text = "0.18"
+cosmic-text = "0.19"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "registry", "std"] }
 tracing-appender = "0.2"
 etagere = "0.3"
-fancy-regex = "0.11"
+fancy-regex = "0.18"
 include_dir = "0.7"
 insta = { version = "1", features = ["glob", "yaml"] }
 libc = "0.2"
@@ -51,27 +51,27 @@ libghostty-vt = {
     features = ["kitty-graphics", "png"]
 }
 notify = "8"
-notify-debouncer-full = "0.6"
+notify-debouncer-full = "0.7"
 objc2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-quartz-core = "0.3"
 png = "0.18"
 polling = "3"
-pollster = "0.4"
+pollster = "1.0"
 portable-pty = "0.9"
 postcard = { version = "1", default-features = false, features = ["use-std"] }
 pretty_assertions = "1"
 proptest = "1"
-rand_core = "0.6"
-rand_pcg = "0.3"
+rand_core = "0.10"
+rand_pcg = "0.10"
 raw-window-handle = "0.6"
 rustc-hash = "2"
 serde = { version = "1", features = ["derive"] }
 serde-big-array = "0.5"
-tiny-skia = "0.11"
-toml = "0.9"
+tiny-skia = "0.12"
+toml = "1.1"
 unicode-width = "0.2"
-wgpu = "29"
+wgpu = "30"
 winit = "0.30"
 
 [workspace.lints.clippy]
