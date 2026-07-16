@@ -394,8 +394,18 @@ fn walk_virtual_placements(
         let mut screen_col: u32 = 0;
         while let Some(cell) = cell_iter.next() {
             match decode_placeholder(cell) {
-                Some(decoded) => {
+                Some(raw) => {
                     placeholder_cells += 1;
+                    // The current run, when it is the immediately-preceding
+                    // placeholder cell with matching image/placement, is the
+                    // "cell to the left" that Kitty inherits omitted row/col
+                    // diacritics from.
+                    let left = run.as_ref().filter(|r| {
+                        r.image_id == raw.full_image_id()
+                            && r.placement_id == raw.placement_id
+                            && r.screen_col_start + r.width == screen_col
+                    });
+                    let decoded = resolve_placeholder(&raw, left);
                     let appended = run
                         .as_mut()
                         .and_then(|r| r.append(&decoded, screen_col))
@@ -430,8 +440,28 @@ fn walk_virtual_placements(
     Some(())
 }
 
-/// Decoded payload of one placeholder cell. `vp_row` / `vp_col` default
-/// to 0 when diacritics are missing (matches Kitty semantics).
+/// Raw payload of one placeholder cell before row/column inheritance.
+///
+/// `vp_row` / `vp_col` are `None` when the corresponding diacritic is absent.
+/// Kitty does not treat an absent diacritic as literal 0: it inherits the
+/// value from the placeholder cell to the left (same image id + placement id,
+/// adjacent column). Resolution happens in [`resolve_placeholder`].
+struct RawPlaceholder {
+    image_id_low: u32,
+    image_id_high: Option<u8>,
+    placement_id: u32,
+    vp_row: Option<u32>,
+    vp_col: Option<u32>,
+}
+
+impl RawPlaceholder {
+    fn full_image_id(&self) -> u32 {
+        let high = self.image_id_high.unwrap_or(0) as u32;
+        self.image_id_low | (high << 24)
+    }
+}
+
+/// A placeholder cell with row/column resolved to concrete grid coordinates.
 struct DecodedPlaceholder {
     image_id_low: u32,
     image_id_high: Option<u8>,
@@ -444,6 +474,34 @@ impl DecodedPlaceholder {
     fn full_image_id(&self) -> u32 {
         let high = self.image_id_high.unwrap_or(0) as u32;
         self.image_id_low | (high << 24)
+    }
+}
+
+/// Resolve an absent row/column diacritic against the placeholder cell to the
+/// left, per the Kitty Unicode-placeholder spec: with no diacritics the row is
+/// inherited and the column is the left cell's column + 1; with only the row
+/// diacritic the column still auto-increments, but only when the resolved row
+/// matches the left cell's row. `left` is `None` when there is no adjacent
+/// same-image placeholder cell (start of a run), in which case absent values
+/// fall back to 0.
+fn resolve_placeholder(raw: &RawPlaceholder, left: Option<&PlaceholderRun>) -> DecodedPlaceholder {
+    let vp_row = match raw.vp_row {
+        Some(r) => r,
+        None => left.map_or(0, |l| l.vp_row),
+    };
+    let vp_col = match raw.vp_col {
+        Some(c) => c,
+        None => match left {
+            Some(l) if l.vp_row == vp_row => l.vp_col_start + l.width,
+            _ => 0,
+        },
+    };
+    DecodedPlaceholder {
+        image_id_low: raw.image_id_low,
+        image_id_high: raw.image_id_high,
+        placement_id: raw.placement_id,
+        vp_row,
+        vp_col,
     }
 }
 
@@ -539,9 +597,11 @@ fn layer_matches(layer: PlacementLayer, z: i32) -> bool {
 }
 
 /// Decode a single cell as a placeholder. Returns `None` if the cell's
-/// first grapheme codepoint is not `U+10EEEE`. Missing diacritics yield
-/// `vp_row=0` / `vp_col=0` per Kitty semantics.
-fn decode_placeholder(cell: &CellIteration<'_, '_>) -> Option<DecodedPlaceholder> {
+/// first grapheme codepoint is not `U+10EEEE`. Absent row/column diacritics
+/// are reported as `None`, not 0 — Kitty inherits them from the cell to the
+/// left (see [`resolve_placeholder`]). Diacritics are positional: the first
+/// encodes the row, the second the column, the third the image-id high byte.
+fn decode_placeholder(cell: &CellIteration<'_, '_>) -> Option<RawPlaceholder> {
     let graphemes = cell.graphemes().ok()?;
     let mut it = graphemes.iter();
     let first = *it.next()?;
@@ -549,14 +609,8 @@ fn decode_placeholder(cell: &CellIteration<'_, '_>) -> Option<DecodedPlaceholder
         return None;
     }
 
-    let vp_row = it
-        .next()
-        .and_then(|c| diacritic_index(*c as u32))
-        .unwrap_or(0);
-    let vp_col = it
-        .next()
-        .and_then(|c| diacritic_index(*c as u32))
-        .unwrap_or(0);
+    let vp_row = it.next().and_then(|c| diacritic_index(*c as u32));
+    let vp_col = it.next().and_then(|c| diacritic_index(*c as u32));
     let image_id_high = it
         .next()
         .and_then(|c| diacritic_index(*c as u32))
@@ -571,7 +625,7 @@ fn decode_placeholder(cell: &CellIteration<'_, '_>) -> Option<DecodedPlaceholder
     // matches chafa/timg (they don't emit placement IDs).
     let placement_id = 0;
 
-    Some(DecodedPlaceholder {
+    Some(RawPlaceholder {
         image_id_low,
         image_id_high,
         placement_id,
@@ -629,5 +683,67 @@ mod tests {
         assert_eq!(diacritic_index(0x0483), Some(30));
         assert_eq!(diacritic_index(0x1D244), Some(296));
         assert_eq!(diacritic_index(0x0000), None);
+    }
+
+    fn raw(image_id_low: u32, vp_row: Option<u32>, vp_col: Option<u32>) -> RawPlaceholder {
+        RawPlaceholder {
+            image_id_low,
+            image_id_high: None,
+            placement_id: 0,
+            vp_row,
+            vp_col,
+        }
+    }
+
+    #[test]
+    fn absent_diacritics_without_left_default_to_zero() {
+        let d = resolve_placeholder(&raw(1, None, None), None);
+        assert_eq!(d.vp_row, 0);
+        assert_eq!(d.vp_col, 0);
+    }
+
+    #[test]
+    fn absent_column_inherits_from_left_cell() {
+        // First cell carries the explicit (row=0, col=0); the next cell omits
+        // both diacritics and must resolve to (row=0, col=1).
+        let first = resolve_placeholder(&raw(1, Some(0), Some(0)), None);
+        let run = PlaceholderRun::new(&first, 5, 0);
+        let next = resolve_placeholder(&raw(1, None, None), Some(&run));
+        assert_eq!(next.vp_row, 0);
+        assert_eq!(next.vp_col, 1);
+    }
+
+    #[test]
+    fn explicit_column_overrides_inheritance() {
+        let run = PlaceholderRun::new(&resolve_placeholder(&raw(1, Some(0), Some(0)), None), 5, 0);
+        let next = resolve_placeholder(&raw(1, Some(0), Some(7)), Some(&run));
+        assert_eq!(next.vp_col, 7);
+    }
+
+    #[test]
+    fn explicit_row_change_resets_inherited_column() {
+        // Only the row diacritic is present and it differs from the left
+        // cell's row, so the column does not auto-increment.
+        let run = PlaceholderRun::new(&resolve_placeholder(&raw(1, Some(0), Some(3)), None), 5, 0);
+        let next = resolve_placeholder(&raw(1, Some(2), None), Some(&run));
+        assert_eq!(next.vp_row, 2);
+        assert_eq!(next.vp_col, 0);
+    }
+
+    #[test]
+    fn inherited_cells_extend_a_single_run() {
+        // A three-cell row where only the first cell carries diacritics must
+        // collapse into one run spanning columns 0..=2, not three width-1 runs.
+        let first = resolve_placeholder(&raw(1, Some(0), Some(0)), None);
+        let mut run = PlaceholderRun::new(&first, 5, 0);
+
+        let second = resolve_placeholder(&raw(1, None, None), Some(&run));
+        assert!(run.append(&second, 1).is_some());
+        let third = resolve_placeholder(&raw(1, None, None), Some(&run));
+        assert!(run.append(&third, 2).is_some());
+
+        assert_eq!(run.width, 3);
+        assert_eq!(run.vp_col_start, 0);
+        assert_eq!(run.screen_col_start, 0);
     }
 }
