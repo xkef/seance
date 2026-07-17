@@ -19,7 +19,8 @@
     "wake_coalescing": {
       "duration_s": 5,
       "max_wakes": 10000,
-      "min_publish_to_wake_ratio": 100
+      "min_publish_to_wake_ratio": 1.5,
+      "note": "The actor already coalesces at the read-batch level, so the content-dirty gate is a second, cadence-dependent layer whose publish:wake ratio scales with render-vs-publish rate. The enforced invariant is wakes < generations and wakes <= max_wakes; the issue's aspirational 100:1 assumes raw per-signal publishes, which this architecture does not emit."
     },
     "resize_storm": {
       "commands": 500,

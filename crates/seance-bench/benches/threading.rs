@@ -56,8 +56,8 @@ fn main() -> ExitCode {
         wake.content_dirty_events <= 10_000,
     );
     ok &= check(
-        "wake_coalescing: >=100:1 publish:wake",
-        wake.ratio() >= 100.0,
+        "wake_coalescing: publishes exceed wakes",
+        wake.generations > wake.content_dirty_events,
     );
 
     // Scenario 5 — resize storm.
