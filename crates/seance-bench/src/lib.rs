@@ -13,6 +13,7 @@
 //! those bytes through a real VT and time `CellBuilder::build_frame` end-to-end.
 
 pub mod gpu;
+pub mod threading;
 pub mod workloads;
 
 use std::time::Duration;

@@ -18,8 +18,17 @@ publish = false
 name = "frame-time"
 path = "src/bin/frame_time.rs"
 
+[[bench]]
+name = "threading"
+path = "benches/threading.rs"
+harness = false
+
 [dependencies]
+# internal
+seance-vt.workspace = true
+
 # external
+bytes.workspace = true
 pollster.workspace = true
 wgpu.workspace = true
 
