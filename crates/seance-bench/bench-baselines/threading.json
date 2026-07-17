@@ -1,0 +1,34 @@
+{
+  "description": "Pass/fail thresholds for the threading stress scenarios (sub-issue #172). Latency bounds assume a release build on the dev machine; the bench runner in benches/threading.rs enforces these. A PR that regresses a bound must update it here with justification.",
+  "scenarios": {
+    "reader_saturation": {
+      "markers": 200,
+      "keystroke_to_echo_p50_ms": 16,
+      "keystroke_to_echo_p99_ms": 50,
+      "require_all_markers_echoed": true
+    },
+    "dec2026_bursts": {
+      "bursts": 1000,
+      "max_wakes_over_close_count_pct": 10
+    },
+    "shutdown_race": {
+      "iterations": 1000,
+      "max_double_exited": 0,
+      "max_join_timeouts": 0
+    },
+    "wake_coalescing": {
+      "duration_s": 5,
+      "max_wakes": 10000,
+      "min_publish_to_wake_ratio": 1.5,
+      "note": "The actor already coalesces at the read-batch level, so the content-dirty gate is a second, cadence-dependent layer whose publish:wake ratio scales with render-vs-publish rate. The enforced invariant is wakes < generations and wakes <= max_wakes; the issue's aspirational 100:1 assumes raw per-signal publishes, which this architecture does not emit."
+    },
+    "resize_storm": {
+      "commands": 500,
+      "require_converged_to_last_size": true
+    },
+    "command_while_flooding": {
+      "max_latency_ms": 16,
+      "require_applied": true
+    }
+  }
+}
