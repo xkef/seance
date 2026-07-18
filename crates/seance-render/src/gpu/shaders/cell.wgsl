@@ -16,9 +16,9 @@ struct Uniforms {
     cursor_pos: vec2<u32>,
     cursor_color: vec4<f32>,
     cursor_wide: u32,
-    overlay_shape: u32,
-    overlay_pos: vec2<u32>,
-    overlay_color: vec4<f32>,
+    cursor_block: u32,
+    _pad_cursor0: vec2<u32>,
+    _pad_cursor1: vec4<u32>,
     selection_start: vec2<u32>,
     selection_end: vec2<u32>,
     selection_color: vec4<f32>,
@@ -203,32 +203,6 @@ fn fs_cell_bg(in: FullScreenOut) -> @location(0) vec4<f32> {
         color = vec4<f32>(sel.rgb, 1.0);
     }
 
-    if uniforms.cursor_visible != 0u
-       && uniforms.overlay_shape != 0u
-       && col == uniforms.overlay_pos.x
-       && row == uniforms.overlay_pos.y {
-        let local = pos - uniforms.cell_size * vec2<f32>(f32(col), f32(row));
-        let cur_color = uniforms.overlay_color;
-        var draw = false;
-
-        if uniforms.overlay_shape == 1u {
-            draw = true;
-        } else if uniforms.overlay_shape == 2u {
-            let thickness = max(2.0, uniforms.cell_size.y * 0.12);
-            draw = local.y >= (uniforms.cell_size.y - thickness);
-        } else if uniforms.overlay_shape == 3u {
-            let thickness = max(2.0, uniforms.cell_size.x * 0.1);
-            draw = local.x < thickness;
-        }
-
-        if draw {
-            color = vec4<f32>(
-                mix(color.rgb, cur_color.rgb, cur_color.a),
-                max(color.a, cur_color.a),
-            );
-        }
-    }
-
     if is_in_hovered_link(col, row) {
         let local = pos - uniforms.cell_size * vec2<f32>(f32(col), f32(row));
         let thickness = max(1.0, uniforms.cell_size.y * 0.06);
@@ -313,8 +287,9 @@ fn vs_cell_text(
             color = vec4<f32>(effective_bg, color.a);
         }
     } else if (at_cursor || at_cursor_wide) && !is_cursor_glyph {
-        if uniforms.overlay_shape == 1u {
-            // Block cursor fills the cell; invert glyph to bg for legibility.
+        if uniforms.cursor_block != 0u {
+            // Block cursor fills the cell (drawn as a sprite behind the glyph);
+            // invert the glyph to the cell bg for legibility.
             color = vec4<f32>(effective_bg, color.a);
         } else {
             color = uniforms.cursor_color;

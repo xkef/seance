@@ -91,18 +91,10 @@ impl App {
             return;
         }
         if surface.content_dirty {
-            surface.content_dirty = false;
             surface.last_vt_cursor_shape = surface
                 .mux
                 .pane_view(surface.active_pane)
                 .and_then(|view| view.cursor_shape());
-            if let Some(mut source) = surface
-                .mux
-                .pane_view(surface.active_pane)
-                .and_then(|view| view.frame_source())
-            {
-                surface.renderer.update_frame(&mut source);
-            }
         }
         let selection = surface.selection_range();
         let hovered_link = surface.hovered_link_range();
@@ -116,6 +108,23 @@ impl App {
             .map(Into::into)
             .unwrap_or_else(|| self.config.cursor.style.into());
         surface.render_inputs.vt_cursor_visible = !self.config.cursor.blink || surface.blink_on;
+        // The cursor is drawn as a sprite cell during `update_frame`, so its
+        // resolved shape and visibility are threaded into the build — not left
+        // to `render` as they were when the cursor was a shader shape.
+        if surface.content_dirty {
+            surface.content_dirty = false;
+            let cursor_shape = surface.render_inputs.cursor_shape;
+            let cursor_visible = surface.render_inputs.vt_cursor_visible;
+            if let Some(mut source) = surface
+                .mux
+                .pane_view(surface.active_pane)
+                .and_then(|view| view.frame_source())
+            {
+                surface
+                    .renderer
+                    .update_frame(&mut source, cursor_shape, cursor_visible);
+            }
+        }
         let rendered_generation = surface
             .mux
             .pane_view(surface.active_pane)

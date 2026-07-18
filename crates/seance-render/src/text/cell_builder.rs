@@ -19,12 +19,13 @@ use std::collections::HashMap;
 use rustc_hash::FxBuildHasher;
 use seance_config::Theme;
 use seance_frame::{CellView, CellVisitor, FrameSource};
-use seance_protocol::frame::{CellColor, DirtySnapshot};
+use seance_protocol::frame::{CellColor, CursorInfo, DirtySnapshot};
 
 use super::atlas::{AtlasEntry, GlyphAtlas};
 use super::backend::{CellMetrics, FontAttrs, GlyphFormat, GlyphId, ShapedGlyph, TextBackend};
-use super::procedural;
+use super::procedural::{self, CursorSprite};
 use super::shape_cache::ShapeCache;
+use crate::gpu::uniforms::CursorShape;
 
 /// GPU instance record (32 bytes, matches the WGSL vertex buffer).
 #[repr(C)]
@@ -64,6 +65,23 @@ pub struct BuildFrameConfig<'a> {
     pub theme: &'a Theme,
     pub bg_color: [u8; 4],
     pub min_contrast: f32,
+    /// App-resolved cursor shape (VT-reported shape, else the configured
+    /// default). Drawn as a sprite cell rather than a shader shape.
+    pub cursor_shape: CursorShape,
+    /// Whether the cursor should be drawn this frame. Combines the blink/config
+    /// gate with the VT's own visibility (`CursorInfo::visible`).
+    pub cursor_visible: bool,
+}
+
+/// A resolved cursor sprite ready to emit. `behind` is set for the block shape,
+/// which draws under the glyph (with the glyph inverted for legibility); the
+/// bar and underline shapes draw over it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CursorDraw {
+    sprite: CursorSprite,
+    pos: [u16; 2],
+    color: [u8; 4],
+    behind: bool,
 }
 
 type GlyphSlots = HashMap<GlyphId, AtlasEntry, FxBuildHasher>;
@@ -175,6 +193,14 @@ pub struct CellBuilder {
     /// given `CellMetrics`. Cleared whenever the cell size changes, via
     /// [`Self::reset_glyphs`].
     procedural_slots: ProceduralSlots,
+    /// Atlas slots for the three cursor sprites, indexed by
+    /// [`cursor_slot_index`]. Metric-stable like the procedural slots, so
+    /// cached across frames and dropped on [`Self::reset_glyphs`].
+    cursor_slots: [Option<AtlasEntry>; 3],
+    /// Cursor drawn on the previous build. A change with no VT content change
+    /// reports `Clean`, so the build forces a re-upload to move the sprite
+    /// (see [`Self::build_frame`]).
+    last_cursor: Option<CursorDraw>,
     shape_cache: ShapeCache,
     bg_cells: Vec<[u8; 4]>,
     text_cells: Vec<CellText>,
@@ -191,6 +217,8 @@ impl CellBuilder {
             atlas: GlyphAtlas::new(),
             glyph_slots: HashMap::with_hasher(FxBuildHasher),
             procedural_slots: HashMap::with_hasher(FxBuildHasher),
+            cursor_slots: [None; 3],
+            last_cursor: None,
             shape_cache: ShapeCache::new(),
             bg_cells: Vec::new(),
             text_cells: Vec::new(),
@@ -229,6 +257,15 @@ impl CellBuilder {
             (m.baseline, g)
         };
         let cursor = source.cursor();
+        let cursor_draw = resolve_cursor_draw(&config, &cursor, geom.grid_cols, geom.grid_rows);
+
+        // The cursor sprite lives in `text_cells`, which only re-uploads on a
+        // non-`Clean` frame. A blink toggle or a same-content cursor move can
+        // report `Clean`, so force a re-upload when the drawn cursor changes.
+        if cursor_draw != self.last_cursor && matches!(self.last_dirty, DirtySnapshot::Clean) {
+            self.last_dirty = DirtySnapshot::Full;
+        }
+        self.last_cursor = cursor_draw;
 
         walk_grid_into_runs(
             source,
@@ -240,6 +277,18 @@ impl CellBuilder {
         );
 
         self.text_cells.clear();
+        // Block cursor draws behind the glyph: emit before the text so later
+        // glyph instances paint over it (the cell-text pass blends in buffer
+        // order). The `vs_cell_text` inversion keeps the glyph legible.
+        if let Some(cd) = cursor_draw.filter(|c| c.behind) {
+            emit_cursor_cell(
+                cd,
+                backend.metrics(),
+                &mut self.atlas,
+                &mut self.cursor_slots,
+                &mut self.text_cells,
+            );
+        }
         shape_runs(
             &self.runs,
             backend,
@@ -256,6 +305,17 @@ impl CellBuilder {
             &mut self.procedural_slots,
             &mut self.text_cells,
         );
+        // Bar and underline cursors draw in front of the glyph: emit last so
+        // the mark lands over the text.
+        if let Some(cd) = cursor_draw.filter(|c| !c.behind) {
+            emit_cursor_cell(
+                cd,
+                backend.metrics(),
+                &mut self.atlas,
+                &mut self.cursor_slots,
+                &mut self.text_cells,
+            );
+        }
 
         self.atlas.clear_dirty();
 
@@ -287,6 +347,7 @@ impl CellBuilder {
         self.atlas.reset();
         self.glyph_slots.clear();
         self.procedural_slots.clear();
+        self.cursor_slots = [None; 3];
         self.shape_cache.clear();
     }
 
@@ -623,6 +684,84 @@ fn emit_procedural_cells(
     }
 }
 
+fn cursor_slot_index(sprite: CursorSprite) -> usize {
+    match sprite {
+        CursorSprite::Block => 0,
+        CursorSprite::Underline => 1,
+        CursorSprite::Bar => 2,
+    }
+}
+
+/// Resolve the frame's cursor into a drawable sprite, or `None` when nothing
+/// should be drawn: the cursor is gated off (blink/config or VT-hidden), the
+/// shape is `Hidden`, or the position falls outside the grid.
+fn resolve_cursor_draw(
+    config: &BuildFrameConfig<'_>,
+    cursor: &CursorInfo,
+    grid_cols: u16,
+    grid_rows: u16,
+) -> Option<CursorDraw> {
+    if !config.cursor_visible || !cursor.visible {
+        return None;
+    }
+    let sprite = match config.cursor_shape {
+        CursorShape::Block => CursorSprite::Block,
+        CursorShape::Underline => CursorSprite::Underline,
+        CursorShape::Bar => CursorSprite::Bar,
+        CursorShape::Hidden => return None,
+    };
+    if cursor.pos.col >= grid_cols || cursor.pos.row >= grid_rows {
+        return None;
+    }
+    Some(CursorDraw {
+        sprite,
+        pos: [cursor.pos.col, cursor.pos.row],
+        color: config.theme.cursor,
+        behind: matches!(sprite, CursorSprite::Block),
+    })
+}
+
+/// Rasterize the cursor sprite once (cached in `slots`), then emit a single
+/// [`CellText`] at the cursor cell, colored `draw.color`. Anchored like a
+/// full-cell procedural glyph.
+fn emit_cursor_cell(
+    draw: CursorDraw,
+    metrics: &CellMetrics,
+    atlas: &mut GlyphAtlas,
+    slots: &mut [Option<AtlasEntry>; 3],
+    out: &mut Vec<CellText>,
+) {
+    let idx = cursor_slot_index(draw.sprite);
+    let entry = match slots[idx] {
+        Some(e) => e,
+        None => {
+            let Some(rast) = procedural::cursor(draw.sprite, metrics) else {
+                return;
+            };
+            let Some(entry) = atlas.insert(
+                &rast.data,
+                rast.width,
+                rast.height,
+                rast.bearing_x,
+                rast.bearing_y,
+                matches!(rast.format, GlyphFormat::Color),
+            ) else {
+                return;
+            };
+            slots[idx] = Some(entry);
+            entry
+        }
+    };
+    out.push(CellText {
+        glyph_pos: entry.pos,
+        glyph_size: entry.size,
+        bearings: [entry.bearing_x as i16, entry.bearing_y as i16],
+        grid_pos: draw.pos,
+        color: draw.color,
+        atlas_and_flags: u32::from(entry.is_color),
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -640,6 +779,7 @@ mod tests {
         cells: &'a [FakeCell<'a>],
         dirty: DirtySnapshot,
         clear_count: u32,
+        cursor: CursorInfo,
     }
 
     impl<'a> FakeFrame<'a> {
@@ -650,7 +790,18 @@ mod tests {
                 cells,
                 dirty: DirtySnapshot::Full,
                 clear_count: 0,
+                cursor: CursorInfo::default(),
             }
+        }
+
+        fn with_cursor(mut self, col: u16, row: u16) -> Self {
+            self.cursor = CursorInfo {
+                pos: GridPos { col, row },
+                visible: true,
+                wide: false,
+                shape: None,
+            };
+            self
         }
     }
 
@@ -659,7 +810,7 @@ mod tests {
             (self.cols, self.rows)
         }
         fn cursor(&mut self) -> CursorInfo {
-            CursorInfo::default()
+            self.cursor
         }
         fn selection(&mut self) -> Option<(GridPos, GridPos)> {
             None
@@ -743,6 +894,8 @@ mod tests {
             theme,
             bg_color: [0, 0, 0, 255],
             min_contrast: 1.0,
+            cursor_shape: CursorShape::Hidden,
+            cursor_visible: false,
         }
     }
 
@@ -1537,5 +1690,156 @@ mod tests {
         // and land at the start of the grayscale plane again.
         assert_eq!(second.glyph_pos, first.glyph_pos);
         assert_eq!(second.glyph_size, first.glyph_size);
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // Cursor sprite cells (issue #263)
+    // ────────────────────────────────────────────────────────────────────
+
+    fn cursor_config(theme: &Theme, shape: CursorShape) -> BuildFrameConfig<'_> {
+        BuildFrameConfig {
+            cursor_shape: shape,
+            cursor_visible: true,
+            ..build_config(theme)
+        }
+    }
+
+    #[test]
+    fn block_cursor_emits_a_cell_before_the_glyphs() {
+        let theme = Theme::blank();
+        let cells = [
+            ("a", CellColor::Default, CellColor::Default, plain()),
+            ("b", CellColor::Default, CellColor::Default, plain()),
+        ];
+        let mut source = FakeFrame::new(2, 1, &cells).with_cursor(1, 0);
+        let mut backend = distributing_backend();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(
+            &mut source,
+            &mut backend,
+            cursor_config(&theme, CursorShape::Block),
+        );
+
+        // Cursor cell first (behind), then the two glyphs.
+        assert_eq!(builder.text_cells().len(), 3);
+        let cursor = &builder.text_cells()[0];
+        assert_eq!(cursor.grid_pos, [1, 0]);
+        assert_eq!(cursor.color, theme.cursor);
+        let glyph_cols: Vec<u16> = builder.text_cells()[1..]
+            .iter()
+            .map(|c| c.grid_pos[0])
+            .collect();
+        assert_eq!(glyph_cols, vec![0, 1]);
+    }
+
+    #[test]
+    fn bar_and_underline_cursors_emit_a_cell_after_the_glyphs() {
+        for shape in [CursorShape::Bar, CursorShape::Underline] {
+            let theme = Theme::blank();
+            let cells = [
+                ("a", CellColor::Default, CellColor::Default, plain()),
+                ("b", CellColor::Default, CellColor::Default, plain()),
+            ];
+            let mut source = FakeFrame::new(2, 1, &cells).with_cursor(0, 0);
+            let mut backend = distributing_backend();
+            let mut builder = CellBuilder::new();
+
+            builder.build_frame(&mut source, &mut backend, cursor_config(&theme, shape));
+
+            // Two glyphs, then the cursor mark on top.
+            assert_eq!(builder.text_cells().len(), 3, "shape {shape:?}");
+            let cursor = builder.text_cells().last().unwrap();
+            assert_eq!(cursor.grid_pos, [0, 0], "shape {shape:?}");
+            assert_eq!(cursor.color, theme.cursor, "shape {shape:?}");
+        }
+    }
+
+    #[test]
+    fn no_cursor_cell_when_hidden_or_invisible() {
+        let theme = Theme::blank();
+        let cells = [("a", CellColor::Default, CellColor::Default, plain())];
+
+        // Shape resolves but the cursor is gated off.
+        let mut source = FakeFrame::new(1, 1, &cells).with_cursor(0, 0);
+        let mut backend = distributing_backend();
+        let mut builder = CellBuilder::new();
+        let cfg = BuildFrameConfig {
+            cursor_visible: false,
+            ..cursor_config(&theme, CursorShape::Block)
+        };
+        builder.build_frame(&mut source, &mut backend, cfg);
+        assert_eq!(
+            builder.text_cells().len(),
+            1,
+            "gated-off cursor draws nothing"
+        );
+
+        // Visible but shape is Hidden.
+        let mut source = FakeFrame::new(1, 1, &cells).with_cursor(0, 0);
+        let mut builder = CellBuilder::new();
+        builder.build_frame(
+            &mut source,
+            &mut backend,
+            cursor_config(&theme, CursorShape::Hidden),
+        );
+        assert_eq!(builder.text_cells().len(), 1, "hidden shape draws nothing");
+    }
+
+    #[test]
+    fn off_grid_cursor_emits_no_cell() {
+        let theme = Theme::blank();
+        let cells = [("a", CellColor::Default, CellColor::Default, plain())];
+        let mut source = FakeFrame::new(1, 1, &cells).with_cursor(5, 5);
+        let mut backend = distributing_backend();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(
+            &mut source,
+            &mut backend,
+            cursor_config(&theme, CursorShape::Block),
+        );
+        assert_eq!(builder.text_cells().len(), 1);
+    }
+
+    #[test]
+    fn cursor_move_forces_reupload_on_otherwise_clean_frame() {
+        let theme = Theme::blank();
+        let cells = [
+            ("a", CellColor::Default, CellColor::Default, plain()),
+            ("b", CellColor::Default, CellColor::Default, plain()),
+        ];
+        let mut backend = distributing_backend();
+        let mut builder = CellBuilder::new();
+
+        // Frame 1: Full (initial), cursor at col 0.
+        let mut source = FakeFrame::new(2, 1, &cells).with_cursor(0, 0);
+        builder.build_frame(
+            &mut source,
+            &mut backend,
+            cursor_config(&theme, CursorShape::Block),
+        );
+        assert_eq!(*builder.last_dirty(), DirtySnapshot::Full);
+
+        // Frame 2: VT reports Clean but the cursor moved → force Full so the
+        // text buffer (carrying the sprite) re-uploads.
+        let mut source = FakeFrame::new(2, 1, &cells).with_cursor(1, 0);
+        source.dirty = DirtySnapshot::Clean;
+        builder.build_frame(
+            &mut source,
+            &mut backend,
+            cursor_config(&theme, CursorShape::Block),
+        );
+        assert_eq!(*builder.last_dirty(), DirtySnapshot::Full);
+
+        // Frame 3: cursor unchanged and VT still Clean → stays Clean.
+        let mut source = FakeFrame::new(2, 1, &cells).with_cursor(1, 0);
+        source.dirty = DirtySnapshot::Clean;
+        builder.build_frame(
+            &mut source,
+            &mut backend,
+            cursor_config(&theme, CursorShape::Block),
+        );
+        assert_eq!(*builder.last_dirty(), DirtySnapshot::Clean);
     }
 }

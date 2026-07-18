@@ -49,9 +49,16 @@ pub(crate) struct Uniforms {
     pub cursor_pos: [u32; 2],
     pub cursor_color: [f32; 4],
     pub cursor_wide: u32,
-    pub overlay_shape: u32,
-    pub overlay_pos: [u32; 2],
-    pub overlay_color: [f32; 4],
+    /// `1` when the cursor at `cursor_pos` is a block, so `vs_cell_text`
+    /// inverts the covered glyph to the cell bg. The block/bar/underline
+    /// geometry itself is drawn as a sprite cell (see
+    /// [`crate::text::cell_builder`]), not in the fragment shader.
+    pub cursor_block: u32,
+    /// Reserved: the retired `overlay_shape`/`overlay_pos`/`overlay_color`
+    /// cursor uniforms occupied these bytes. Kept as padding so the std140
+    /// offsets of every field below are unchanged.
+    pub _pad_cursor0: [u32; 2],
+    pub _pad_cursor1: [u32; 4],
     pub selection_start: [u32; 2],
     pub selection_end: [u32; 2],
     pub selection_color: [f32; 4],
@@ -111,9 +118,13 @@ impl Uniforms {
             cursor_pos: [fi.cursor_pos[0] as u32, fi.cursor_pos[1] as u32],
             cursor_color: u8x4_to_f32(fi.cursor_color),
             cursor_wide: if fi.cursor_wide { 1 } else { 0 },
-            overlay_shape: inputs.cursor_shape as u32,
-            overlay_pos: [fi.cursor_pos[0] as u32, fi.cursor_pos[1] as u32],
-            overlay_color: u8x4_to_f32(theme.cursor),
+            cursor_block: if inputs.cursor_shape == CursorShape::Block {
+                1
+            } else {
+                0
+            },
+            _pad_cursor0: [0; 2],
+            _pad_cursor1: [0; 4],
             selection_start: sel_start,
             selection_end: sel_end,
             selection_color: theme.selection_bg,
@@ -166,17 +177,57 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cursor_style_maps_to_overlay_shape() {
+    fn cursor_style_maps_to_shape() {
         assert_eq!(CursorShape::from(CursorStyle::Block) as u32, 1);
         assert_eq!(CursorShape::from(CursorStyle::Underline) as u32, 2);
         assert_eq!(CursorShape::from(CursorStyle::Bar) as u32, 3);
     }
 
     #[test]
-    fn vt_cursor_shape_maps_to_overlay_shape() {
+    fn vt_cursor_shape_maps_to_shape() {
         assert_eq!(CursorShape::from(ProtocolCursorShape::Block) as u32, 1);
         assert_eq!(CursorShape::from(ProtocolCursorShape::Underline) as u32, 2);
         assert_eq!(CursorShape::from(ProtocolCursorShape::Bar) as u32, 3);
+    }
+
+    #[test]
+    fn cursor_block_flag_set_only_for_block_shape() {
+        let fi = FrameInfo {
+            cell_width: 8.0,
+            cell_height: 16.0,
+            baseline: 12.0,
+            grid_cols: 10,
+            grid_rows: 4,
+            grid_padding: [0.0; 4],
+            bg_color: [0, 0, 0, 255],
+            min_contrast: 1.0,
+            cursor_pos: [0, 0],
+            cursor_visible: true,
+            cursor_color: [255, 255, 255, 255],
+            cursor_wide: false,
+        };
+        let block = Uniforms::from_frame_info(
+            &fi,
+            80.0,
+            64.0,
+            &RenderInputs {
+                cursor_shape: CursorShape::Block,
+                ..RenderInputs::default()
+            },
+            &Theme::blank(),
+        );
+        assert_eq!(block.cursor_block, 1);
+        let bar = Uniforms::from_frame_info(
+            &fi,
+            80.0,
+            64.0,
+            &RenderInputs {
+                cursor_shape: CursorShape::Bar,
+                ..RenderInputs::default()
+            },
+            &Theme::blank(),
+        );
+        assert_eq!(bar.cursor_block, 0);
     }
 
     #[test]
