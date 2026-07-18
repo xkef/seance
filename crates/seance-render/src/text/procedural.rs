@@ -51,6 +51,53 @@ pub(crate) fn rasterize(c: char, metrics: &CellMetrics) -> Option<RasterizedGlyp
     })
 }
 
+/// A drawn cursor shape. Not keyed by a codepoint — the cursor is emitted by
+/// the renderer for a grid position, not by a grapheme in the grid — so it
+/// lives outside [`lookup`] and is rasterized on demand by
+/// [`crate::text::cell_builder`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CursorSprite {
+    Block,
+    Underline,
+    Bar,
+}
+
+/// Rasterize a cursor sprite into a `cell_width × cell_height` grayscale alpha
+/// bitmap: a full-cell fill (block), a bottom bar (underline), or a left bar
+/// (bar). The mask is white; the cursor color is applied per-instance
+/// downstream, exactly like a font glyph. The bar thicknesses match the
+/// `max(2.0, …)` math the retired `fs_cell_bg` cursor branch used, so the cell
+/// is drawn identically.
+pub(crate) fn cursor(sprite: CursorSprite, metrics: &CellMetrics) -> Option<RasterizedGlyph> {
+    let width = (metrics.cell_width.round().max(1.0)) as u32;
+    let height = (metrics.cell_height.round().max(1.0)) as u32;
+    let mut pixmap = Pixmap::new(width, height)?;
+    let (w, h) = (width as f32, height as f32);
+    match sprite {
+        CursorSprite::Block => fill_rect(&mut pixmap, 0.0, 0.0, w, h),
+        CursorSprite::Underline => {
+            let thickness = (h * 0.12).max(2.0).round().min(h);
+            fill_rect(&mut pixmap, 0.0, h - thickness, w, thickness);
+        }
+        CursorSprite::Bar => {
+            let thickness = (w * 0.1).max(2.0).round().min(w);
+            fill_rect(&mut pixmap, 0.0, 0.0, thickness, h);
+        }
+    }
+    let data = extract_alpha(pixmap.data());
+    // Full-cell sprite: bearing_y = baseline puts the bitmap's top row at the
+    // top of the cell (see `rasterize`), so the bar lands where its shape sits
+    // within the cell box.
+    Some(RasterizedGlyph {
+        data,
+        width,
+        height,
+        bearing_x: 0,
+        bearing_y: metrics.baseline.round() as i32,
+        format: GlyphFormat::Alpha,
+    })
+}
+
 // ── encoding ────────────────────────────────────────────────────────────────
 
 /// Stroke weight for one side of a box-drawing cell. `Double` is rendered as
@@ -746,6 +793,57 @@ mod tests {
         assert_eq!(g.format, GlyphFormat::Alpha);
         assert_eq!(g.bearing_x, 0);
         assert_eq!(g.bearing_y, 16);
+    }
+
+    #[test]
+    fn cursor_block_fills_the_whole_cell() {
+        let m = metrics(10, 20);
+        let g = cursor(CursorSprite::Block, &m).unwrap();
+        assert_eq!(g.width, 10);
+        assert_eq!(g.height, 20);
+        assert_eq!(g.bearing_y, 16);
+        assert_eq!(g.format, GlyphFormat::Alpha);
+        assert!(
+            g.data.iter().all(|&a| a == 255),
+            "block cursor must ink every pixel"
+        );
+    }
+
+    #[test]
+    fn cursor_underline_inks_only_the_bottom_bar() {
+        let m = metrics(10, 20);
+        let g = cursor(CursorSprite::Underline, &m).unwrap();
+        let w = g.width as usize;
+        let h = g.height as usize;
+        // thickness = round(max(2, 20*0.12)) = round(2.4) = 2 rows.
+        assert_eq!(g.data[0], 0, "top of cell must be clear");
+        assert_eq!(g.data[(h - 1) * w], 255, "bottom-left inked");
+        assert_eq!(g.data[(h - 1) * w + (w - 1)], 255, "bottom-right inked");
+        assert_eq!(g.data[(h - 3) * w], 0, "row above the bar must be clear");
+    }
+
+    #[test]
+    fn cursor_bar_inks_only_the_left_edge() {
+        let m = metrics(20, 20);
+        let g = cursor(CursorSprite::Bar, &m).unwrap();
+        let w = g.width as usize;
+        // thickness = round(max(2, 20*0.1)) = 2 cols.
+        assert_eq!(g.data[0], 255, "top-left inked");
+        assert_eq!(g.data[w * 5], 255, "left edge inked mid-cell");
+        assert_eq!(g.data[w * 5 + (w - 1)], 0, "right edge must be clear");
+    }
+
+    #[test]
+    fn cursor_thickness_clamps_to_at_least_two_pixels() {
+        // A tiny cell still yields a visible bar (thickness clamps to 2, then
+        // to the cell extent).
+        let m = metrics(3, 3);
+        let bar = cursor(CursorSprite::Bar, &m).unwrap();
+        assert_eq!(bar.data[0], 255, "bar still inks the left edge");
+        let under = cursor(CursorSprite::Underline, &m).unwrap();
+        let w = under.width as usize;
+        let h = under.height as usize;
+        assert_eq!(under.data[(h - 1) * w], 255, "underline still inks bottom");
     }
 
     #[test]

@@ -157,7 +157,12 @@ impl TerminalRenderer {
             .resize(winit::dpi::PhysicalSize::new(width, height));
     }
 
-    pub fn update_frame(&mut self, source: &mut dyn FrameSource) {
+    pub fn update_frame(
+        &mut self,
+        source: &mut dyn FrameSource,
+        cursor_shape: CursorShape,
+        cursor_visible: bool,
+    ) {
         let bg_color = self.effective_bg_color();
         let min_contrast = self.min_contrast;
         self.cell_builder.build_frame(
@@ -170,6 +175,8 @@ impl TerminalRenderer {
                 theme: &self.theme,
                 bg_color,
                 min_contrast,
+                cursor_shape,
+                cursor_visible,
             },
         );
         if let Some(fi) = self.cell_builder.last_frame() {
