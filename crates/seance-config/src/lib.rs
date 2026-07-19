@@ -15,7 +15,7 @@ pub use diff::ConfigDiff;
 pub use schema::{
     ClipboardConfig, ClipboardPolicy, Config, CursorConfig, CursorStyle, FontConfig, InputConfig,
     KeybindConfig, LinkModifiersConfig, LinksConfig, MacosOptionAsAlt, ScrollbackConfig,
-    WindowConfig,
+    WindowBlur, WindowConfig,
 };
 pub use theme::{Theme, load as load_theme};
 
@@ -142,6 +142,44 @@ mod tests {
             cfg.font.features,
             vec!["calt".to_string(), "liga".to_string()]
         );
+    }
+
+    #[test]
+    fn window_blur_defaults_to_none() {
+        let cfg = Config::default();
+        assert_eq!(cfg.window.blur, WindowBlur::None);
+        assert_eq!(cfg.window.background_opacity, 1.0);
+    }
+
+    #[test]
+    fn window_blur_parses_each_variant() {
+        for (raw, want) in [
+            ("none", WindowBlur::None),
+            ("vibrant-light", WindowBlur::VibrantLight),
+            ("vibrant-dark", WindowBlur::VibrantDark),
+            ("under-window", WindowBlur::UnderWindow),
+        ] {
+            let src = format!(
+                r#"
+                [window]
+                blur = "{raw}"
+                "#,
+            );
+            let cfg: Config = toml::from_str(&src).unwrap();
+            assert_eq!(cfg.window.blur, want, "raw={raw}");
+        }
+    }
+
+    #[test]
+    fn window_blur_rejects_unknown_variant() {
+        let err = toml::from_str::<Config>(
+            r#"
+            [window]
+            blur = "frosted"
+            "#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("blur"), "{err}");
     }
 
     #[test]

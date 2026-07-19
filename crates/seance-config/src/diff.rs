@@ -41,6 +41,10 @@ pub struct ConfigDiff {
     /// Min-contrast, cursor, or opacity changed — a plain repaint is
     /// enough once the renderer has consumed the new values.
     pub repaint_only: bool,
+    /// `window.blur` changed — caller reconfigures the macOS vibrancy view
+    /// (swap/remove the `NSVisualEffectView` material); a repaint alone does
+    /// not pick this up. Inert on non-macOS.
+    pub window_blur_changed: bool,
     /// `[input]` section changed — caller must push the new settings to
     /// `InputHandler` (e.g. `macos_option_as_alt`).
     pub input_changed: bool,
@@ -77,6 +81,8 @@ impl ConfigDiff {
             || old.cursor.style != new.cursor.style
             || old.cursor.blink != new.cursor.blink;
 
+        let window_blur_changed = old.window.blur != new.window.blur;
+
         let input_changed = old.input.macos_option_as_alt != new.input.macos_option_as_alt;
         let links_changed = old.links != new.links;
         let keybinds_changed = old.keybind != new.keybind;
@@ -91,6 +97,7 @@ impl ConfigDiff {
             font_features_changed,
             window_padding_changed,
             repaint_only,
+            window_blur_changed,
             input_changed,
             links_changed,
             keybinds_changed,
@@ -108,6 +115,7 @@ impl ConfigDiff {
             || self.font_features_changed
             || self.window_padding_changed
             || self.repaint_only
+            || self.window_blur_changed
             || self.input_changed
             || self.links_changed
             || self.keybinds_changed
@@ -119,7 +127,7 @@ impl ConfigDiff {
 #[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
-    use crate::{CursorStyle, MacosOptionAsAlt};
+    use crate::{CursorStyle, MacosOptionAsAlt, WindowBlur};
 
     #[test]
     fn identical_configs_yield_empty_diff() {
@@ -222,6 +230,30 @@ mod tests {
         let d = ConfigDiff::between(&a, &b);
         assert!(d.window_padding_changed);
         assert!(!d.repaint_only);
+    }
+
+    #[test]
+    fn window_blur_change_is_detected_separately() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.window.blur = WindowBlur::VibrantDark;
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.window_blur_changed);
+        assert!(!d.repaint_only);
+        assert!(!d.window_padding_changed);
+        assert!(!d.theme_changed);
+        assert!(!d.is_empty());
+    }
+
+    #[test]
+    fn background_opacity_change_is_repaint_only() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.window.background_opacity = 0.85;
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.repaint_only);
+        assert!(!d.window_blur_changed);
+        assert!(!d.window_padding_changed);
     }
 
     #[test]

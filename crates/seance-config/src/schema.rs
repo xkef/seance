@@ -73,6 +73,25 @@ impl Default for FontConfig {
     }
 }
 
+/// Background blur / translucency material painted behind the cell grid.
+///
+/// Only honored on macOS, where each non-`None` variant maps to an
+/// `NSVisualEffectView` material placed behind the wgpu layer; on other
+/// platforms it is inert. Independent of [`WindowConfig::background_opacity`]:
+/// opacity controls the alpha the shader writes for the background, blur
+/// controls what shows through that alpha.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WindowBlur {
+    /// No vibrancy view; the window shows through as a flat translucent color
+    /// (or opaque, at `background_opacity = 1.0`). Default.
+    #[default]
+    None,
+    VibrantLight,
+    VibrantDark,
+    UnderWindow,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct WindowConfig {
@@ -80,6 +99,7 @@ pub struct WindowConfig {
     pub padding_y: u16,
     pub decoration: bool,
     pub background_opacity: f32,
+    pub blur: WindowBlur,
 }
 
 impl Default for WindowConfig {
@@ -89,6 +109,7 @@ impl Default for WindowConfig {
             padding_y: 0,
             decoration: true,
             background_opacity: 1.0,
+            blur: WindowBlur::None,
         }
     }
 }
