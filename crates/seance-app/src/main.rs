@@ -94,7 +94,30 @@ fn init_tracing() -> Option<WorkerGuard> {
     guard
 }
 
+/// Handle CLI flags that must resolve without a display — no wgpu, no winit,
+/// no config load. Returns `Some(exit_code)` when the process should exit
+/// immediately, `None` to continue into the event loop. `--version` doubles
+/// as the release smoke-test command on every platform, so it stays cheap
+/// and headless.
+fn handle_cli() -> Option<i32> {
+    let mut args = std::env::args_os().skip(1);
+    match args.next().as_deref().and_then(|a| a.to_str()) {
+        Some("--version" | "-V") => {
+            println!(
+                "séance {} ({})",
+                env!("CARGO_PKG_VERSION"),
+                env!("SEANCE_GIT_SHA"),
+            );
+            Some(0)
+        }
+        _ => None,
+    }
+}
+
 fn main() {
+    if let Some(code) = handle_cli() {
+        std::process::exit(code);
+    }
     let _log_guard = init_tracing();
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
