@@ -77,6 +77,11 @@ impl App {
                     .renderer
                     .set_min_contrast(self.config.font.min_contrast);
             }
+            if old_config.font.bold_is_bright != self.config.font.bold_is_bright {
+                surface
+                    .renderer
+                    .set_bold_is_bright(self.config.font.bold_is_bright);
+            }
             if old_config.window.background_opacity != self.config.window.background_opacity {
                 surface
                     .renderer

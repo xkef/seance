@@ -58,6 +58,11 @@ pub struct FontConfig {
     pub adjust_cell_height: Option<String>,
     pub adjust_cell_width: Option<String>,
     pub min_contrast: f32,
+    /// Ghostty's `bold-is-bright`: SGR 1 (bold) remaps a foreground using one
+    /// of the eight standard ANSI palette colors (0–7) to its bright
+    /// counterpart (8–15). Default, RGB, and 256-color foregrounds are
+    /// untouched.
+    pub bold_is_bright: bool,
 }
 
 impl Default for FontConfig {
@@ -69,6 +74,7 @@ impl Default for FontConfig {
             adjust_cell_height: None,
             adjust_cell_width: None,
             min_contrast: 1.0,
+            bold_is_bright: false,
         }
     }
 }

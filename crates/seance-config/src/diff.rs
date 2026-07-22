@@ -73,6 +73,7 @@ impl ConfigDiff {
         // Grouped together so we can request a single redraw if any of them
         // moved — we don't need a more granular signal than that.
         let repaint_only = old.font.min_contrast != new.font.min_contrast
+            || old.font.bold_is_bright != new.font.bold_is_bright
             || old.window.background_opacity != new.window.background_opacity
             || old.cursor.style != new.cursor.style
             || old.cursor.blink != new.cursor.blink;
@@ -208,6 +209,17 @@ mod tests {
         let a = Config::default();
         let mut b = Config::default();
         b.font.min_contrast = 1.5;
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.repaint_only);
+        assert!(!d.theme_changed);
+        assert!(!d.font_size_changed);
+    }
+
+    #[test]
+    fn bold_is_bright_change_is_repaint_only() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.font.bold_is_bright = true;
         let d = ConfigDiff::between(&a, &b);
         assert!(d.repaint_only);
         assert!(!d.theme_changed);

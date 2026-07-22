@@ -64,6 +64,7 @@ pub struct BuildFrameConfig<'a> {
     pub theme: &'a Theme,
     pub bg_color: [u8; 4],
     pub min_contrast: f32,
+    pub bold_is_bright: bool,
 }
 
 type GlyphSlots = HashMap<GlyphId, AtlasEntry, FxBuildHasher>;
@@ -234,6 +235,7 @@ impl CellBuilder {
             source,
             &geom,
             config.theme,
+            config.bold_is_bright,
             &mut self.bg_cells,
             &mut self.runs,
             &mut self.procedural_cells,
@@ -356,6 +358,18 @@ fn resolve_color(theme: &Theme, color: &CellColor) -> Option<[u8; 3]> {
     }
 }
 
+/// Ghostty's `bold-is-bright`: a bold cell whose foreground is one of the
+/// eight standard ANSI palette colors (0–7) resolves against the matching
+/// bright entry (8–15). Default, RGB, and 256-color (8–255) foregrounds are
+/// returned unchanged. Applied before the inverse swap, mirroring Ghostty's
+/// resolve-then-invert order.
+fn brighten_bold_fg(fg: CellColor, bold: bool) -> CellColor {
+    match fg {
+        CellColor::Palette(idx) if bold && idx < 8 => CellColor::Palette(idx + 8),
+        other => other,
+    }
+}
+
 /// VT-aware pass: walk every cell, write its bg into `bg_cells`, and
 /// accumulate non-empty cells into [`ShapeRun`]s grouped by row, attrs, and
 /// column contiguity. Cells whose grapheme is a single procedural codepoint
@@ -365,6 +379,7 @@ fn walk_grid_into_runs(
     source: &mut dyn FrameSource,
     geom: &FrameGeometry,
     theme: &Theme,
+    bold_is_bright: bool,
     bg_cells: &mut Vec<[u8; 4]>,
     runs: &mut Vec<ShapeRun>,
     procedural_cells: &mut Vec<ProceduralCell>,
@@ -383,6 +398,7 @@ fn walk_grid_into_runs(
         procedural_cells,
         open: None,
         theme,
+        bold_is_bright,
         cols: geom.grid_cols,
         rows: geom.grid_rows,
     };
@@ -482,6 +498,7 @@ struct RunBuilder<'a> {
     procedural_cells: &'a mut Vec<ProceduralCell>,
     open: Option<ShapeRun>,
     theme: &'a Theme,
+    bold_is_bright: bool,
     cols: u16,
     rows: u16,
 }
@@ -505,7 +522,12 @@ impl CellVisitor for RunBuilder<'_> {
 
         let theme_bg = [self.theme.bg[0], self.theme.bg[1], self.theme.bg[2]];
         let min_contrast = matches!(view.fg, CellColor::Default) && !view.attrs.inverse;
-        let mut fg_rgb = resolve_color(self.theme, &view.fg).unwrap_or(self.theme.fg);
+        let fg_color = if self.bold_is_bright {
+            brighten_bold_fg(view.fg, view.attrs.bold)
+        } else {
+            view.fg
+        };
+        let mut fg_rgb = resolve_color(self.theme, &fg_color).unwrap_or(self.theme.fg);
         let mut bg_rgb = resolve_color(self.theme, &view.bg).unwrap_or(theme_bg);
         if view.attrs.inverse {
             std::mem::swap(&mut fg_rgb, &mut bg_rgb);
@@ -743,6 +765,7 @@ mod tests {
             theme,
             bg_color: [0, 0, 0, 255],
             min_contrast: 1.0,
+            bold_is_bright: false,
         }
     }
 
@@ -767,6 +790,18 @@ mod tests {
         cells: &[FakeCell<'_>],
         theme: &Theme,
     ) -> (Vec<[u8; 4]>, Vec<ShapeRun>, Vec<ProceduralCell>) {
+        collect_runs_bib(cols, rows, cells, theme, false)
+    }
+
+    /// Variant of [`collect_runs_with_procedural`] with an explicit
+    /// `bold_is_bright` toggle for the palette-brightening tests.
+    fn collect_runs_bib(
+        cols: u16,
+        rows: u16,
+        cells: &[FakeCell<'_>],
+        theme: &Theme,
+        bold_is_bright: bool,
+    ) -> (Vec<[u8; 4]>, Vec<ShapeRun>, Vec<ProceduralCell>) {
         let mut source = FakeFrame::new(cols, rows, cells);
         let geom = FrameGeometry {
             cell_width: 10.0,
@@ -782,6 +817,7 @@ mod tests {
             &mut source,
             &geom,
             theme,
+            bold_is_bright,
             &mut bg,
             &mut runs,
             &mut procedural,
@@ -898,6 +934,67 @@ mod tests {
 
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].slots[0].fg, [0, 205, 205, FAINT_ALPHA]);
+    }
+
+    #[test]
+    fn brighten_bold_fg_remaps_only_standard_ansi_when_bold() {
+        // Standard ANSI 0–7 shift to 8–15 under bold.
+        assert_eq!(
+            brighten_bold_fg(CellColor::Palette(1), true),
+            CellColor::Palette(9)
+        );
+        assert_eq!(
+            brighten_bold_fg(CellColor::Palette(7), true),
+            CellColor::Palette(15)
+        );
+        // Non-bold leaves everything alone.
+        assert_eq!(
+            brighten_bold_fg(CellColor::Palette(1), false),
+            CellColor::Palette(1)
+        );
+        // Already-bright, 256-color, RGB, and Default are untouched even bold.
+        assert_eq!(
+            brighten_bold_fg(CellColor::Palette(9), true),
+            CellColor::Palette(9)
+        );
+        assert_eq!(
+            brighten_bold_fg(CellColor::Palette(200), true),
+            CellColor::Palette(200)
+        );
+        assert_eq!(
+            brighten_bold_fg(CellColor::Rgb(1, 2, 3), true),
+            CellColor::Rgb(1, 2, 3)
+        );
+        assert_eq!(
+            brighten_bold_fg(CellColor::Default, true),
+            CellColor::Default
+        );
+    }
+
+    #[test]
+    fn bold_is_bright_brightens_bold_ansi_foreground() {
+        let theme = Theme::blank();
+        // Bold red (palette 1) resolves against bright red (palette 9).
+        let cells = [("x", CellColor::Palette(1), CellColor::Default, bold())];
+        let (_bg, runs, _) = collect_runs_bib(1, 1, &cells, &theme, true);
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].slots[0].fg, [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn bold_is_bright_leaves_non_bold_and_disabled_untouched() {
+        let theme = Theme::blank();
+        let cells = [("x", CellColor::Palette(1), CellColor::Default, bold())];
+
+        // Disabled: bold red stays standard red.
+        let (_bg, off, _) = collect_runs_bib(1, 1, &cells, &theme, false);
+        assert_eq!(off[0].slots[0].fg, [205, 0, 0, 255]);
+
+        // Enabled but not bold: no remap.
+        let plain_cells = [("x", CellColor::Palette(1), CellColor::Default, plain())];
+        let (_bg, on_plain, _) = collect_runs_bib(1, 1, &plain_cells, &theme, true);
+        assert_eq!(on_plain[0].slots[0].fg, [205, 0, 0, 255]);
     }
 
     #[test]
