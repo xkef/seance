@@ -231,6 +231,7 @@ impl ApplicationHandler<UserEvent> for App {
             adjust_cell_width: self.config.font.adjust_cell_width.clone(),
             font_features: self.config.font.features.clone(),
             min_contrast: self.config.font.min_contrast,
+            bold_is_bright: self.config.font.bold_is_bright,
             window_padding: physical_window_padding(&self.config, window.scale_factor()),
             background_opacity: self.config.window.background_opacity,
             theme: theme.clone(),

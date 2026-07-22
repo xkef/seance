@@ -24,6 +24,9 @@ pub struct RendererConfig {
     /// "ss01", …). Empty means the shaper applies its own defaults.
     pub font_features: Vec<String>,
     pub min_contrast: f32,
+    /// Remap bold cells with a standard ANSI (0–7) foreground to the bright
+    /// palette entry (8–15). See `font.bold_is_bright`.
+    pub bold_is_bright: bool,
     /// Inner gutter between window edges and the cell grid, in physical
     /// pixels. `[x, y]`. The area outside the grid is filled by the
     /// fullscreen bg pass with the effective theme background.
@@ -65,6 +68,7 @@ pub struct TerminalRenderer {
     gpu: GpuState,
     theme: Theme,
     min_contrast: f32,
+    bold_is_bright: bool,
     background_opacity: f32,
     cell_size: [f32; 2],
     surface_width: u32,
@@ -92,6 +96,7 @@ impl TerminalRenderer {
             gpu,
             theme: config.theme,
             min_contrast: config.min_contrast.clamp(1.0, 21.0),
+            bold_is_bright: config.bold_is_bright,
             background_opacity: config.background_opacity.clamp(0.0, 1.0),
             cell_size,
             surface_width: config.width,
@@ -170,6 +175,7 @@ impl TerminalRenderer {
                 theme: &self.theme,
                 bg_color,
                 min_contrast,
+                bold_is_bright: self.bold_is_bright,
             },
         );
         if let Some(fi) = self.cell_builder.last_frame() {
@@ -239,6 +245,10 @@ impl TerminalRenderer {
 
     pub fn set_min_contrast(&mut self, min_contrast: f32) {
         self.min_contrast = min_contrast.clamp(1.0, 21.0);
+    }
+
+    pub fn set_bold_is_bright(&mut self, bold_is_bright: bool) {
+        self.bold_is_bright = bold_is_bright;
     }
 
     pub fn set_background_opacity(&mut self, opacity: f32) {
