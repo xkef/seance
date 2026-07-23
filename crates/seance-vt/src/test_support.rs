@@ -1,8 +1,9 @@
 //! Test-only, PTY-less Headless VT.
 //!
-//! `#[doc(hidden)]`. Not a stable API; the only consumer is
-//! `seance-render-test`. Do not widen without coordinating with the
-//! harness crate.
+//! `#[doc(hidden)]`. Not a stable API; the consumers are the
+//! `seance-render-test` harness and the `seance-bench` frame-time bench,
+//! both of which drive real VT ingest + snapshot extraction without a PTY.
+//! Do not widen without coordinating with those crates.
 
 use libghostty_vt::terminal::Mode;
 

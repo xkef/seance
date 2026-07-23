@@ -19,6 +19,9 @@ name = "frame-time"
 path = "src/bin/frame_time.rs"
 
 [dependencies]
+# internal
+seance-vt.workspace = true
+
 # external
 pollster.workspace = true
 wgpu.workspace = true

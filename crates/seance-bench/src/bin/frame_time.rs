@@ -1,13 +1,15 @@
 //! Frame-time harness runner.
 //!
-//! Iterates each built-in workload, records p50/p95/p99 for CPU and
-//! headless-GPU submit, prints a fixed-width table to stdout.
+//! Iterates each built-in workload, records p50/p95/p99 for the CPU
+//! VT-frame path and headless-GPU submit, prints a fixed-width table to
+//! stdout.
 
 use std::time::Duration;
 
 use seance_bench::gpu::HeadlessGpu;
 use seance_bench::workloads::Workload;
-use seance_bench::{Stopwatch, Summary};
+use seance_bench::{BENCH_COLS, BENCH_ROWS, Stopwatch, Summary, drive_frame};
+use seance_vt::test_support::HeadlessTerminal;
 
 const DEFAULT_ITERATIONS: usize = 10_000;
 
@@ -28,25 +30,24 @@ fn main() {
     for workload in Workload::all() {
         let cpu = run_cpu(&workload, iterations);
         let gpu_summary = gpu.as_ref().map(|g| run_gpu(g, iterations));
-        print_row(workload.name, "cpu", &cpu);
+        print_row(workload.name, "vt-frame", &cpu);
         if let Some(s) = gpu_summary {
             print_row(workload.name, "gpu-submit", &s);
         }
     }
 }
 
-/// CPU proxy: sum the workload bytes (stand-in for future VT-feed +
-/// `CellBuilder::build_frame`). Cost scales with byte count so it's
-/// a meaningful relative baseline between workloads even as a stub.
+/// CPU per-frame cost: feed the workload bytes through a real headless VT and
+/// extract a snapshot each iteration. A single terminal is reused across the
+/// run so the measured cost reflects steady-state ingest + snapshot rebuild
+/// under continuous output, the way a live render loop sees it.
 fn run_cpu(workload: &Workload, iterations: usize) -> Summary {
+    let mut term = HeadlessTerminal::new(BENCH_COLS, BENCH_ROWS)
+        .expect("headless terminal construction should not fail");
     let mut sw = Stopwatch::with_capacity(iterations);
     for _ in 0..iterations {
         sw.time(|| {
-            let mut acc: u64 = 0;
-            for b in &workload.bytes {
-                acc = acc.wrapping_add(*b as u64);
-            }
-            std::hint::black_box(acc);
+            std::hint::black_box(drive_frame(&mut term, &workload.bytes));
         });
     }
     sw.summary()
