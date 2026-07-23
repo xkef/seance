@@ -1,9 +1,10 @@
 //! Synthetic VT byte streams modelled on the sub-issue #26 workload list.
 //!
-//! Each workload is a prerecorded blob of bytes a future VT-driving step
-//! will feed into a headless `libghostty-vt::Terminal`. Today the harness
-//! only measures byte-processing proxies — the workload shapes are chosen
-//! so the byte count + dirty-row density is representative.
+//! Each workload is a prerecorded blob of bytes the harness feeds into a
+//! real PTY-less headless VT (via `seance_bench::drive_frame`). The shapes
+//! are chosen so the byte count and dirty-row density span the interesting
+//! cases: static output, full-cell churn, scroll pressure, and SGR-attribute
+//! churn.
 
 pub struct Workload {
     pub name: &'static str,

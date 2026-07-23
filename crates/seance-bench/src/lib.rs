@@ -1,21 +1,46 @@
-//! Frame-time bench harness scaffold (parent: M2 epic #5, sub-issue #26).
+//! Frame-time bench harness (parent: M2 epic #5, sub-issue #26).
 //!
-//! Two measurement surfaces today:
-//!   1. CPU per-iteration timing via [`Stopwatch`] — hooks a closure, produces
-//!      p50/p95/p99 over N samples.
+//! Two measurement surfaces:
+//!   1. CPU per-frame timing via [`Stopwatch`] — hooks a closure, produces
+//!      p50/p95/p99 over N samples. [`drive_frame`] feeds a workload's bytes
+//!      through a real PTY-less [`seance_vt::test_support::HeadlessTerminal`]
+//!      and extracts a snapshot, so the number reflects actual VT ingest +
+//!      snapshot-rebuild cost rather than a byte-count proxy.
 //!   2. Headless GPU adapter/device via [`gpu::HeadlessGpu`] — a wgpu
 //!      `Instance` with `Backends::PRIMARY`, no surface; `submit_noop` times
 //!      an empty command buffer submit + `Maintain::Wait`.
 //!
 //! The stream of VT bytes a workload feeds is owned by [`workloads::Workload`].
-//! Today workloads are byte-level stubs; once `seance-vt` exposes a PTY-less
-//! headless terminal (M2 #20 rides on the same need) the harness will feed
-//! those bytes through a real VT and time `CellBuilder::build_frame` end-to-end.
+//! The GPU-side cell rebuild (`CellBuilder::build_frame`) is not yet timed here:
+//! the renderer still needs a surface, so only the CPU snapshot path runs
+//! headless. GPU pipelines fold into surface (2) once they run surfaceless.
 
 pub mod gpu;
 pub mod workloads;
 
 use std::time::Duration;
+
+use seance_vt::VtSnapshot;
+use seance_vt::test_support::HeadlessTerminal;
+
+/// Grid the headless VT runs at while benching. A fixed 80×50 keeps the
+/// per-frame snapshot cost comparable across workloads and matches the row
+/// counts the workloads in [`workloads`] are shaped for.
+pub const BENCH_COLS: u16 = 80;
+pub const BENCH_ROWS: u16 = 50;
+
+/// Run one render-loop cycle against a real headless VT: feed `bytes`, extract
+/// a snapshot (the CPU frame rebuild), then ack the generation so dirty
+/// tracking resets before the next cycle. Returns the snapshot so callers can
+/// time it, inspect it, or `black_box` it to defeat dead-code elimination.
+pub fn drive_frame(term: &mut HeadlessTerminal, bytes: &[u8]) -> VtSnapshot {
+    term.feed(bytes);
+    let snapshot = term
+        .snapshot()
+        .expect("headless snapshot should not fail on bench workloads");
+    term.ack_rendered(snapshot.generation);
+    snapshot
+}
 
 /// Collects per-iteration durations and reports percentile summaries.
 ///
@@ -126,5 +151,25 @@ mod tests {
             });
         }
         assert_eq!(sw.sample_count(), 4);
+    }
+
+    #[test]
+    fn drive_frame_advances_generation() {
+        let mut term = HeadlessTerminal::new(BENCH_COLS, BENCH_ROWS).unwrap();
+        let first = drive_frame(&mut term, b"hello\r\n");
+        let second = drive_frame(&mut term, b"world\r\n");
+        assert!(second.generation > first.generation);
+    }
+
+    #[test]
+    fn drives_every_workload_without_panicking() {
+        for w in workloads::Workload::all() {
+            let mut term = HeadlessTerminal::new(BENCH_COLS, BENCH_ROWS).unwrap();
+            for _ in 0..2 {
+                let snapshot = drive_frame(&mut term, &w.bytes);
+                assert_eq!(snapshot.cols, BENCH_COLS, "{}", w.name);
+                assert_eq!(snapshot.rows, BENCH_ROWS, "{}", w.name);
+            }
+        }
     }
 }
