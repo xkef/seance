@@ -51,7 +51,11 @@ impl GlyphAtlas {
             .allocator
             .allocate(ESize::new(width as i32, height as i32))?;
         let pos = [alloc.rectangle.min.x as u32, alloc.rectangle.min.y as u32];
-        plane.copy_bitmap(bitmap, pos, width, height);
+        if is_color {
+            plane.copy_bitmap(&premultiply_rgba(bitmap), pos, width, height);
+        } else {
+            plane.copy_bitmap(bitmap, pos, width, height);
+        }
         Some(AtlasEntry {
             pos,
             size: [width, height],
@@ -78,6 +82,21 @@ impl GlyphAtlas {
         self.grayscale = AtlasPlane::new(GRAYSCALE_SIZE, 1);
         self.color = AtlasPlane::new(COLOR_SIZE, 4);
     }
+}
+
+// swash emits `SwashContent::Color` glyphs as straight-alpha RGBA, but the
+// render pipeline blends premultiplied (src_factor = One). Scale each channel by
+// A/255 on the way into the color atlas so antialiased emoji edges composite
+// without a light halo. Fully-opaque texels are unchanged.
+fn premultiply_rgba(bitmap: &[u8]) -> Vec<u8> {
+    let mut out = bitmap.to_vec();
+    for px in out.chunks_exact_mut(4) {
+        let a = px[3] as u16;
+        px[0] = (px[0] as u16 * a / 255) as u8;
+        px[1] = (px[1] as u16 * a / 255) as u8;
+        px[2] = (px[2] as u16 * a / 255) as u8;
+    }
+    out
 }
 
 impl AtlasPlane {
@@ -107,5 +126,45 @@ impl AtlasPlane {
             }
         }
         self.dirty = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn color_glyph_stored_premultiplied() {
+        let mut atlas = GlyphAtlas::new();
+        let entry = atlas
+            .insert(&[200, 100, 50, 128], 1, 1, 0, 0, true)
+            .expect("color glyph allocates");
+        assert!(entry.is_color);
+        let (data, size) = atlas.color_data();
+        let idx = (entry.pos[1] as usize * size as usize + entry.pos[0] as usize) * 4;
+        assert_eq!(&data[idx..idx + 4], &[100, 50, 25, 128]);
+    }
+
+    #[test]
+    fn opaque_color_texel_is_unchanged() {
+        let mut atlas = GlyphAtlas::new();
+        let entry = atlas
+            .insert(&[200, 100, 50, 255], 1, 1, 0, 0, true)
+            .expect("color glyph allocates");
+        let (data, size) = atlas.color_data();
+        let idx = (entry.pos[1] as usize * size as usize + entry.pos[0] as usize) * 4;
+        assert_eq!(&data[idx..idx + 4], &[200, 100, 50, 255]);
+    }
+
+    #[test]
+    fn grayscale_glyph_stored_verbatim() {
+        let mut atlas = GlyphAtlas::new();
+        let entry = atlas
+            .insert(&[200], 1, 1, 0, 0, false)
+            .expect("grayscale glyph allocates");
+        assert!(!entry.is_color);
+        let (data, size) = atlas.grayscale_data();
+        let idx = entry.pos[1] as usize * size as usize + entry.pos[0] as usize;
+        assert_eq!(data[idx], 200);
     }
 }
