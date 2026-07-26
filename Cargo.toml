@@ -6,6 +6,7 @@ members = [
     "crates/seance-config",
     "crates/seance-frame",
     "crates/seance-input",
+    "crates/seance-lua",
     "crates/seance-mux-client",
     "crates/seance-mux-server",
     "crates/seance-protocol",
@@ -50,6 +51,7 @@ libghostty-vt = {
     default-features = false,
     features = ["kitty-graphics", "png"]
 }
+mlua = { version = "0.12", features = ["lua54", "vendored"] }
 notify = "8"
 notify-debouncer-full = "0.7"
 objc2 = "0.6"

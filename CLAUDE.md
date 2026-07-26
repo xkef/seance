@@ -17,6 +17,7 @@ macOS-first; Linux is a target but untested as of this writing.
 | `seance-mux-client`  | Client-side mux: `Domain` seam, `MuxClient`/`PaneView` materialization, link detection.             |
 | `seance-mux-server`  | Server-side mux: `LocalDomain` over seance-vt, the `serve` protocol-dispatch loop.                  |
 | `seance-config`      | `config.toml` schema + loading, hot-reload `ConfigDiff`, theme resolution.                          |
+| `seance-lua`         | Embedded Lua runtime: sandboxed `mlua` VM, `seance` global, `init.lua` bootstrap.                   |
 | `seance-render-test` | Layered renderer test harness: headless VT, ASCII frame dumps, snapshot tests.                      |
 | `seance-bench`       | Frame-time bench harness: CPU stopwatch + headless GPU timing.                                      |
 
