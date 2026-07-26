@@ -1,0 +1,29 @@
+[package]
+name = "seance-lua"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = """
+Embedded Lua runtime for seance.
+
+Wraps `mlua` (Lua 5.4, vendored) in a sandboxed VM: a curated standard
+library (base, table, string, math, utf8, package), a `seance` global
+namespace, and a `print` that routes into the host log instead of raw
+stdout. The bootstrap loads `init.lua` from the config directory and
+resolves `require()` against `<config>/lua/`.
+
+init.lua parse and runtime errors surface as a typed `InitError` that the
+host renders (notification overlay) without crashing — the VM stays usable
+after a failed load. This crate is the foundation the rest of the Lua API
+surface (opt, keymap, event, pane, command) builds on.
+"""
+
+[dependencies]
+# external
+mlua.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
