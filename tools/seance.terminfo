@@ -1,0 +1,23 @@
+# seance terminfo — an xterm-256color superset advertising the capabilities
+# seance actually implements: truecolor, styled/colored underlines, OSC 8
+# hyperlinks, DECSCUSR cursor shaping, and synchronized output (DEC 2026).
+#
+# Install (adds to the user's terminfo database):
+#
+#     tic -x tools/seance.terminfo
+#
+# Then set TERM=xterm-seance (or let seance advertise it once the actor's
+# default TERM is switched over — see docs/clickable-links.md).
+#
+# The `-x` flag preserves the extended (user-defined) capabilities like Smulx
+# and Setulc that tmux and editors read to enable styled underlines.
+
+xterm-seance|seance terminal,
+	use=xterm-256color,
+	Tc,
+	Su,
+	Smulx=\E[4\:%p1%dm,
+	Setulc=\E[58\:2\:\:%p1%{65536}%/%d\:%p1%{256}%/%{255}%&%d\:%p1%{255}%&%d%;m,
+	Ss=\E[%p1%d\40q,
+	Se=\E[2\40q,
+	Sync=\EP=%p1%ds\E\\,

@@ -14,8 +14,8 @@ pub mod theme;
 pub use diff::ConfigDiff;
 pub use schema::{
     ClipboardConfig, ClipboardPolicy, Config, CursorConfig, CursorStyle, FontConfig, InputConfig,
-    KeybindConfig, LinkModifiersConfig, LinksConfig, MacosOptionAsAlt, ScrollbackConfig,
-    WindowConfig,
+    KeybindConfig, LinkHandler, LinkModifiersConfig, LinksConfig, MacosOptionAsAlt,
+    ScrollbackConfig, WindowConfig,
 };
 pub use theme::{Theme, load as load_theme};
 
@@ -347,5 +347,128 @@ mod tests {
                 None => env::remove_var("HOME"),
             }
         }
+    }
+
+    #[test]
+    fn links_handlers_default_to_empty() {
+        assert!(Config::default().links.handlers.is_empty());
+    }
+
+    #[test]
+    fn links_handlers_parse_string_and_argv_forms() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [links.handlers]
+            "file://*.{rs,toml,md}" = ["nvim", "+{line}", "{path}"]
+            "https://*"             = "open"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.links.handlers.get("https://*"),
+            Some(&LinkHandler::Program("open".to_string()))
+        );
+        assert_eq!(
+            cfg.links.handlers.get("file://*.{rs,toml,md}"),
+            Some(&LinkHandler::Argv(vec![
+                "nvim".to_string(),
+                "+{line}".to_string(),
+                "{path}".to_string(),
+            ]))
+        );
+    }
+
+    #[test]
+    fn resolve_handler_substitutes_path_and_line() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [links.handlers]
+            "file://*.rs" = ["nvim", "+{line}", "{path}"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.links
+                .resolve_handler("file:///a/b.rs:42:7", "/a/b.rs", Some(42), Some(7)),
+            Some(vec![
+                "nvim".to_string(),
+                "+42".to_string(),
+                "/a/b.rs".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn resolve_handler_drops_line_token_when_anchor_absent() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [links.handlers]
+            "file://*" = ["nvim", "+{line}", "{path}"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.links
+                .resolve_handler("file:///a/b.rs", "/a/b.rs", None, None),
+            Some(vec!["nvim".to_string(), "/a/b.rs".to_string()])
+        );
+    }
+
+    #[test]
+    fn resolve_handler_appends_url_when_template_has_no_placeholder() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [links.handlers]
+            "https://*" = "open"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.links
+                .resolve_handler("https://example.com", "", None, None),
+            Some(vec!["open".to_string(), "https://example.com".to_string()])
+        );
+    }
+
+    #[test]
+    fn resolve_handler_returns_none_without_a_match() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [links.handlers]
+            "file://*" = "nvim"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.links
+                .resolve_handler("https://example.com", "", None, None),
+            None
+        );
+    }
+
+    #[test]
+    fn glob_brace_alternation_matches_each_extension() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [links.handlers]
+            "file://*.{rs,toml,md}" = "nvim"
+            "#,
+        )
+        .unwrap();
+        for url in [
+            "file:///x/main.rs",
+            "file:///x/Cargo.toml",
+            "file:///x/README.md",
+        ] {
+            assert!(
+                cfg.links.resolve_handler(url, "", None, None).is_some(),
+                "expected {url} to match"
+            );
+        }
+        assert_eq!(
+            cfg.links
+                .resolve_handler("file:///x/photo.png", "", None, None),
+            None
+        );
     }
 }
