@@ -14,8 +14,8 @@ pub mod theme;
 pub use diff::ConfigDiff;
 pub use schema::{
     ClipboardConfig, ClipboardPolicy, Config, CursorConfig, CursorStyle, FontConfig, InputConfig,
-    KeybindConfig, LinkModifiersConfig, LinksConfig, MacosOptionAsAlt, ScrollbackConfig,
-    WindowConfig,
+    KeybindConfig, LinkModifiersConfig, LinksConfig, MacosOptionAsAlt, ScrollbackConfig, Shell,
+    ShellIntegrationConfig, ShellIntegrationDetect, ShellIntegrationFeature, WindowConfig,
 };
 pub use theme::{Theme, load as load_theme};
 
@@ -245,6 +245,81 @@ mod tests {
             let cfg: Config = toml::from_str(&src).unwrap();
             assert_eq!(cfg.input.macos_option_as_alt, want, "raw={raw}");
         }
+    }
+
+    #[test]
+    fn shell_integration_defaults_to_auto_with_all_features() {
+        let cfg = Config::default();
+        assert_eq!(
+            cfg.shell_integration.detect,
+            crate::ShellIntegrationDetect::Auto
+        );
+        assert_eq!(cfg.shell_integration.features.len(), 5);
+    }
+
+    #[test]
+    fn shell_integration_detect_parses_each_variant() {
+        use crate::ShellIntegrationDetect as D;
+        for (raw, want) in [
+            ("auto", D::Auto),
+            ("bash", D::Bash),
+            ("zsh", D::Zsh),
+            ("fish", D::Fish),
+            ("elvish", D::Elvish),
+            ("none", D::None),
+        ] {
+            let src = format!(
+                r#"
+                [shell-integration]
+                detect = "{raw}"
+                "#
+            );
+            let cfg: Config = toml::from_str(&src).unwrap();
+            assert_eq!(cfg.shell_integration.detect, want, "raw={raw}");
+        }
+    }
+
+    #[test]
+    fn shell_integration_features_parse_as_a_set() {
+        use crate::ShellIntegrationFeature as F;
+        let cfg: Config = toml::from_str(
+            r#"
+            [shell-integration]
+            features = ["prompt", "cwd"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.shell_integration.features,
+            vec![F::Prompt, F::Cwd],
+            "explicit list overrides the default set"
+        );
+        assert!(cfg.shell_integration.feature_enabled(F::Prompt));
+        assert!(!cfg.shell_integration.feature_enabled(F::Cursor));
+    }
+
+    #[test]
+    fn shell_integration_empty_features_opts_out_of_everything() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [shell-integration]
+            features = []
+            "#,
+        )
+        .unwrap();
+        assert!(cfg.shell_integration.features.is_empty());
+    }
+
+    #[test]
+    fn shell_integration_rejects_unknown_field() {
+        let err = toml::from_str::<Config>(
+            r#"
+            [shell-integration]
+            detetc = "auto"
+            "#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("detetc"), "{err}");
     }
 
     #[test]

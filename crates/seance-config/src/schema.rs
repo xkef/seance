@@ -19,6 +19,8 @@ pub struct Config {
     pub scrollback: ScrollbackConfig,
     pub input: InputConfig,
     pub links: LinksConfig,
+    #[serde(rename = "shell-integration")]
+    pub shell_integration: ShellIntegrationConfig,
     pub keybind: Vec<KeybindConfig>,
 }
 
@@ -33,6 +35,7 @@ impl Default for Config {
             scrollback: ScrollbackConfig::default(),
             input: InputConfig::default(),
             links: LinksConfig::default(),
+            shell_integration: ShellIntegrationConfig::default(),
             keybind: Vec::new(),
         }
     }
@@ -231,6 +234,185 @@ impl Default for LinkModifiersConfig {
             Self::SuperShift
         } else {
             Self::CtrlShift
+        }
+    }
+}
+
+/// Which shell `seance-app` injects integration hooks for on PTY spawn.
+///
+/// `Auto` reads the spawned shell's binary name (see [`Shell::from_binary`]);
+/// the explicit variants force one shell regardless of the binary; `None`
+/// disables injection entirely so the child launches with an unmodified
+/// environment and argv.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ShellIntegrationDetect {
+    #[default]
+    Auto,
+    Bash,
+    Zsh,
+    Fish,
+    Elvish,
+    None,
+}
+
+/// A shell whose integration drop-in seance ships. This is the resolved
+/// target `seance-app` uses to pick the injection strategy (rcfile, ZDOTDIR,
+/// XDG_DATA_DIRS, …); the wire-facing knob is [`ShellIntegrationDetect`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shell {
+    Bash,
+    Zsh,
+    Fish,
+    Elvish,
+}
+
+impl Shell {
+    /// Resolve a shell from the binary seance is about to spawn. Accepts a
+    /// full path (`/bin/zsh`), a bare name (`zsh`), or the login-shell form
+    /// (`-zsh`, which `login(1)` passes as argv[0]). Returns `None` for a
+    /// shell seance ships no integration for.
+    pub fn from_binary(binary: &str) -> Option<Self> {
+        let base = binary.rsplit(['/', '\\']).next().unwrap_or(binary);
+        let base = base.strip_prefix('-').unwrap_or(base);
+        match base {
+            "bash" => Some(Self::Bash),
+            "zsh" => Some(Self::Zsh),
+            "fish" => Some(Self::Fish),
+            "elvish" => Some(Self::Elvish),
+            _ => None,
+        }
+    }
+}
+
+/// One opt-in integration feature. Mirrors Ghostty's
+/// `shell-integration-features`; the shipped drop-in scripts gate each block
+/// of escape-sequence emission on the presence of the corresponding entry.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ShellIntegrationFeature {
+    /// DECSCUSR bar-at-prompt / block-during-command shaping.
+    Cursor,
+    /// A `sudo` wrapper that re-exports the integration env across the
+    /// privilege boundary so semantic prompts survive.
+    Sudo,
+    /// OSC 2 window-title updates from cwd / running command.
+    Title,
+    /// OSC 7 cwd reporting on every prompt.
+    Cwd,
+    /// OSC 133 semantic prompt / command boundary marks.
+    Prompt,
+}
+
+/// `[shell-integration]` — controls the auto-injected shell hooks.
+///
+/// `features` is a set: an omitted key inherits the full default set, while an
+/// explicit `features = []` opts out of every feature (the scripts stay
+/// sourceable manually). `detect = "none"` disables injection outright.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ShellIntegrationConfig {
+    pub detect: ShellIntegrationDetect,
+    pub features: Vec<ShellIntegrationFeature>,
+}
+
+impl Default for ShellIntegrationConfig {
+    fn default() -> Self {
+        Self {
+            detect: ShellIntegrationDetect::Auto,
+            features: vec![
+                ShellIntegrationFeature::Cursor,
+                ShellIntegrationFeature::Sudo,
+                ShellIntegrationFeature::Title,
+                ShellIntegrationFeature::Cwd,
+                ShellIntegrationFeature::Prompt,
+            ],
+        }
+    }
+}
+
+impl ShellIntegrationConfig {
+    /// Resolve which shell to inject for, given the binary `seance-app` is
+    /// about to spawn. `None` means no injection: either `detect = "none"`, or
+    /// `detect = "auto"` did not recognize `spawned`.
+    pub fn resolve_shell(&self, spawned: &str) -> Option<Shell> {
+        match self.detect {
+            ShellIntegrationDetect::None => None,
+            ShellIntegrationDetect::Auto => Shell::from_binary(spawned),
+            ShellIntegrationDetect::Bash => Some(Shell::Bash),
+            ShellIntegrationDetect::Zsh => Some(Shell::Zsh),
+            ShellIntegrationDetect::Fish => Some(Shell::Fish),
+            ShellIntegrationDetect::Elvish => Some(Shell::Elvish),
+        }
+    }
+
+    pub fn feature_enabled(&self, feature: ShellIntegrationFeature) -> bool {
+        self.features.contains(&feature)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_from_binary_handles_path_bare_and_login_forms() {
+        assert_eq!(Shell::from_binary("/bin/zsh"), Some(Shell::Zsh));
+        assert_eq!(Shell::from_binary("bash"), Some(Shell::Bash));
+        assert_eq!(Shell::from_binary("-zsh"), Some(Shell::Zsh));
+        assert_eq!(Shell::from_binary("/usr/bin/fish"), Some(Shell::Fish));
+        assert_eq!(
+            Shell::from_binary("/opt/homebrew/bin/elvish"),
+            Some(Shell::Elvish)
+        );
+    }
+
+    #[test]
+    fn shell_from_binary_rejects_unknown_shells() {
+        assert_eq!(Shell::from_binary("/bin/nu"), None);
+        assert_eq!(Shell::from_binary("xonsh"), None);
+        assert_eq!(Shell::from_binary(""), None);
+    }
+
+    #[test]
+    fn resolve_shell_auto_reads_the_spawned_binary() {
+        let cfg = ShellIntegrationConfig::default();
+        assert_eq!(cfg.resolve_shell("/bin/zsh"), Some(Shell::Zsh));
+        assert_eq!(cfg.resolve_shell("/usr/local/bin/nu"), None);
+    }
+
+    #[test]
+    fn resolve_shell_forced_variant_ignores_the_spawned_binary() {
+        let cfg = ShellIntegrationConfig {
+            detect: ShellIntegrationDetect::Fish,
+            ..ShellIntegrationConfig::default()
+        };
+        assert_eq!(cfg.resolve_shell("/bin/bash"), Some(Shell::Fish));
+    }
+
+    #[test]
+    fn resolve_shell_none_never_injects() {
+        let cfg = ShellIntegrationConfig {
+            detect: ShellIntegrationDetect::None,
+            ..ShellIntegrationConfig::default()
+        };
+        assert_eq!(cfg.resolve_shell("/bin/zsh"), None);
+    }
+
+    #[test]
+    fn default_enables_every_feature() {
+        let cfg = ShellIntegrationConfig::default();
+        for feature in [
+            ShellIntegrationFeature::Cursor,
+            ShellIntegrationFeature::Sudo,
+            ShellIntegrationFeature::Title,
+            ShellIntegrationFeature::Cwd,
+            ShellIntegrationFeature::Prompt,
+        ] {
+            assert!(
+                cfg.feature_enabled(feature),
+                "{feature:?} should default on"
+            );
         }
     }
 }
