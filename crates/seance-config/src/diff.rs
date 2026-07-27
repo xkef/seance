@@ -52,6 +52,11 @@ pub struct ConfigDiff {
     /// requires respawning the actor, which the live reload path does not do
     /// today. Caller logs a notice telling the user to restart.
     pub scrollback_limit_changed: bool,
+    /// `[shell-integration]` changed — the hooks are injected into the child's
+    /// environment at PTY spawn, so a live edit only takes effect for shells
+    /// started afterward. Caller logs a notice telling the user to restart or
+    /// open a new surface.
+    pub shell_integration_changed: bool,
 }
 
 impl ConfigDiff {
@@ -81,6 +86,7 @@ impl ConfigDiff {
         let links_changed = old.links != new.links;
         let keybinds_changed = old.keybind != new.keybind;
         let scrollback_limit_changed = old.scrollback.limit != new.scrollback.limit;
+        let shell_integration_changed = old.shell_integration != new.shell_integration;
 
         Self {
             theme_changed,
@@ -95,6 +101,7 @@ impl ConfigDiff {
             links_changed,
             keybinds_changed,
             scrollback_limit_changed,
+            shell_integration_changed,
         }
     }
 
@@ -111,7 +118,8 @@ impl ConfigDiff {
             || self.input_changed
             || self.links_changed
             || self.keybinds_changed
-            || self.scrollback_limit_changed)
+            || self.scrollback_limit_changed
+            || self.shell_integration_changed)
     }
 }
 
@@ -268,6 +276,18 @@ mod tests {
         b.scrollback.limit = a.scrollback.limit + 1;
         let d = ConfigDiff::between(&a, &b);
         assert!(d.scrollback_limit_changed);
+        assert!(!d.repaint_only);
+        assert!(!d.theme_changed);
+        assert!(!d.is_empty());
+    }
+
+    #[test]
+    fn shell_integration_change_is_detected_separately() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.shell_integration.detect = crate::ShellIntegrationDetect::None;
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.shell_integration_changed);
         assert!(!d.repaint_only);
         assert!(!d.theme_changed);
         assert!(!d.is_empty());
