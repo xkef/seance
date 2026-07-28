@@ -51,7 +51,16 @@ impl GlyphAtlas {
             .allocator
             .allocate(ESize::new(width as i32, height as i32))?;
         let pos = [alloc.rectangle.min.x as u32, alloc.rectangle.min.y as u32];
-        plane.copy_bitmap(bitmap, pos, width, height);
+        // swash emits color glyphs as straight-alpha RGBA, but every pipeline
+        // blends premultiplied (src=One, dst=OneMinusSrcAlpha). Fold alpha into
+        // RGB here so antialiased edges do not read over-bright (#314). The
+        // grayscale (mask) plane carries coverage only and stays untouched.
+        if is_color {
+            let premultiplied = premultiply_rgba(bitmap);
+            plane.copy_bitmap(&premultiplied, pos, width, height);
+        } else {
+            plane.copy_bitmap(bitmap, pos, width, height);
+        }
         Some(AtlasEntry {
             pos,
             size: [width, height],
@@ -80,6 +89,17 @@ impl GlyphAtlas {
     }
 }
 
+fn premultiply_rgba(bitmap: &[u8]) -> Vec<u8> {
+    let mut out = bitmap.to_vec();
+    for px in out.chunks_exact_mut(4) {
+        let a = px[3] as u16;
+        px[0] = (px[0] as u16 * a / 255) as u8;
+        px[1] = (px[1] as u16 * a / 255) as u8;
+        px[2] = (px[2] as u16 * a / 255) as u8;
+    }
+    out
+}
+
 impl AtlasPlane {
     fn new(size: u32, bpp: u32) -> Self {
         Self {
@@ -89,6 +109,18 @@ impl AtlasPlane {
             bpp,
             dirty: true,
         }
+    }
+
+    #[cfg(test)]
+    fn texel_at(&self, pos: [u32; 2]) -> [u8; 4] {
+        let bpp = self.bpp as usize;
+        let start = (pos[1] as usize * self.size as usize + pos[0] as usize) * bpp;
+        [
+            self.data[start],
+            self.data[start + 1],
+            self.data[start + 2],
+            self.data[start + 3],
+        ]
     }
 
     fn copy_bitmap(&mut self, bitmap: &[u8], pos: [u32; 2], width: u32, height: u32) {
@@ -107,5 +139,40 @@ impl AtlasPlane {
             }
         }
         self.dirty = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn color_glyph_stored_premultiplied() {
+        let mut atlas = GlyphAtlas::new();
+        let entry = atlas
+            .insert(&[200, 100, 50, 128], 1, 1, 0, 0, true)
+            .expect("color glyph allocates");
+        assert_eq!(atlas.color.texel_at(entry.pos), [100, 50, 25, 128]);
+    }
+
+    #[test]
+    fn opaque_color_texel_is_unchanged() {
+        let mut atlas = GlyphAtlas::new();
+        let entry = atlas
+            .insert(&[200, 100, 50, 255], 1, 1, 0, 0, true)
+            .expect("color glyph allocates");
+        assert_eq!(atlas.color.texel_at(entry.pos), [200, 100, 50, 255]);
+    }
+
+    #[test]
+    fn grayscale_coverage_is_not_premultiplied() {
+        let mut atlas = GlyphAtlas::new();
+        let entry = atlas
+            .insert(&[128], 1, 1, 0, 0, false)
+            .expect("mask glyph allocates");
+        let bpp = atlas.grayscale.bpp as usize;
+        let start =
+            (entry.pos[1] as usize * atlas.grayscale.size as usize + entry.pos[0] as usize) * bpp;
+        assert_eq!(atlas.grayscale.data[start], 128);
     }
 }
