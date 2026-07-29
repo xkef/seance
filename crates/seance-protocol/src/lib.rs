@@ -11,6 +11,8 @@
 //!   `seance-frame`.
 //! - [`mux`] — [`mux::ClientMessage`] / [`mux::ServerMessage`] enums,
 //!   [`mux::PaneUpdate`], topology.
+//! - [`layout`] — the `Window → Tab → SplitTree` layout model and its
+//!   pixel-rect positioning ([`layout::SplitTree::panes_positioned`]).
 //! - [`transport`] — length-prefixed postcard envelopes, the
 //!   [`transport::Transport`] trait, and [`transport::InProcessTransport`]
 //!   for in-process bootstrap and tests.
@@ -23,6 +25,7 @@ pub mod clipboard;
 pub mod frame;
 pub mod identity;
 pub mod image_cache;
+pub mod layout;
 pub mod limits;
 pub mod mux;
 pub mod transport;
