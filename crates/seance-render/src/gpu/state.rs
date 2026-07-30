@@ -406,7 +406,7 @@ impl GpuState {
             multiview_mask: None,
         });
 
-        for op in self.build_schedule().walk() {
+        for op in Self::build_schedule().walk() {
             self.record_op(&mut pass, op);
         }
     }
@@ -420,7 +420,12 @@ impl GpuState {
     /// Content  cell_text
     /// Above    Kitty above-text
     /// ```
-    fn build_schedule(&self) -> LayerSchedule {
+    ///
+    /// The order is a fixed invariant, not derived from frame state: an empty
+    /// band records no draw in [`Self::record_op`]. A golden-order test pins
+    /// the sequence so a later layer-schedule change cannot silently reorder
+    /// the ported passes.
+    fn build_schedule() -> LayerSchedule {
         let mut schedule = LayerSchedule::default();
         schedule.push(Z_MAIN, SubRole::Below, DrawOp::BgColorFill);
         schedule.push(
@@ -493,7 +498,28 @@ fn bg_byte_range(row_min: usize, row_max: usize, grid_cols: usize) -> (u64, usiz
 
 #[cfg(test)]
 mod tests {
-    use super::bg_byte_range;
+    use super::{DrawOp, GpuState, PlacementLayer, bg_byte_range};
+
+    #[test]
+    fn build_schedule_locks_canonical_draw_order() {
+        // The legacy fixed pass sequence, ported onto Z_MAIN sub-roles. Kept
+        // byte-identical: bg fill → Kitty below-bg → cell_bg → Kitty
+        // below-text → text → Kitty above-text. A layer-schedule refactor that
+        // reorders these — e.g. floating text above a Kitty image at the wrong
+        // band — must break this test, not the framebuffer.
+        let order: Vec<_> = GpuState::build_schedule().walk().collect();
+        assert_eq!(
+            order,
+            vec![
+                DrawOp::BgColorFill,
+                DrawOp::Images(PlacementLayer::BelowBg),
+                DrawOp::CellBg,
+                DrawOp::Images(PlacementLayer::BelowText),
+                DrawOp::CellText,
+                DrawOp::Images(PlacementLayer::AboveText),
+            ]
+        );
+    }
 
     #[test]
     fn bg_byte_range_single_row_zero() {
