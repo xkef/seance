@@ -194,7 +194,7 @@ impl ApplicationHandler<UserEvent> for App {
         }
 
         let mut window_attrs = Window::default_attributes()
-            .with_title("seance")
+            .with_title("séance")
             .with_decorations(self.config.window.decoration);
         if let Some(size) = initial_window_size_from_env() {
             window_attrs = window_attrs.with_inner_size(size);
