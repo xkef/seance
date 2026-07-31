@@ -24,6 +24,7 @@ tools/run.sh                 # build and launch
 
 - Architecture & subsystem status:
   [`docs/architecture.md`](docs/architecture.md)
+- Naming (`séance` vs `seance`): [`docs/naming.md`](docs/naming.md)
 - Roadmap: GitHub epics M1–M11 (`label:epic`)
 
 ## License
