@@ -78,6 +78,10 @@ impl Default for FontConfig {
 pub struct WindowConfig {
     pub padding_x: u16,
     pub padding_y: u16,
+    // When the surface can't divide evenly into whole cells, distribute the
+    // leftover pixels symmetrically around the grid instead of dumping the
+    // remainder on the right/bottom edges.
+    pub padding_balance: bool,
     pub decoration: bool,
     pub background_opacity: f32,
 }
@@ -87,6 +91,7 @@ impl Default for WindowConfig {
         Self {
             padding_x: 12,
             padding_y: 0,
+            padding_balance: false,
             decoration: true,
             background_opacity: 1.0,
         }

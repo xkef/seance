@@ -28,6 +28,9 @@ pub struct RendererConfig {
     /// pixels. `[x, y]`. The area outside the grid is filled by the
     /// fullscreen bg pass with the effective theme background.
     pub window_padding: [u16; 2],
+    /// Distribute the sub-cell remainder symmetrically around the grid rather
+    /// than leaving it all on the right/bottom edges.
+    pub window_padding_balance: bool,
     pub background_opacity: f32,
     pub theme: Theme,
 }
@@ -70,6 +73,7 @@ pub struct TerminalRenderer {
     surface_width: u32,
     surface_height: u32,
     window_padding: [u16; 2],
+    window_padding_balance: bool,
 }
 
 impl TerminalRenderer {
@@ -97,6 +101,7 @@ impl TerminalRenderer {
             surface_width: config.width,
             surface_height: config.height,
             window_padding: config.window_padding,
+            window_padding_balance: config.window_padding_balance,
         })
     }
 
@@ -167,6 +172,7 @@ impl TerminalRenderer {
                 surface_width: self.surface_width,
                 surface_height: self.surface_height,
                 window_padding: self.window_padding,
+                window_padding_balance: self.window_padding_balance,
                 theme: &self.theme,
                 bg_color,
                 min_contrast,
@@ -250,6 +256,10 @@ impl TerminalRenderer {
     /// new cols/rows to the PTY.
     pub fn set_window_padding(&mut self, padding: [u16; 2]) {
         self.window_padding = padding;
+    }
+
+    pub fn set_window_padding_balance(&mut self, balance: bool) {
+        self.window_padding_balance = balance;
     }
 
     fn effective_bg_color(&self) -> [u8; 4] {

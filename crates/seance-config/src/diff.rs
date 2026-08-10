@@ -67,7 +67,8 @@ impl ConfigDiff {
         let font_features_changed = old.font.features != new.font.features;
 
         let window_padding_changed = old.window.padding_x != new.window.padding_x
-            || old.window.padding_y != new.window.padding_y;
+            || old.window.padding_y != new.window.padding_y
+            || old.window.padding_balance != new.window.padding_balance;
 
         // Fields whose consumers will pick up changes on the next paint.
         // Grouped together so we can request a single redraw if any of them
@@ -222,6 +223,15 @@ mod tests {
         let d = ConfigDiff::between(&a, &b);
         assert!(d.window_padding_changed);
         assert!(!d.repaint_only);
+    }
+
+    #[test]
+    fn padding_balance_toggle_sets_window_padding_flag() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.window.padding_balance = !a.window.padding_balance;
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.window_padding_changed);
     }
 
     #[test]

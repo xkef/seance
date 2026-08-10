@@ -61,6 +61,7 @@ pub struct BuildFrameConfig<'a> {
     pub surface_width: u32,
     pub surface_height: u32,
     pub window_padding: [u16; 2],
+    pub window_padding_balance: bool,
     pub theme: &'a Theme,
     pub bg_color: [u8; 4],
     pub min_contrast: f32,
@@ -225,6 +226,7 @@ impl CellBuilder {
                 config.surface_width,
                 config.surface_height,
                 config.window_padding,
+                config.window_padding_balance,
             );
             (m.baseline, g)
         };
@@ -323,26 +325,41 @@ fn geometry(
     surface_width: u32,
     surface_height: u32,
     window_padding: [u16; 2],
+    balance: bool,
 ) -> FrameGeometry {
     let (cols, rows) = source.grid_size();
-    // User-configured padding anchors the grid at `(padding_x, padding_y)`.
-    // Any residual between the grid pixel extent and the surface is left on
-    // the right/bottom and filled by the fullscreen bg pass — matches
-    // Ghostty/Alacritty semantics (padding = minimum gutter, not centering).
+    // User-configured padding is the minimum gutter and anchors the grid at
+    // `(padding_x, padding_y)`. The sub-cell residual between the grid pixel
+    // extent and the surface is filled by the fullscreen bg pass: left on the
+    // right/bottom edges by default (Ghostty/Alacritty semantics), or split
+    // evenly around the grid when `padding_balance` is set.
+    let grid_w = cols as f32 * cell_width;
+    let grid_h = rows as f32 * cell_height;
     let user_pad_x = f32::from(window_padding[0]);
     let user_pad_y = f32::from(window_padding[1]);
     let pad_x = user_pad_x
-        .min((surface_width as f32 - cols as f32 * cell_width).max(0.0))
+        .min((surface_width as f32 - grid_w).max(0.0))
         .max(0.0);
     let pad_y = user_pad_y
-        .min((surface_height as f32 - rows as f32 * cell_height).max(0.0))
+        .min((surface_height as f32 - grid_h).max(0.0))
         .max(0.0);
+    // `padding_balance`: split the sub-cell remainder beyond the two gutters
+    // evenly so the grid is centered instead of flush to the top-left.
+    let (extra_x, extra_y) = if balance {
+        let leftover_x = (surface_width as f32 - grid_w - 2.0 * pad_x).max(0.0);
+        let leftover_y = (surface_height as f32 - grid_h - 2.0 * pad_y).max(0.0);
+        (leftover_x / 2.0, leftover_y / 2.0)
+    } else {
+        (0.0, 0.0)
+    };
+    let left = pad_x + extra_x;
+    let top = pad_y + extra_y;
     FrameGeometry {
         cell_width,
         cell_height,
         grid_cols: cols,
         grid_rows: rows,
-        grid_padding: [pad_x, pad_y, pad_x, pad_y],
+        grid_padding: [left, top, left, top],
     }
 }
 
@@ -740,6 +757,7 @@ mod tests {
             surface_width: 100,
             surface_height: 100,
             window_padding: [0, 0],
+            window_padding_balance: false,
             theme,
             bg_color: [0, 0, 0, 255],
             min_contrast: 1.0,
@@ -843,7 +861,7 @@ mod tests {
     fn geometry_honors_user_padding() {
         let cells: [FakeCell<'_>; 0] = [];
         let mut source = FakeFrame::new(10, 5, &cells);
-        let g = geometry(&mut source, 10.0, 20.0, 200, 200, [12, 6]);
+        let g = geometry(&mut source, 10.0, 20.0, 200, 200, [12, 6], false);
         assert_eq!(g.grid_padding, [12.0, 6.0, 12.0, 6.0]);
     }
 
@@ -851,9 +869,29 @@ mod tests {
     fn geometry_clamps_padding_to_surface() {
         let cells: [FakeCell<'_>; 0] = [];
         let mut source = FakeFrame::new(10, 5, &cells);
-        let g = geometry(&mut source, 10.0, 20.0, 110, 110, [50, 40]);
+        let g = geometry(&mut source, 10.0, 20.0, 110, 110, [50, 40], false);
         assert_eq!(g.grid_padding[0], 10.0);
         assert_eq!(g.grid_padding[1], 10.0);
+    }
+
+    #[test]
+    fn geometry_unbalanced_leaves_remainder_on_far_edge() {
+        // 10×5 grid at 10×20 px = 100×100 grid in a 150×150 surface, pad 12.
+        // Without balancing the grid stays anchored at the user padding.
+        let cells: [FakeCell<'_>; 0] = [];
+        let mut source = FakeFrame::new(10, 5, &cells);
+        let g = geometry(&mut source, 10.0, 20.0, 150, 150, [12, 12], false);
+        assert_eq!(g.grid_padding, [12.0, 12.0, 12.0, 12.0]);
+    }
+
+    #[test]
+    fn geometry_balance_centers_the_remainder() {
+        // Same geometry: leftover beyond the gutters is 150 - 100 - 24 = 26,
+        // split as 13 on each side, so the grid origin shifts to 12 + 13.
+        let cells: [FakeCell<'_>; 0] = [];
+        let mut source = FakeFrame::new(10, 5, &cells);
+        let g = geometry(&mut source, 10.0, 20.0, 150, 150, [12, 12], true);
+        assert_eq!(g.grid_padding, [25.0, 25.0, 25.0, 25.0]);
     }
 
     // ────────────────────────────────────────────────────────────────────

@@ -232,6 +232,7 @@ impl ApplicationHandler<UserEvent> for App {
             font_features: self.config.font.features.clone(),
             min_contrast: self.config.font.min_contrast,
             window_padding: physical_window_padding(&self.config, window.scale_factor()),
+            window_padding_balance: self.config.window.padding_balance,
             background_opacity: self.config.window.background_opacity,
             theme: theme.clone(),
         };
