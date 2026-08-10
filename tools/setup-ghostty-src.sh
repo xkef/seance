@@ -55,9 +55,14 @@ if [ ! -f "$PATCH_STAMP" ]; then
     # Rewrite the xcframework `if` guard so it becomes a dead branch.
     # Idempotent by design: `grep -q` detects an already-patched file.
     if ! grep -q 'false and builtin.os.tag.isDarwin' "$SRC/build.zig"; then
-        /usr/bin/sed -i '' \
+        # Route through a temp file: BSD sed (`-i ''`) and GNU sed (`-i`) take
+        # incompatible in-place flags, so `sed -i ''` aborts on Linux and, under
+        # `set -e`, kills setup before the build ever runs.
+        tmp="$(mktemp)"
+        sed \
             's|if (builtin.os.tag.isDarwin() and config.target.result.os.tag.isDarwin())|if (false and builtin.os.tag.isDarwin() and config.target.result.os.tag.isDarwin())|' \
-            "$SRC/build.zig"
+            "$SRC/build.zig" > "$tmp"
+        mv "$tmp" "$SRC/build.zig"
         echo "Patched vendor/ghostty-src/build.zig: xcframework step disabled."
     fi
     touch "$PATCH_STAMP"
