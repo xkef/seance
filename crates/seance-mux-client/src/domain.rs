@@ -10,6 +10,11 @@ use crate::{DomainEvent, PaneError, SpawnError};
 /// `seance-vt`.
 pub const DEFAULT_MAX_SCROLLBACK: usize = 10_000;
 
+/// Default PTY-output coalesce window handed to fresh panes, in milliseconds.
+/// Mirrors `seance_vt`'s default; lives here so `seance-mux-client` stays free
+/// of a `seance-vt` dependency. See `IoConfig::coalesce_delay_ms`.
+pub const DEFAULT_COALESCE_DELAY_MS: u16 = 2;
+
 /// Knobs the client hands the server when spawning a new pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneSpawnOptions {
@@ -19,6 +24,7 @@ pub struct PaneSpawnOptions {
     pub pixel_height: u16,
     pub initial_cursor_shape: CursorShape,
     pub max_scrollback: usize,
+    pub coalesce_delay_ms: u16,
 }
 
 impl Default for PaneSpawnOptions {
@@ -30,6 +36,7 @@ impl Default for PaneSpawnOptions {
             pixel_height: 384,
             initial_cursor_shape: CursorShape::Block,
             max_scrollback: DEFAULT_MAX_SCROLLBACK,
+            coalesce_delay_ms: DEFAULT_COALESCE_DELAY_MS,
         }
     }
 }

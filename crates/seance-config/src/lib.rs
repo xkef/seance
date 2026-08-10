@@ -14,7 +14,7 @@ pub mod theme;
 pub use diff::ConfigDiff;
 pub use schema::{
     ClipboardConfig, ClipboardPolicy, Config, CursorConfig, CursorStyle, FontConfig, InputConfig,
-    KeybindConfig, LinkModifiersConfig, LinksConfig, MacosOptionAsAlt, ScrollbackConfig,
+    IoConfig, KeybindConfig, LinkModifiersConfig, LinksConfig, MacosOptionAsAlt, ScrollbackConfig,
     WindowConfig,
 };
 pub use theme::{Theme, load as load_theme};

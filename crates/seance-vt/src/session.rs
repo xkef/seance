@@ -21,20 +21,45 @@ use crate::{CursorShape, VtSnapshot};
 
 const SYNC_OUTPUT_TIMEOUT: Duration = Duration::from_millis(150);
 
+/// Coalesce window handed to actors constructed from a defaulted
+/// [`VtSessionOptions`]. Mirrors `seance_config`'s `io.coalesce_delay_ms`
+/// default.
+const DEFAULT_COALESCE_DELAY_MS: u16 = 2;
+
 #[cfg(unix)]
 const READ_CHUNK: usize = 16 * 1024;
 #[cfg(unix)]
 const MAX_READ_PER_TICK: usize = 256 * 1024;
 #[cfg(unix)]
 const PTY_KEY: usize = 0;
-/// Brief settle window applied once per `read_pty_batch` after the PTY drains.
-/// A typical shell emits a clear-screen and the prompt redraw as two adjacent
-/// writes; in release builds the actor often drains the first before the second
-/// lands, which paints the cleared-with-home-cursor frame for one vsync. Polling
-/// once for ~1 ms after `WouldBlock` lets that second write coalesce into the
-/// same snapshot.
+/// Lower bound on the settle window applied once per `read_pty_batch` after the
+/// PTY drains. A typical shell emits a clear-screen and the prompt redraw as two
+/// adjacent writes; in release builds the actor often drains the first before the
+/// second lands, which paints the cleared-with-home-cursor frame for one vsync.
+/// Polling once for ~1 ms after `WouldBlock` lets that second write coalesce into
+/// the same snapshot. The configurable `coalesce_delay_ms` widens this window for
+/// bursty output; a recent keystroke caps it back to this floor so echo latency
+/// is unaffected.
 #[cfg(unix)]
 const PTY_READ_SETTLE: Duration = Duration::from_millis(1);
+/// A UI write (keystroke or paste) within this window marks the actor as
+/// echo-sensitive, capping the settle window to [`PTY_READ_SETTLE`].
+#[cfg(unix)]
+const INPUT_ACTIVITY_WINDOW: Duration = Duration::from_millis(50);
+
+/// Settle window applied after a drained PTY read. `coalesce_delay` is the
+/// configured `io.coalesce_delay_ms`; `recent_input` caps it to
+/// [`PTY_READ_SETTLE`] so a keystroke echo is not delayed by a large delay. A
+/// zero window disables the settle entirely (restoring the un-coalesced read
+/// loop).
+#[cfg(unix)]
+fn settle_window(coalesce_delay: Duration, recent_input: bool) -> Duration {
+    if recent_input {
+        coalesce_delay.min(PTY_READ_SETTLE)
+    } else {
+        coalesce_delay
+    }
+}
 
 /// Options used when spawning a VT session actor.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +70,9 @@ pub struct VtSessionOptions {
     pub pixel_height: u16,
     pub initial_cursor_shape: CursorShape,
     pub max_scrollback: usize,
+    /// PTY-output coalesce window in milliseconds. See `PTY_READ_SETTLE` /
+    /// `settle_window` for how the actor applies it.
+    pub coalesce_delay_ms: u16,
 }
 
 impl Default for VtSessionOptions {
@@ -56,6 +84,7 @@ impl Default for VtSessionOptions {
             pixel_height: 384,
             initial_cursor_shape: CursorShape::Block,
             max_scrollback: crate::core::DEFAULT_MAX_SCROLLBACK,
+            coalesce_delay_ms: DEFAULT_COALESCE_DELAY_MS,
         }
     }
 }
@@ -729,6 +758,8 @@ mod unix_actor {
         poller: Arc<Poller>,
         fd: Option<RawFd>,
         sync_gate: SyncOutputGate,
+        coalesce_delay: Duration,
+        last_input_at: Option<Instant>,
     }
 
     impl<F> VtActor<F, PortablePtyAdapter>
@@ -778,6 +809,8 @@ mod unix_actor {
                 poller,
                 fd,
                 sync_gate: SyncOutputGate::default(),
+                coalesce_delay: Duration::from_millis(u64::from(options.coalesce_delay_ms)),
+                last_input_at: None,
             };
             actor.drain_responses();
             actor.publish_snapshot().map_err(SpawnError::VtCore)?;
@@ -919,6 +952,9 @@ mod unix_actor {
                 self.core.scroll_lines(batch.scroll_delta);
                 let _ = self.publish_snapshot();
             }
+            if !batch.writes.is_empty() {
+                self.last_input_at = Some(Instant::now());
+            }
             self.pending_writes.extend(batch.writes);
             false
         }
@@ -962,7 +998,12 @@ mod unix_actor {
                     }
                     Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
                     Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                        if !changed || settled || !self.pty.wait_for_more(PTY_READ_SETTLE) {
+                        let window = settle_window(self.coalesce_delay, self.recent_input());
+                        if !changed
+                            || settled
+                            || window.is_zero()
+                            || !self.pty.wait_for_more(window)
+                        {
                             break;
                         }
                         settled = true;
@@ -1016,6 +1057,11 @@ mod unix_actor {
 
         fn sync_active(&self) -> bool {
             self.core.sync_active()
+        }
+
+        fn recent_input(&self) -> bool {
+            self.last_input_at
+                .is_some_and(|at| at.elapsed() < INPUT_ACTIVITY_WINDOW)
         }
 
         fn child_exited(&mut self) -> bool {
@@ -1173,6 +1219,40 @@ mod unix_actor {
         fn clear_wake_state(pending: &AtomicBool, events: &Mutex<Vec<VtEvent>>) {
             pending.store(false, Ordering::SeqCst);
             events.lock().unwrap().clear();
+        }
+
+        #[test]
+        fn settle_window_widens_for_bursts_and_floors_for_input() {
+            let delay = Duration::from_millis(8);
+            // No recent input: the full configured window coalesces bursts.
+            assert_eq!(settle_window(delay, false), delay);
+            // Recent keystroke: capped to the flash floor so echo is prompt.
+            assert_eq!(settle_window(delay, true), PTY_READ_SETTLE);
+            // A sub-floor delay is never widened by the input cap.
+            let tiny = Duration::from_micros(500);
+            assert_eq!(settle_window(tiny, true), tiny);
+            // Zero disables the settle regardless of input state.
+            assert!(settle_window(Duration::ZERO, false).is_zero());
+            assert!(settle_window(Duration::ZERO, true).is_zero());
+        }
+
+        #[test]
+        fn read_pty_batch_skips_settle_when_coalesce_disabled() {
+            let (_tx, mut actor, slot, pending, events, _clip) = actor_with_script([
+                ScriptRead::Data(Bytes::from_static(b"\x1b[H\x1b[2J")),
+                ScriptRead::WouldBlock,
+                ScriptRead::Data(Bytes::from_static(b"$ ")),
+            ]);
+            actor.coalesce_delay = Duration::ZERO;
+            clear_wake_state(&pending, &events);
+
+            assert!(matches!(actor.read_pty_batch(), Ok(ReadOutcome::Alive)));
+
+            // With the settle disabled the second write stays queued for the
+            // next batch rather than coalescing into this snapshot.
+            let snapshot = slot.latest_snapshot().unwrap();
+            assert_ne!(snapshot.cell_text(&snapshot.cells[0]), "$");
+            assert!(matches!(actor.pty.reads.front(), Some(ScriptRead::Data(_))));
         }
 
         #[test]

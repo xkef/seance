@@ -40,6 +40,8 @@ pub enum ClientMessage {
         /// architecture-independent. Server clamps to `usize::MAX` on the
         /// receive side.
         max_scrollback: u64,
+        /// PTY-output coalesce window in milliseconds (`IoConfig`).
+        coalesce_delay_ms: u16,
     },
     ResizePane {
         pane: PaneRef,
@@ -288,6 +290,16 @@ mod tests {
             pixel_width: 800,
             pixel_height: 384,
         };
+        round_trip(&ClientMessage::SpawnPane {
+            domain: pane.domain,
+            cols: 132,
+            rows: 43,
+            pixel_width: 1320,
+            pixel_height: 688,
+            initial_cursor_shape: CursorShape::Bar,
+            max_scrollback: 75_000,
+            coalesce_delay_ms: 7,
+        });
         round_trip(&ClientMessage::PaneInput {
             pane,
             bytes: b"abc".to_vec(),

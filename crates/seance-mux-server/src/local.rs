@@ -225,6 +225,7 @@ fn vt_options_from(options: &PaneSpawnOptions) -> VtSessionOptions {
         pixel_height: options.pixel_height,
         initial_cursor_shape: options.initial_cursor_shape,
         max_scrollback: options.max_scrollback,
+        coalesce_delay_ms: options.coalesce_delay_ms,
     }
 }
 
@@ -388,9 +389,11 @@ mod tests {
     fn pane_spawn_options_propagate_max_scrollback_to_vt() {
         let options = PaneSpawnOptions {
             max_scrollback: 12_345,
+            coalesce_delay_ms: 9,
             ..PaneSpawnOptions::default()
         };
         let vt = vt_options_from(&options);
         assert_eq!(vt.max_scrollback, 12_345);
+        assert_eq!(vt.coalesce_delay_ms, 9);
     }
 }

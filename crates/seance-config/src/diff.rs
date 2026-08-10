@@ -52,6 +52,10 @@ pub struct ConfigDiff {
     /// requires respawning the actor, which the live reload path does not do
     /// today. Caller logs a notice telling the user to restart.
     pub scrollback_limit_changed: bool,
+    /// `io.coalesce_delay_ms` changed — the value is baked into the VT actor
+    /// at spawn, so a live edit needs a respawn the reload path does not do
+    /// today. Caller logs a notice telling the user to restart.
+    pub io_coalesce_delay_changed: bool,
 }
 
 impl ConfigDiff {
@@ -81,6 +85,7 @@ impl ConfigDiff {
         let links_changed = old.links != new.links;
         let keybinds_changed = old.keybind != new.keybind;
         let scrollback_limit_changed = old.scrollback.limit != new.scrollback.limit;
+        let io_coalesce_delay_changed = old.io.coalesce_delay_ms != new.io.coalesce_delay_ms;
 
         Self {
             theme_changed,
@@ -95,6 +100,7 @@ impl ConfigDiff {
             links_changed,
             keybinds_changed,
             scrollback_limit_changed,
+            io_coalesce_delay_changed,
         }
     }
 
@@ -111,7 +117,8 @@ impl ConfigDiff {
             || self.input_changed
             || self.links_changed
             || self.keybinds_changed
-            || self.scrollback_limit_changed)
+            || self.scrollback_limit_changed
+            || self.io_coalesce_delay_changed)
     }
 }
 
@@ -270,6 +277,18 @@ mod tests {
         assert!(d.scrollback_limit_changed);
         assert!(!d.repaint_only);
         assert!(!d.theme_changed);
+        assert!(!d.is_empty());
+    }
+
+    #[test]
+    fn io_coalesce_delay_change_is_detected_separately() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.io.coalesce_delay_ms = a.io.coalesce_delay_ms + 5;
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.io_coalesce_delay_changed);
+        assert!(!d.scrollback_limit_changed);
+        assert!(!d.repaint_only);
         assert!(!d.is_empty());
     }
 

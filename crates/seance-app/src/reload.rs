@@ -115,6 +115,11 @@ impl App {
                 "scrollback.limit change takes effect on restart (live swap not yet supported)"
             );
         }
+        if diff.io_coalesce_delay_changed {
+            tracing::info!(
+                "io.coalesce_delay_ms change takes effect on restart (live swap not yet supported)"
+            );
+        }
         if diff.theme_changed {
             self.reload_theme();
         }

@@ -416,6 +416,7 @@ fn protocol_spawn_round_trips_through_topology_reply() {
                     pixel_height,
                     initial_cursor_shape,
                     max_scrollback,
+                    coalesce_delay_ms,
                 } = message
                 {
                     // Echo every field back through the channel so the test
@@ -434,6 +435,7 @@ fn protocol_spawn_round_trips_through_topology_reply() {
                             pixel_height,
                             initial_cursor_shape,
                             max_scrollback,
+                            coalesce_delay_ms,
                         ))
                         .unwrap();
                     let topology = Topology {
@@ -485,6 +487,7 @@ fn protocol_spawn_round_trips_through_topology_reply() {
         pixel_height: 688,
         initial_cursor_shape: CursorShape::Bar,
         max_scrollback: 75_000,
+        coalesce_delay_ms: 7,
     };
     let pane = domain
         .spawn_pane(options.clone())
@@ -497,6 +500,7 @@ fn protocol_spawn_round_trips_through_topology_reply() {
         pixel_height,
         initial_cursor_shape,
         max_scrollback,
+        coalesce_delay_ms,
     ) = sent_rx.recv_timeout(Duration::from_secs(1)).unwrap();
     assert_eq!(pane, expected_pane);
     assert_eq!(cols, options.cols);
@@ -505,6 +509,7 @@ fn protocol_spawn_round_trips_through_topology_reply() {
     assert_eq!(pixel_height, options.pixel_height);
     assert_eq!(initial_cursor_shape, options.initial_cursor_shape);
     assert_eq!(max_scrollback, options.max_scrollback as u64);
+    assert_eq!(coalesce_delay_ms, options.coalesce_delay_ms);
     assert_eq!(
         MessageKind::ClientSpawnPane,
         ClientMessage::SpawnPane {
@@ -515,6 +520,7 @@ fn protocol_spawn_round_trips_through_topology_reply() {
             pixel_height: 0,
             initial_cursor_shape: CursorShape::Block,
             max_scrollback: 0,
+            coalesce_delay_ms: 0,
         }
         .kind()
     );

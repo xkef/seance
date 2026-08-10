@@ -262,6 +262,7 @@ impl ApplicationHandler<UserEvent> for App {
                 pixel_height: size.height as u16,
                 initial_cursor_shape: mux_shape_from_config(self.config.cursor.style),
                 max_scrollback: self.config.scrollback.limit as usize,
+                coalesce_delay_ms: self.config.io.coalesce_delay_ms,
             })
             .expect("failed to spawn local pane");
         tracing::info!(pane = ?active_pane, cols, rows, "pane spawned");
