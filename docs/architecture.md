@@ -150,6 +150,11 @@ without libghostty linked. The local-mode binary pairs `seance-mux-client`
 
 ## Renderer (`seance-render`)
 
+The text-rendering invariants — shaping backend, atlas planes, subpixel
+positioning, hinting, color-glyph routing — are specified in
+[`docs/text.md`](./text.md). This section is the structural overview; that file
+is the per-decision detail with source citations.
+
 ### Font pipeline
 
 - **cosmic-text** [IMPLEMENTED] — wraps fontdb + rustybuzz + bidi. Shapes
