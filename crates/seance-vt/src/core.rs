@@ -69,6 +69,10 @@ pub(crate) struct VtCore {
     pwd: Option<String>,
     osc_state: OscState,
     clipboard_requests: VecDeque<ClipboardRequest>,
+    // Kitty APC bytes synthesized from intercepted OSC 1337 inline images,
+    // flushed into the parser after the current chunk so the image lands at the
+    // cursor the app left it on.
+    pending_injection: Vec<u8>,
 }
 
 impl VtCore {
@@ -116,6 +120,7 @@ impl VtCore {
             pwd: None,
             osc_state: OscState::Ground,
             clipboard_requests: VecDeque::new(),
+            pending_injection: Vec::new(),
         };
         core.seed_cursor_shape(options.initial_cursor_shape);
         Ok(core)
@@ -125,6 +130,10 @@ impl VtCore {
         if !bytes.is_empty() {
             self.track_osc(bytes);
             self.vt.vt_write(bytes);
+        }
+        if !self.pending_injection.is_empty() {
+            let injection = std::mem::take(&mut self.pending_injection);
+            self.vt.vt_write(&injection);
         }
     }
 
@@ -262,6 +271,10 @@ impl VtCore {
         }
         if let Some(request) = parse_osc52(content) {
             self.clipboard_requests.push_back(request);
+            return;
+        }
+        if let Some(apc) = crate::iterm::osc1337_to_kitty(content) {
+            self.pending_injection.extend_from_slice(&apc);
         }
     }
 
@@ -608,6 +621,32 @@ mod tests {
             initial_cursor_shape: CursorShape::Block,
         })
         .expect("core should construct")
+    }
+
+    // 2×2 RGBA PNG (red, green / blue, yellow).
+    const PNG_2X2: &str = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP4z8DwHwyBNBAw/AcAR8oI+ItOQ4UAAAAASUVORK5CYII=";
+
+    #[test]
+    fn osc1337_inline_image_lands_as_kitty_image() {
+        let mut core = core();
+        let osc = format!("\x1b]1337;File=inline=1:{PNG_2X2}\x07");
+        core.feed(osc.as_bytes());
+        let snapshot = core.snapshot().unwrap();
+        assert_eq!(snapshot.images.len(), 1, "one image should be stored");
+        let image = &snapshot.images[0];
+        assert_eq!((image.width, image.height), (2, 2));
+        assert_eq!(image.rgba.len(), 2 * 2 * 4);
+        assert_eq!(snapshot.placements.len(), 1, "image should be placed");
+    }
+
+    #[test]
+    fn osc1337_download_variant_is_ignored() {
+        let mut core = core();
+        let osc = format!("\x1b]1337;File=inline=0:{PNG_2X2}\x07");
+        core.feed(osc.as_bytes());
+        let snapshot = core.snapshot().unwrap();
+        assert!(snapshot.images.is_empty());
+        assert!(snapshot.placements.is_empty());
     }
 
     #[test]

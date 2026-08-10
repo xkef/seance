@@ -31,7 +31,7 @@ pub(crate) fn parse_osc52(content: &[u8]) -> Option<ClipboardRequest> {
     Some(ClipboardRequest::Write(decoded))
 }
 
-fn base64_decode(input: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn base64_decode(input: &[u8]) -> Option<Vec<u8>> {
     let mut buf = Vec::with_capacity(input.len() * 3 / 4);
     let mut group = 0u32;
     let mut filled = 0u8;

@@ -7,6 +7,7 @@
 
 mod clipboard;
 mod core;
+mod iterm;
 mod kitty_graphics;
 mod session;
 mod snapshot_extraction;
