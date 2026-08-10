@@ -18,7 +18,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
-use winit::window::{Window, WindowId};
+use winit::window::{Theme as WinitTheme, Window, WindowId};
 
 use seance_config::Config;
 use seance_input::InputHandler;
@@ -45,6 +45,10 @@ pub(crate) struct App {
     pub(crate) keybinds: Keybinds,
     pub(crate) config: Config,
     pub(crate) font_size: f32,
+    /// Current OS appearance, used to pick the `light:`/`dark:` half of a
+    /// `theme = "light:A,dark:B"` spec. Seeded from the window at startup and
+    /// updated on `WindowEvent::ThemeChanged`.
+    pub(crate) appearance: seance_config::Appearance,
     proxy: EventLoopProxy<UserEvent>,
     watcher: Option<ConfigWatcher>,
     /// Handle to the in-process mux-server thread that owns LocalDomain.
@@ -66,6 +70,7 @@ impl App {
             keybinds: Keybinds::from_config(&config.keybind),
             config,
             font_size,
+            appearance: seance_config::Appearance::default(),
             proxy,
             watcher: None,
             _server_thread: None,
@@ -220,7 +225,8 @@ impl ApplicationHandler<UserEvent> for App {
             scale = window.scale_factor(),
             "window created",
         );
-        let theme = seance_config::load_theme(self.config.theme.as_deref());
+        self.appearance = appearance_from_winit(window.theme());
+        let theme = seance_config::load_theme_for(self.config.theme.as_deref(), self.appearance);
         let renderer_config = RendererConfig {
             width: size.width,
             height: size.height,
@@ -370,6 +376,9 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                 }
             }
+            WindowEvent::ThemeChanged(theme) => {
+                self.on_appearance_changed(appearance_from_winit(Some(theme)));
+            }
             WindowEvent::RedrawRequested => self.draw(),
             _ => {}
         }
@@ -405,6 +414,16 @@ fn initial_window_size_from_env() -> Option<LogicalSize<u32>> {
     let width = width.parse().ok()?;
     let height = height.parse().ok()?;
     Some(LogicalSize::new(width, height))
+}
+
+/// Map the winit-reported OS theme to a [`seance_config::Appearance`]. A
+/// `None` (platform reports no preference) resolves to `Dark`, matching the
+/// resolver's appearance-free default.
+fn appearance_from_winit(theme: Option<WinitTheme>) -> seance_config::Appearance {
+    match theme {
+        Some(WinitTheme::Light) => seance_config::Appearance::Light,
+        Some(WinitTheme::Dark) | None => seance_config::Appearance::Dark,
+    }
 }
 
 pub(crate) fn mux_shape_from_config(style: seance_config::CursorStyle) -> MuxCursorShape {

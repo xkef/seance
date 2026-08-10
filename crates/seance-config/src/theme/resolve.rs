@@ -3,8 +3,9 @@
 //! Spec forms (Ghostty parity):
 //! - `"<Name>"` — look in `$XDG_CONFIG_HOME/seance/themes/<Name>` first,
 //!   then fall back to the embedded bundled themes.
-//! - `"light:A,dark:B"` — parse both and pick the dark variant for now.
-//!   OS-appearance-driven switching is tracked as a follow-up (#131).
+//! - `"light:A,dark:B"` — parse both and pick the half matching the current
+//!   OS [`Appearance`]. [`load_for`]/[`try_load_for`] take the appearance;
+//!   the appearance-free [`load`]/[`try_load`] default to the dark variant.
 //! - `"/abs/path"` — load that file directly; error if missing.
 
 use std::fs;
@@ -17,12 +18,23 @@ use crate::config_dir;
 /// Catppuccin Frappe matches the historical look seance shipped with.
 pub const DEFAULT_THEME_NAME: &str = "Catppuccin Frappe";
 
+/// OS appearance, used to choose between the `light:`/`dark:` halves of a
+/// [`ThemeSpec::LightDark`] spec. Other spec forms ignore it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Appearance {
+    Light,
+    /// Default. Matches the historical always-dark resolution and the
+    /// fallback when the OS reports no preference.
+    #[default]
+    Dark,
+}
+
 /// Parsed spec matching one of the Ghostty `theme = ...` forms.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThemeSpec {
     /// Look up a name in user dir, then bundled.
     Named(String),
-    /// `light:A,dark:B` — we currently always pick `dark`.
+    /// `light:A,dark:B` — the resolved half follows the OS [`Appearance`].
     LightDark { light: String, dark: String },
     /// Absolute or explicit filesystem path.
     Path(PathBuf),
@@ -39,6 +51,13 @@ impl ThemeSpec {
             return Self::LightDark { light: a, dark: b };
         }
         Self::Named(s.to_string())
+    }
+
+    /// Whether the resolved palette depends on OS appearance — true only for
+    /// the `light:/dark:` form. Callers use this to decide whether an OS
+    /// appearance change requires re-resolving the theme.
+    pub fn is_appearance_sensitive(&self) -> bool {
+        matches!(self, Self::LightDark { .. })
     }
 }
 
@@ -84,20 +103,36 @@ impl std::error::Error for LoadError {}
 /// into a fully-parsed [`Theme`]. Logs on failure and falls back to the
 /// bundled default so the terminal still launches.
 pub fn load(spec: Option<&str>) -> Theme {
+    load_for(spec, Appearance::default())
+}
+
+/// Like [`load`], but picks the `light:`/`dark:` half of a `LightDark` spec
+/// according to `appearance`. Named and path specs ignore it.
+pub fn load_for(spec: Option<&str>, appearance: Appearance) -> Theme {
     let spec = ThemeSpec::parse(spec.unwrap_or(DEFAULT_THEME_NAME));
-    try_load(&spec).unwrap_or_else(|err| {
+    try_load_for(&spec, appearance).unwrap_or_else(|err| {
         tracing::warn!("theme load failed ({err}); falling back to {DEFAULT_THEME_NAME}");
         fallback_bundled(DEFAULT_THEME_NAME)
     })
 }
 
 /// Lower-level entrypoint that surfaces errors instead of logging. Useful
-/// in tests and in the forthcoming hot-reload path (#13) where the caller
-/// may want to reject a bad edit rather than silently fall back.
+/// in tests and in the hot-reload path (#13) where the caller may want to
+/// reject a bad edit rather than silently fall back. A `LightDark` spec
+/// resolves its dark half; use [`try_load_for`] to honor OS appearance.
 pub fn try_load(spec: &ThemeSpec) -> Result<Theme, LoadError> {
+    try_load_for(spec, Appearance::default())
+}
+
+/// Like [`try_load`], but resolves a `LightDark` spec's half from
+/// `appearance`. Named and path specs ignore it.
+pub fn try_load_for(spec: &ThemeSpec, appearance: Appearance) -> Result<Theme, LoadError> {
     match spec {
         ThemeSpec::Named(name) => load_named(name),
-        ThemeSpec::LightDark { dark, .. } => load_named(dark),
+        ThemeSpec::LightDark { light, dark } => match appearance {
+            Appearance::Light => load_named(light),
+            Appearance::Dark => load_named(dark),
+        },
         ThemeSpec::Path(path) => load_path(path),
     }
 }
@@ -195,5 +230,52 @@ mod tests {
     fn load_light_dark_picks_dark() {
         let t = load(Some("light:Catppuccin Latte,dark:Catppuccin Frappe"));
         assert_eq!(t.bg, [0x30, 0x34, 0x46, 0xff]);
+    }
+
+    #[test]
+    fn appearance_defaults_to_dark() {
+        assert_eq!(Appearance::default(), Appearance::Dark);
+    }
+
+    #[test]
+    fn load_for_dark_matches_appearance_free_load() {
+        let spec = "light:Catppuccin Latte,dark:Catppuccin Frappe";
+        assert_eq!(
+            load_for(Some(spec), Appearance::Dark).bg,
+            load(Some(spec)).bg
+        );
+    }
+
+    #[test]
+    fn load_for_light_picks_light_variant() {
+        let spec = "light:Catppuccin Latte,dark:Catppuccin Frappe";
+        // The light half resolves to the named light theme, distinct from
+        // the dark half — proving appearance actually switches the palette.
+        assert_eq!(
+            load_for(Some(spec), Appearance::Light).bg,
+            load(Some("Catppuccin Latte")).bg
+        );
+        assert_ne!(
+            load_for(Some(spec), Appearance::Light).bg,
+            load_for(Some(spec), Appearance::Dark).bg
+        );
+    }
+
+    #[test]
+    fn load_for_named_ignores_appearance() {
+        assert_eq!(
+            load_for(Some("Catppuccin Frappe"), Appearance::Light).bg,
+            load_for(Some("Catppuccin Frappe"), Appearance::Dark).bg
+        );
+    }
+
+    #[test]
+    fn is_appearance_sensitive_only_for_light_dark() {
+        assert!(
+            ThemeSpec::parse("light:Catppuccin Latte,dark:Catppuccin Frappe")
+                .is_appearance_sensitive()
+        );
+        assert!(!ThemeSpec::parse("Catppuccin Frappe").is_appearance_sensitive());
+        assert!(!ThemeSpec::parse("/etc/theme").is_appearance_sensitive());
     }
 }

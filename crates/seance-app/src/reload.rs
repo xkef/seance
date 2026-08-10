@@ -33,7 +33,7 @@ impl App {
                 .as_deref()
                 .unwrap_or(seance_config::theme::resolve::DEFAULT_THEME_NAME),
         );
-        let theme = match seance_config::theme::try_load(&spec) {
+        let theme = match seance_config::theme::try_load_for(&spec, self.appearance) {
             Ok(t) => t,
             Err(err) => {
                 tracing::warn!("theme reload skipped: {err}");
@@ -44,6 +44,25 @@ impl App {
             surface.renderer.set_theme(theme.clone());
             surface.set_theme_colors(&theme);
             surface.mark_dirty();
+        }
+    }
+
+    /// React to an OS light/dark appearance change. Only the `light:/dark:`
+    /// theme form depends on appearance, so for any other spec this is a
+    /// no-op beyond recording the new value.
+    #[tracing::instrument(level = "info", skip_all)]
+    pub(crate) fn on_appearance_changed(&mut self, appearance: seance_config::Appearance) {
+        if self.appearance == appearance {
+            return;
+        }
+        self.appearance = appearance;
+        let active = self
+            .config
+            .theme
+            .as_deref()
+            .unwrap_or(seance_config::theme::resolve::DEFAULT_THEME_NAME);
+        if seance_config::theme::ThemeSpec::parse(active).is_appearance_sensitive() {
+            self.reload_theme();
         }
     }
 

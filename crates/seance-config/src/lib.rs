@@ -17,7 +17,7 @@ pub use schema::{
     KeybindConfig, LinkModifiersConfig, LinksConfig, MacosOptionAsAlt, ScrollbackConfig,
     WindowConfig,
 };
-pub use theme::{Theme, load as load_theme};
+pub use theme::{Appearance, Theme, load as load_theme, load_for as load_theme_for};
 
 use std::path::{Path, PathBuf};
 use std::{env, fs};
