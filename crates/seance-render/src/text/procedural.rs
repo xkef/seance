@@ -1,6 +1,7 @@
 //! Procedural rasterization of Unicode box-drawing and block-element
-//! codepoints (U+2500–U+259F) and Powerline separator triangles
-//! (U+E0B0–U+E0B3).
+//! codepoints (U+2500–U+259F), Powerline separator triangles
+//! (U+E0B0–U+E0B3), Braille patterns (U+2800–U+28FF), and the sextant
+//! mosaics from Symbols for Legacy Computing (U+1FB00–U+1FB3B).
 //!
 //! Fonts ship inconsistent metrics for these glyphs, so monospace alignment
 //! breaks at non-integer font sizes — long horizontal lines split into pieces,
@@ -126,10 +127,34 @@ enum PowerlineTriangle {
     LeftThin,
 }
 
+/// A Braille pattern as its raised-dot bitmask, taken straight from the
+/// codepoint's offset into U+2800. The standard dot numbering is
+///
+/// ```text
+///     1 4
+///     2 5
+///     3 6
+///     7 8
+/// ```
+///
+/// with bit `i` (LSB-first) corresponding to dot `i + 1`: bits 0–2 are the
+/// left column rows 0–2, bits 3–5 the right column rows 0–2, bit 6 the
+/// bottom-left dot, bit 7 the bottom-right dot.
+#[derive(Clone, Copy)]
+struct BrailleMask(u8);
+
+/// A 2×3 sextant fill mask. Bit 0 = top-left, 1 = top-right, 2 = mid-left,
+/// 3 = mid-right, 4 = bottom-left, 5 = bottom-right. Sub-rectangles are filled
+/// solid (no gaps), like the 2×2 quadrant glyphs.
+#[derive(Clone, Copy)]
+struct SextantMask(u8);
+
 #[derive(Clone, Copy)]
 enum RenderKind {
     Box(Strokes),
     Powerline(PowerlineTriangle),
+    Braille(BrailleMask),
+    Sextant(SextantMask),
     Arc(ArcCorner),
     Diagonal(Diagonal),
     Quadrant(QuadrantMask),
@@ -149,9 +174,28 @@ fn lookup(c: char) -> Option<RenderKind> {
     let cp = c as u32;
     match cp {
         0x2500..=0x259F => lookup_in_range(cp),
+        0x2800..=0x28FF => Some(RenderKind::Braille(BrailleMask((cp - 0x2800) as u8))),
+        0x1FB00..=0x1FB3B => Some(RenderKind::Sextant(SextantMask(sextant_value(cp)))),
         0xE0B0..=0xE0B3 => lookup_powerline(cp),
         _ => None,
     }
+}
+
+/// Decode a sextant codepoint (U+1FB00..=U+1FB3B) back to its 6-bit fill mask.
+/// The block enumerates the 2×3 combinations in ascending binary order but
+/// omits the four that already have block-element representations: blank
+/// (`space`), full (U+2588), left half (U+258C), and right half (U+2590). Those
+/// gaps fall at mask values 0, 63, 21, and 42; skipping 21 then 42 reindexes
+/// the codepoint offset onto the surviving values.
+fn sextant_value(cp: u32) -> u8 {
+    let mut v = (cp - 0x1FB00) as u8 + 1; // +1 steps past the blank (mask 0)
+    if v >= 21 {
+        v += 1; // left half block (U+258C)
+    }
+    if v >= 42 {
+        v += 1; // right half block (U+2590)
+    }
+    v
 }
 
 fn lookup_powerline(cp: u32) -> Option<RenderKind> {
@@ -408,6 +452,8 @@ fn draw(kind: RenderKind, pixmap: &mut Pixmap, w: u32, h: u32) {
     match kind {
         RenderKind::Box(strokes) => draw_box(strokes, pixmap, w, h),
         RenderKind::Powerline(triangle) => draw_powerline(triangle, pixmap, w, h),
+        RenderKind::Braille(mask) => draw_braille(mask, pixmap, w, h),
+        RenderKind::Sextant(mask) => draw_sextant(mask, pixmap, w, h),
         RenderKind::Arc(corner) => draw_arc(corner, pixmap, w, h),
         RenderKind::Diagonal(kind) => draw_diagonal(kind, pixmap, w, h),
         RenderKind::Quadrant(mask) => draw_quadrants(mask, pixmap, w, h),
@@ -655,6 +701,73 @@ fn draw_quadrants(mask: QuadrantMask, pixmap: &mut Pixmap, w: u32, h: u32) {
     }
     if mask.0 & 0b1000 != 0 {
         fill_rect(pixmap, half_w, half_h, w as f32 - half_w, h as f32 - half_h);
+    }
+}
+
+/// Draw raised Braille dots on a 2-column × 4-row sub-grid. Each dot is a
+/// filled circle centered in its sub-cell, leaving gaps between dots so the
+/// pattern reads as discrete points — the form terminal plotters and roguelikes
+/// (brogue) rely on for higher-resolution-than-a-cell graphics.
+fn draw_braille(mask: BrailleMask, pixmap: &mut Pixmap, w: u32, h: u32) {
+    // (column, row) of each dot 1..=8 in the standard layout, indexed by bit.
+    const DOTS: [(u32, u32); 8] = [
+        (0, 0), // dot 1
+        (0, 1), // dot 2
+        (0, 2), // dot 3
+        (1, 0), // dot 4
+        (1, 1), // dot 5
+        (1, 2), // dot 6
+        (0, 3), // dot 7
+        (1, 3), // dot 8
+    ];
+    let col_w = w as f32 / 2.0;
+    let row_h = h as f32 / 4.0;
+    // Radius covers most of the sub-cell but keeps a gap; floored so a dot
+    // never vanishes at small cell sizes.
+    let radius = (col_w.min(row_h) * 0.5 * 0.75).max(0.75);
+    for (bit, &(col, row)) in DOTS.iter().enumerate() {
+        if mask.0 & (1 << bit) == 0 {
+            continue;
+        }
+        let cx = (col as f32 + 0.5) * col_w;
+        let cy = (row as f32 + 0.5) * row_h;
+        let mut pb = PathBuilder::new();
+        pb.push_circle(cx, cy, radius);
+        if let Some(path) = pb.finish() {
+            pixmap.fill_path(
+                &path,
+                &white_paint(),
+                FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
+        }
+    }
+}
+
+/// Fill the raised sub-rectangles of a 2-column × 3-row sextant mosaic. Cells
+/// extend to the far cell edges (not the rounded sub-cell boundary) so adjacent
+/// sextants tile seamlessly, mirroring the quadrant treatment.
+fn draw_sextant(mask: SextantMask, pixmap: &mut Pixmap, w: u32, h: u32) {
+    let wf = w as f32;
+    let hf = h as f32;
+    let col_w = wf / 2.0;
+    let row_h = hf / 3.0;
+    for bit in 0..6u8 {
+        if mask.0 & (1 << bit) == 0 {
+            continue;
+        }
+        let col = u32::from(bit % 2);
+        let row = u32::from(bit / 2);
+        let x = col as f32 * col_w;
+        let y = row as f32 * row_h;
+        let x_end = if col == 0 { col_w } else { wf };
+        let y_end = match row {
+            0 => row_h,
+            1 => 2.0 * row_h,
+            _ => hf,
+        };
+        fill_rect(pixmap, x, y, x_end - x, y_end - y);
     }
 }
 
@@ -938,6 +1051,111 @@ mod tests {
             0,
             "thin variant should leave deep interior clear"
         );
+    }
+
+    #[test]
+    fn supports_braille_and_sextant_ranges() {
+        for cp in [0x2800u32, 0x2801, 0x280F, 0x28FF, 0x1FB00, 0x1FB1E, 0x1FB3B] {
+            let c = char::from_u32(cp).unwrap();
+            assert!(supports(c), "expected procedural support for U+{cp:04X}");
+        }
+        // U+1FB3C onward are diagonal/mosaic legacy glyphs not covered here.
+        assert!(!supports('\u{1FB3C}'));
+        // U+27FF sits just below the Braille block.
+        assert!(!supports('\u{27FF}'));
+    }
+
+    #[test]
+    fn blank_braille_rasterizes_to_empty_cell() {
+        let m = metrics(10, 20);
+        let g = rasterize('\u{2800}', &m).unwrap();
+        assert!(g.data.iter().all(|&p| p == 0), "U+2800 carries no dots");
+    }
+
+    #[test]
+    fn braille_dot_one_inks_only_top_left_dot() {
+        // U+2801 raises dot 1 (top-left). Its sub-cell center carries ink;
+        // the centers of the other three left-column dots stay clear.
+        let m = metrics(16, 40);
+        let g = rasterize('\u{2801}', &m).unwrap();
+        let w = g.width as usize;
+        let col_w = g.width as f32 / 2.0;
+        let row_h = g.height as f32 / 4.0;
+        let dot_center = |col: f32, row: f32| -> u8 {
+            let x = ((col + 0.5) * col_w) as usize;
+            let y = ((row + 0.5) * row_h) as usize;
+            g.data[y * w + x]
+        };
+        assert!(dot_center(0.0, 0.0) > 0, "dot 1 must be inked");
+        assert_eq!(dot_center(0.0, 1.0), 0, "dot 2 must be clear");
+        assert_eq!(dot_center(1.0, 0.0), 0, "dot 4 must be clear");
+        assert_eq!(dot_center(1.0, 3.0), 0, "dot 8 must be clear");
+    }
+
+    #[test]
+    fn full_braille_inks_every_dot_center() {
+        let m = metrics(16, 40);
+        let g = rasterize('\u{28FF}', &m).unwrap();
+        let w = g.width as usize;
+        let col_w = g.width as f32 / 2.0;
+        let row_h = g.height as f32 / 4.0;
+        for col in 0..2u32 {
+            for row in 0..4u32 {
+                let x = ((col as f32 + 0.5) * col_w) as usize;
+                let y = ((row as f32 + 0.5) * row_h) as usize;
+                assert!(
+                    g.data[y * w + x] > 0,
+                    "dot at col {col} row {row} must be inked"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sextant_value_skips_block_element_duplicates() {
+        // First codepoint = top-left only (mask 0b000001).
+        assert_eq!(sextant_value(0x1FB00), 1);
+        // Last codepoint = everything but top-left (mask 0b111110).
+        assert_eq!(sextant_value(0x1FB3B), 0b111110);
+        // The blank, full, left-half, and right-half masks are never produced.
+        let produced: Vec<u8> = (0x1FB00..=0x1FB3Bu32).map(sextant_value).collect();
+        for reserved in [0u8, 21, 42, 63] {
+            assert!(
+                !produced.contains(&reserved),
+                "mask {reserved:#08b} has a block-element form and must be skipped"
+            );
+        }
+        // 60 codepoints map to 60 distinct masks.
+        let mut sorted = produced.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 60);
+    }
+
+    #[test]
+    fn sextant_top_left_fills_only_top_left_block() {
+        // U+1FB00 = top-left sextant only.
+        let m = metrics(12, 30);
+        let g = rasterize('\u{1FB00}', &m).unwrap();
+        let w = g.width as usize;
+        let h = g.height as usize;
+        // Top-left interior pixel is inked; the other five blocks' interiors
+        // are clear.
+        assert_eq!(g.data[0], 255, "top-left block filled");
+        assert_eq!(g.data[w - 1], 0, "top-right clear");
+        assert_eq!(g.data[(h / 2) * w], 0, "mid-left clear");
+        assert_eq!(g.data[(h - 1) * w], 0, "bottom-left clear");
+        assert_eq!(g.data[(h - 1) * w + (w - 1)], 0, "bottom-right clear");
+    }
+
+    #[test]
+    fn sextant_rasterizes_to_full_cell_dimensions() {
+        let m = metrics(10, 20);
+        let g = rasterize('\u{1FB00}', &m).unwrap();
+        assert_eq!(g.width, 10);
+        assert_eq!(g.height, 20);
+        assert_eq!(g.bearing_x, 0);
+        assert_eq!(g.format, GlyphFormat::Alpha);
     }
 
     #[test]
