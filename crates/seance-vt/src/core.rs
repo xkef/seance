@@ -209,6 +209,7 @@ impl VtCore {
                 (OscState::Ground, 0x1b) => self.osc_state = OscState::Esc,
                 (OscState::Ground, _) => {}
                 (OscState::Esc, b']') => self.osc_state = OscState::Osc(Vec::new()),
+                (OscState::Esc, b'P') => self.osc_state = OscState::Dcs(Vec::new()),
                 (OscState::Esc, 0x1b) => {}
                 (OscState::Esc, _) => self.osc_state = OscState::Ground,
                 (OscState::Osc(buf), 0x07 | 0x9c) => {
@@ -248,6 +249,61 @@ impl VtCore {
                         self.osc_state = OscState::Ground;
                     }
                 }
+                // tmux wraps an escape sequence for the outer terminal in a DCS
+                // passthrough — `ESC P tmux ; <body> ST` — doubling every ESC in
+                // `<body>`. We collect the payload, undo the doubling, and route
+                // the wrapped OSC through the normal dispatch so a nested tmux can
+                // still drive our clipboard via OSC 52.
+                (OscState::Dcs(buf), 0x1b) => {
+                    let content = std::mem::take(buf);
+                    self.osc_state = OscState::DcsEsc(content);
+                }
+                (OscState::Dcs(buf), 0x9c) => {
+                    let content = std::mem::take(buf);
+                    self.dispatch_tmux_passthrough(&content);
+                    self.osc_state = OscState::Ground;
+                }
+                (OscState::Dcs(buf), byte) => {
+                    if buf.len() < MAX_OSC_BUFFER {
+                        buf.push(byte);
+                        if !dcs_maybe_tmux(buf) {
+                            self.osc_state = OscState::DcsIgnore;
+                        }
+                    } else {
+                        self.osc_state = OscState::DcsIgnore;
+                    }
+                }
+                (OscState::DcsEsc(buf), b'\\') => {
+                    let content = std::mem::take(buf);
+                    self.dispatch_tmux_passthrough(&content);
+                    self.osc_state = OscState::Ground;
+                }
+                (OscState::DcsEsc(buf), 0x1b) => {
+                    // `ESC ESC` in a passthrough body encodes one literal ESC.
+                    if buf.len() < MAX_OSC_BUFFER {
+                        buf.push(0x1b);
+                        self.osc_state = OscState::Dcs(std::mem::take(buf));
+                    } else {
+                        self.osc_state = OscState::DcsIgnore;
+                    }
+                }
+                (OscState::DcsEsc(buf), byte) => {
+                    if buf.len() + 1 < MAX_OSC_BUFFER {
+                        buf.push(0x1b);
+                        buf.push(byte);
+                        self.osc_state = OscState::Dcs(std::mem::take(buf));
+                    } else {
+                        self.osc_state = OscState::DcsIgnore;
+                    }
+                }
+                // A DCS that is not a tmux passthrough (sixel, DECRQSS, …) is left
+                // for libghostty; we only scan for its terminator to resume OSC
+                // tracking, without buffering the — potentially large — body.
+                (OscState::DcsIgnore, 0x1b) => self.osc_state = OscState::DcsIgnoreEsc,
+                (OscState::DcsIgnore, 0x9c) => self.osc_state = OscState::Ground,
+                (OscState::DcsIgnore, _) => {}
+                (OscState::DcsIgnoreEsc, b'\\') => self.osc_state = OscState::Ground,
+                (OscState::DcsIgnoreEsc, _) => self.osc_state = OscState::DcsIgnore,
             }
         }
     }
@@ -263,6 +319,27 @@ impl VtCore {
         if let Some(request) = parse_osc52(content) {
             self.clipboard_requests.push_back(request);
         }
+    }
+
+    fn dispatch_tmux_passthrough(&mut self, payload: &[u8]) {
+        // `payload` is the DCS body with tmux's ESC-doubling already undone,
+        // e.g. b"tmux;\x1b]52;c;<base64>\x1b\\". Strip the introducer and the
+        // inner OSC framing, then reuse the OSC dispatch. Some emitters drop
+        // the inner ST (it collides with the passthrough terminator), so a
+        // missing terminator is tolerated.
+        let Some(inner) = payload.strip_prefix(b"tmux;") else {
+            return;
+        };
+        let inner = inner.strip_prefix(b"\x1b").unwrap_or(inner);
+        let Some(body) = inner.strip_prefix(b"]") else {
+            return;
+        };
+        let body = body
+            .strip_suffix(b"\x1b\\")
+            .or_else(|| body.strip_suffix(b"\x9c"))
+            .or_else(|| body.strip_suffix(b"\x07"))
+            .unwrap_or(body);
+        self.dispatch_osc(body);
     }
 
     fn apply_osc7(&mut self, raw: &[u8]) {
@@ -333,6 +410,19 @@ enum OscState {
     Esc,
     Osc(Vec<u8>),
     OscEsc(Vec<u8>),
+    Dcs(Vec<u8>),
+    DcsEsc(Vec<u8>),
+    DcsIgnore,
+    DcsIgnoreEsc,
+}
+
+/// Whether `buf` is still a viable prefix of a tmux passthrough introducer
+/// (`tmux;`). Once it diverges, the DCS is something else (sixel, DECRQSS, …)
+/// and we stop buffering it.
+fn dcs_maybe_tmux(buf: &[u8]) -> bool {
+    const INTRODUCER: &[u8] = b"tmux;";
+    let n = buf.len().min(INTRODUCER.len());
+    buf[..n] == INTRODUCER[..n]
 }
 
 fn osc7_uri_to_path(uri: &str) -> Option<String> {
@@ -779,6 +869,45 @@ mod tests {
         core.feed(b"\x1b]52;c;?\x1b\\");
         let requests = core.drain_clipboard_requests();
         assert_eq!(requests, vec![ClipboardRequest::Read]);
+    }
+
+    #[test]
+    fn osc52_write_through_tmux_passthrough() {
+        // tmux wraps the inner OSC 52 in `ESC P tmux ; <body> ST` and doubles
+        // every ESC in the body. Strict form: the inner ST is doubled too.
+        let mut core = core();
+        core.feed(b"\x1bPtmux;\x1b\x1b]52;c;aGVsbG8=\x1b\x1b\\\x1b\\");
+        let requests = core.drain_clipboard_requests();
+        assert_eq!(requests, vec![ClipboardRequest::Write(b"hello".to_vec())]);
+    }
+
+    #[test]
+    fn osc52_write_through_tmux_passthrough_loose_terminator() {
+        // Some emitters (and the issue's own repro) let the inner ST collapse
+        // into the passthrough terminator, so the body carries no inner ST.
+        let mut core = core();
+        core.feed(b"\x1bPtmux;\x1b\x1b]52;c;SGVsbG8=\x1b\\");
+        let requests = core.drain_clipboard_requests();
+        assert_eq!(requests, vec![ClipboardRequest::Write(b"Hello".to_vec())]);
+    }
+
+    #[test]
+    fn osc52_read_through_tmux_passthrough() {
+        let mut core = core();
+        core.feed(b"\x1bPtmux;\x1b\x1b]52;c;?\x1b\x1b\\\x1b\\");
+        let requests = core.drain_clipboard_requests();
+        assert_eq!(requests, vec![ClipboardRequest::Read]);
+    }
+
+    #[test]
+    fn non_tmux_dcs_does_not_emit_clipboard_request() {
+        // A sixel-style DCS must not be mistaken for a passthrough, and its
+        // terminator must return the scanner to ground so a following OSC 52
+        // is still recognized.
+        let mut core = core();
+        core.feed(b"\x1bPq#0;2;0;0;0\x1b\\\x1b]52;c;aGVsbG8=\x07");
+        let requests = core.drain_clipboard_requests();
+        assert_eq!(requests, vec![ClipboardRequest::Write(b"hello".to_vec())]);
     }
 
     #[test]
