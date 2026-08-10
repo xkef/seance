@@ -88,6 +88,11 @@ pub trait TextBackend {
     /// can map to different glyphs once features change.
     fn set_features(&mut self, features: &[String]);
 
+    /// Toggle faux-bold (Ghostty's `font-thicken`). Callers must drop their
+    /// glyph atlas; the same glyph re-rasterizes to a different coverage
+    /// bitmap once thickening flips.
+    fn set_thicken(&mut self, thicken: bool);
+
     /// Shape a contiguous run of text into glyphs. Each emitted glyph
     /// carries the byte offset of its source cluster within `text`, so
     /// callers driving multi-cell input (ligatures, ZWJ sequences, flag

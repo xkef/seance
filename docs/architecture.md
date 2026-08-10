@@ -160,6 +160,8 @@ without libghostty linked. The local-mode binary pairs `seance-mux-client`
 - **OpenType features** [IMPLEMENTED] — `font.features` is parsed into a
   cosmic-text `FontFeatures` list and applied via `Attrs::font_features`.
 - **SwashCache** [IMPLEMENTED] — rasterizes outlines (COLR v0/v1, SVG, CBDT).
+  When `font.thicken` is set, grayscale coverage is dilated one pixel
+  (FreeType-style faux-bold) before atlas insertion; color glyphs are untouched.
 - **GlyphAtlas** [IMPLEMENTED] — two planes: grayscale R8 (2048×2048) and color
   RGBA8 (1024×1024). `etagere` rectangle packing, per-plane `dirty` flag.
 - **GlyphCache** [IMPLEMENTED] — `FxHashMap<cosmic_text::CacheKey, AtlasEntry>`.

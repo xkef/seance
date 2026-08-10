@@ -24,6 +24,8 @@ pub struct RendererConfig {
     /// "ss01", …). Empty means the shaper applies its own defaults.
     pub font_features: Vec<String>,
     pub min_contrast: f32,
+    /// Faux-bold every grayscale glyph (Ghostty's `font-thicken`).
+    pub thicken: bool,
     /// Inner gutter between window edges and the cell grid, in physical
     /// pixels. `[x, y]`. The area outside the grid is filled by the
     /// fullscreen bg pass with the effective theme background.
@@ -81,6 +83,7 @@ impl TerminalRenderer {
             adjust_cell_height: config.adjust_cell_height.as_deref(),
             adjust_cell_width: config.adjust_cell_width.as_deref(),
             features: &config.font_features,
+            thicken: config.thicken,
         }));
         let m = backend.metrics();
         let cell_size = [m.cell_width, m.cell_height];
@@ -227,6 +230,13 @@ impl TerminalRenderer {
     /// resolve to different glyphs under the new feature set.
     pub fn set_font_features(&mut self, features: &[String]) {
         self.backend.set_features(features);
+        self.cell_builder.reset_glyphs();
+    }
+
+    /// Toggle faux-bold. The glyph atlas is dropped because each glyph
+    /// re-rasterizes to a different coverage bitmap under the new setting.
+    pub fn set_thicken(&mut self, thicken: bool) {
+        self.backend.set_thicken(thicken);
         self.cell_builder.reset_glyphs();
     }
 

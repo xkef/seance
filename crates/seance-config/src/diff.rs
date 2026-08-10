@@ -35,6 +35,9 @@ pub struct ConfigDiff {
     /// `font.features` changed — caller must invalidate shape caches and
     /// rebuild the next frame.
     pub font_features_changed: bool,
+    /// `font.thicken` changed — caller must drop the glyph atlas so glyphs
+    /// re-rasterize with the new faux-bold setting and rebuild the next frame.
+    pub font_thicken_changed: bool,
     /// `window.padding_x|y` changed — caller must push the new padding to
     /// the renderer and reflow the PTY (cols/rows shrink when padding grows).
     pub window_padding_changed: bool,
@@ -65,6 +68,7 @@ impl ConfigDiff {
         let font_adjust_cell_width_changed =
             old.font.adjust_cell_width != new.font.adjust_cell_width;
         let font_features_changed = old.font.features != new.font.features;
+        let font_thicken_changed = old.font.thicken != new.font.thicken;
 
         let window_padding_changed = old.window.padding_x != new.window.padding_x
             || old.window.padding_y != new.window.padding_y;
@@ -89,6 +93,7 @@ impl ConfigDiff {
             font_adjust_cell_height_changed,
             font_adjust_cell_width_changed,
             font_features_changed,
+            font_thicken_changed,
             window_padding_changed,
             repaint_only,
             input_changed,
@@ -106,6 +111,7 @@ impl ConfigDiff {
             || self.font_adjust_cell_height_changed
             || self.font_adjust_cell_width_changed
             || self.font_features_changed
+            || self.font_thicken_changed
             || self.window_padding_changed
             || self.repaint_only
             || self.input_changed
@@ -190,6 +196,18 @@ mod tests {
         let d = ConfigDiff::between(&a, &b);
         assert!(d.font_features_changed);
         assert!(!d.font_size_changed);
+    }
+
+    #[test]
+    fn font_thicken_change_is_detected() {
+        let a = Config::default();
+        let mut b = Config::default();
+        b.font.thicken = true;
+        let d = ConfigDiff::between(&a, &b);
+        assert!(d.font_thicken_changed);
+        assert!(!d.font_features_changed);
+        assert!(!d.repaint_only);
+        assert!(!d.is_empty());
     }
 
     #[test]

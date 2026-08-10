@@ -719,6 +719,7 @@ mod tests {
         fn set_adjust_cell_height(&mut self, _value: Option<&str>) {}
         fn set_adjust_cell_width(&mut self, _value: Option<&str>) {}
         fn set_features(&mut self, _features: &[String]) {}
+        fn set_thicken(&mut self, _thicken: bool) {}
         fn shape_run(&mut self, text: &str, _attrs: FontAttrs, out: &mut Vec<ShapedGlyph>) {
             self.shape_calls += 1;
             let mut byte_offset = 0u32;
@@ -1159,6 +1160,7 @@ mod tests {
         fn set_adjust_cell_height(&mut self, _: Option<&str>) {}
         fn set_adjust_cell_width(&mut self, _: Option<&str>) {}
         fn set_features(&mut self, _: &[String]) {}
+        fn set_thicken(&mut self, _: bool) {}
         fn shape_run(&mut self, text: &str, _: FontAttrs, out: &mut Vec<ShapedGlyph>) {
             let mut byte = 0u32;
             for c in text.chars() {
@@ -1243,6 +1245,7 @@ mod tests {
         fn set_adjust_cell_height(&mut self, _: Option<&str>) {}
         fn set_adjust_cell_width(&mut self, _: Option<&str>) {}
         fn set_features(&mut self, _: &[String]) {}
+        fn set_thicken(&mut self, _: bool) {}
         fn shape_run(&mut self, text: &str, _: FontAttrs, out: &mut Vec<ShapedGlyph>) {
             if text == "==" {
                 out.push(ShapedGlyph {

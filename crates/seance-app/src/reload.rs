@@ -105,6 +105,12 @@ impl App {
                 .set_font_features(&self.config.font.features);
             surface.mark_dirty();
         }
+        if diff.font_thicken_changed
+            && let Some(surface) = self.surface.as_mut()
+        {
+            surface.renderer.set_thicken(self.config.font.thicken);
+            surface.mark_dirty();
+        }
         if diff.font_family_changed {
             tracing::info!(
                 "font.family change takes effect on restart (live swap not yet supported)"

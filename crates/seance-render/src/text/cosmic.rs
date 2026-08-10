@@ -44,6 +44,8 @@ pub struct BackendConfig<'a> {
     /// not exactly four bytes are dropped with a warning so a typo can't
     /// silently disable shaping.
     pub features: &'a [String],
+    /// Faux-bold every grayscale glyph by dilating its coverage one pixel.
+    pub thicken: bool,
 }
 
 pub struct CosmicTextBackend {
@@ -58,6 +60,7 @@ pub struct CosmicTextBackend {
     /// Pre-built feature list passed to every shape call. Rebuilt only on
     /// `set_features` to avoid the per-shape parse cost.
     font_features: FontFeatures,
+    thicken: bool,
 
     /// Intern CacheKey → stable `GlyphId` so the atlas cache can key on
     /// a small integer without knowing the cosmic-text encoding.
@@ -88,6 +91,7 @@ impl CosmicTextBackend {
             adjust_cell_height,
             adjust_cell_width,
             font_features: build_font_features(config.features),
+            thicken: config.thicken,
             key_to_id: HashMap::with_hasher(FxBuildHasher),
             id_to_key: Vec::new(),
         }
@@ -152,6 +156,10 @@ impl TextBackend for CosmicTextBackend {
         self.font_features = build_font_features(features);
     }
 
+    fn set_thicken(&mut self, thicken: bool) {
+        self.thicken = thicken;
+    }
+
     fn shape_run(&mut self, text: &str, attrs: FontAttrs, out: &mut Vec<ShapedGlyph>) {
         if text.is_empty() {
             return;
@@ -204,9 +212,28 @@ impl TextBackend for CosmicTextBackend {
 
     fn rasterize(&mut self, glyph: GlyphId) -> Option<RasterizedGlyph> {
         let key = *self.id_to_key.get(glyph.0 as usize)?;
+        let thicken = self.thicken;
         let image = self.swash.get_image(&mut self.fs, key).as_ref()?;
         if image.placement.width == 0 || image.placement.height == 0 {
             return None;
+        }
+        let format = match image.content {
+            SwashContent::Color => GlyphFormat::Color,
+            _ => GlyphFormat::Alpha,
+        };
+        // Color glyphs (emoji) are left untouched — dilating premultiplied
+        // RGBA coverage would smear color, not bolden.
+        if thicken && format == GlyphFormat::Alpha {
+            let (data, width) =
+                embolden_alpha(&image.data, image.placement.width, image.placement.height);
+            return Some(RasterizedGlyph {
+                data,
+                width,
+                height: image.placement.height,
+                bearing_x: image.placement.left,
+                bearing_y: image.placement.top,
+                format,
+            });
         }
         Some(RasterizedGlyph {
             data: image.data.clone(),
@@ -214,12 +241,30 @@ impl TextBackend for CosmicTextBackend {
             height: image.placement.height,
             bearing_x: image.placement.left,
             bearing_y: image.placement.top,
-            format: match image.content {
-                SwashContent::Color => GlyphFormat::Color,
-                _ => GlyphFormat::Alpha,
-            },
+            format,
         })
     }
+}
+
+/// Faux-bold a single-byte-per-pixel coverage bitmap by widening every
+/// stroke one pixel to the right: each output column takes the max of itself
+/// and the column to its left. The bitmap grows one column wider while the
+/// left bearing is unchanged, matching the classic FreeType bitmap embolden.
+fn embolden_alpha(data: &[u8], width: u32, height: u32) -> (Vec<u8>, u32) {
+    let w = width as usize;
+    let h = height as usize;
+    let out_w = w + 1;
+    let mut out = vec![0u8; out_w * h];
+    for y in 0..h {
+        let src = &data[y * w..y * w + w];
+        let dst = &mut out[y * out_w..(y + 1) * out_w];
+        for x in 0..out_w {
+            let cur = if x < w { src[x] } else { 0 };
+            let left = if x > 0 { src[x - 1] } else { 0 };
+            dst[x] = cur.max(left);
+        }
+    }
+    (out, out_w as u32)
 }
 
 fn parse_metric_modifier(value: Option<&str>) -> Option<MetricModifier> {
@@ -399,6 +444,28 @@ fn build_font_features(features: &[String]) -> FontFeatures {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embolden_widens_bitmap_one_column() {
+        // 3x2 coverage with a single lit column in the middle.
+        let src = vec![
+            0, 255, 0, //
+            0, 255, 0,
+        ];
+        let (out, width) = embolden_alpha(&src, 3, 2);
+        assert_eq!(width, 4);
+        // The lit stroke now spans two columns (its own plus the one to its
+        // right); the bitmap is one column wider and the left edge is fixed.
+        assert_eq!(out, vec![0, 255, 255, 0, 0, 255, 255, 0]);
+    }
+
+    #[test]
+    fn embolden_keeps_max_coverage_at_edges() {
+        let src = vec![255, 0, 0];
+        let (out, width) = embolden_alpha(&src, 3, 1);
+        assert_eq!(width, 4);
+        assert_eq!(out, vec![255, 255, 0, 0]);
+    }
 
     #[test]
     fn parses_metric_modifier_like_ghostty() {
