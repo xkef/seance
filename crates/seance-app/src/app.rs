@@ -90,6 +90,10 @@ impl App {
         if surface.occluded {
             return;
         }
+        let selection = surface.selection_range();
+        let hovered_link = surface.hovered_link_range();
+        surface.render_inputs.selection = selection;
+        surface.render_inputs.hovered_link = hovered_link;
         if surface.content_dirty {
             surface.content_dirty = false;
             surface.last_vt_cursor_shape = surface
@@ -101,13 +105,9 @@ impl App {
                 .pane_view(surface.active_pane)
                 .and_then(|view| view.frame_source())
             {
-                surface.renderer.update_frame(&mut source);
+                surface.renderer.update_frame(&mut source, hovered_link);
             }
         }
-        let selection = surface.selection_range();
-        let hovered_link = surface.hovered_link_range();
-        surface.render_inputs.selection = selection;
-        surface.render_inputs.hovered_link = hovered_link;
         // Prefer the VT-reported shape; fall back to the user's configured
         // default when the VT has no opinion. Refreshed every frame so that
         // hot-reload of `cursor.style` is picked up without extra wiring.

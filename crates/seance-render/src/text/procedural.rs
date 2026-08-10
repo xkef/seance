@@ -51,6 +51,41 @@ pub(crate) fn rasterize(c: char, metrics: &CellMetrics) -> Option<RasterizedGlyp
     })
 }
 
+/// Rasterize a hovered-link underline into a `cell_width × cell_height`
+/// grayscale alpha bitmap: a solid bar spanning the bottom
+/// `max(1, round(cell_height * 0.06))` rows, matching the thickness the old
+/// `fs_cell_bg` hovered-link branch drew. The mask is white; the cell's link
+/// color is applied per-instance downstream, exactly like a font glyph.
+///
+/// Not keyed by a codepoint — this underline is emitted by the renderer for a
+/// grid range, not by a grapheme in the grid — so it lives outside [`lookup`]
+/// and is rasterized on demand by [`crate::text::cell_builder`].
+pub(crate) fn underline(metrics: &CellMetrics) -> Option<RasterizedGlyph> {
+    let width = (metrics.cell_width.round().max(1.0)) as u32;
+    let height = (metrics.cell_height.round().max(1.0)) as u32;
+    let mut pixmap = Pixmap::new(width, height)?;
+    let thickness = (height as f32 * 0.06).round().max(1.0);
+    fill_rect(
+        &mut pixmap,
+        0.0,
+        height as f32 - thickness,
+        width as f32,
+        thickness,
+    );
+    let data = extract_alpha(pixmap.data());
+    // Full-cell sprite: bearing_y = baseline puts the bitmap's top row at the
+    // top of the cell (see `rasterize`), so the bottom bar lands at the cell's
+    // bottom edge.
+    Some(RasterizedGlyph {
+        data,
+        width,
+        height,
+        bearing_x: 0,
+        bearing_y: metrics.baseline.round() as i32,
+        format: GlyphFormat::Alpha,
+    })
+}
+
 // ── encoding ────────────────────────────────────────────────────────────────
 
 /// Stroke weight for one side of a box-drawing cell. `Double` is rendered as
@@ -838,6 +873,34 @@ mod tests {
         // (U+E0B0..=U+E0B3) — these neighbors are not registered.
         assert!(rasterize('\u{E0AF}', &m).is_none());
         assert!(rasterize('\u{E0B4}', &m).is_none());
+    }
+
+    #[test]
+    fn underline_fills_bottom_bar_only() {
+        let m = metrics(10, 20);
+        let g = underline(&m).unwrap();
+        assert_eq!(g.width, 10);
+        assert_eq!(g.height, 20);
+        assert_eq!(g.data.len(), 10 * 20);
+        assert_eq!(g.bearing_x, 0);
+        assert_eq!(g.bearing_y, 16);
+        assert_eq!(g.format, GlyphFormat::Alpha);
+        let w = g.width as usize;
+        let h = g.height as usize;
+        // Top row empty; bottom row saturated across the full cell width.
+        assert_eq!(g.data[0], 0, "top of cell must be clear");
+        assert_eq!(g.data[(h - 1) * w], 255, "bottom-left must be inked");
+        assert_eq!(g.data[(h - 1) * w + (w - 1)], 255, "bottom-right inked");
+    }
+
+    #[test]
+    fn underline_thickness_is_at_least_one_row() {
+        // A short cell still yields a visible bar (thickness clamps to 1).
+        let m = metrics(8, 8);
+        let g = underline(&m).unwrap();
+        let w = g.width as usize;
+        let h = g.height as usize;
+        assert_eq!(g.data[(h - 1) * w], 255);
     }
 
     #[test]

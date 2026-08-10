@@ -28,11 +28,7 @@ struct Uniforms {
     selection_fg: vec4<f32>,
     selection_active: u32,
     baseline: f32,
-    hovered_link_active: u32,
-    _pad_link: u32,
-    hovered_link_start: vec2<u32>,
-    hovered_link_end: vec2<u32>,
-    hovered_link_color: vec4<f32>,
+    _pad_tail: vec2<u32>,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -99,28 +95,6 @@ fn is_in_selection(col: u32, row: u32) -> bool {
     }
     let s = uniforms.selection_start;
     let e = uniforms.selection_end;
-
-    if row < s.y || row > e.y {
-        return false;
-    }
-    if s.y == e.y {
-        return col >= s.x && col <= e.x;
-    }
-    if row == s.y {
-        return col >= s.x;
-    }
-    if row == e.y {
-        return col <= e.x;
-    }
-    return true;
-}
-
-fn is_in_hovered_link(col: u32, row: u32) -> bool {
-    if uniforms.hovered_link_active == 0u {
-        return false;
-    }
-    let s = uniforms.hovered_link_start;
-    let e = uniforms.hovered_link_end;
 
     if row < s.y || row > e.y {
         return false;
@@ -225,18 +199,6 @@ fn fs_cell_bg(in: FullScreenOut) -> @location(0) vec4<f32> {
             color = vec4<f32>(
                 mix(color.rgb, cur_color.rgb, cur_color.a),
                 max(color.a, cur_color.a),
-            );
-        }
-    }
-
-    if is_in_hovered_link(col, row) {
-        let local = pos - uniforms.cell_size * vec2<f32>(f32(col), f32(row));
-        let thickness = max(1.0, uniforms.cell_size.y * 0.06);
-        if local.y >= (uniforms.cell_size.y - thickness) {
-            let link = uniforms.hovered_link_color;
-            color = vec4<f32>(
-                mix(color.rgb, link.rgb, link.a),
-                max(color.a, link.a),
             );
         }
     }
