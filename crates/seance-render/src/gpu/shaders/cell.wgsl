@@ -203,22 +203,34 @@ fn fs_cell_bg(in: FullScreenOut) -> @location(0) vec4<f32> {
         color = vec4<f32>(sel.rgb, 1.0);
     }
 
+    // The bar cursor straddles the left edge of the cursor cell: half of
+    // its thickness sits over the right edge of the preceding cell so it
+    // reads as centered between characters, not biased into one cell.
+    let is_bar = uniforms.overlay_shape == 3u;
+    let in_cursor_cell = col == uniforms.overlay_pos.x && row == uniforms.overlay_pos.y;
+    let in_bar_prev_cell = is_bar
+        && uniforms.overlay_pos.x > 0u
+        && col == uniforms.overlay_pos.x - 1u
+        && row == uniforms.overlay_pos.y;
+
     if uniforms.cursor_visible != 0u
        && uniforms.overlay_shape != 0u
-       && col == uniforms.overlay_pos.x
-       && row == uniforms.overlay_pos.y {
+       && (in_cursor_cell || in_bar_prev_cell) {
         let local = pos - uniforms.cell_size * vec2<f32>(f32(col), f32(row));
         let cur_color = uniforms.overlay_color;
         var draw = false;
 
-        if uniforms.overlay_shape == 1u {
+        if in_bar_prev_cell {
+            let thickness = max(2.0, uniforms.cell_size.x * 0.1);
+            draw = local.x >= uniforms.cell_size.x - thickness * 0.5;
+        } else if uniforms.overlay_shape == 1u {
             draw = true;
         } else if uniforms.overlay_shape == 2u {
             let thickness = max(2.0, uniforms.cell_size.y * 0.12);
             draw = local.y >= (uniforms.cell_size.y - thickness);
         } else if uniforms.overlay_shape == 3u {
             let thickness = max(2.0, uniforms.cell_size.x * 0.1);
-            draw = local.x < thickness;
+            draw = local.x < thickness * 0.5;
         }
 
         if draw {
