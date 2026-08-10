@@ -141,6 +141,12 @@ without libghostty linked. The local-mode binary pairs `seance-mux-client`
   `clipboard.{read,write} = "allow" | "ask" | "deny"`, both default `deny`;
   users opt in by setting `allow` (or `ask` once the M3 confirm-overlay UI
   ships).
+- **OSC 133 semantic prompts** [PARTIAL: [M8][m8]] — VT Core parses the
+  FinalTerm markers (`A` prompt start, `B` prompt end, `C` command start,
+  `D [ ; <exit> ]` command finished) alongside OSC 7/52 and tracks the last
+  command's exit code onto `VtSnapshot::last_command_exit`. Firing the
+  `seance.event` callbacks (`CommandEnd`, prompt-aware scrolling) waits on the
+  Lua runtime (#78, #69).
 - **Kitty graphics protocol** [IMPLEMENTED] — transmission, decode (PNG and raw
   24/32-bit), per-image cache with 320 MB storage cap, placement resolution.
   Virtual placeholders (U+10EEEE), animation, and iTerm2 inline images remain

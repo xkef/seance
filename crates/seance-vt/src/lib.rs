@@ -8,6 +8,7 @@
 mod clipboard;
 mod core;
 mod kitty_graphics;
+mod osc133;
 mod session;
 mod snapshot_extraction;
 mod terminal;
