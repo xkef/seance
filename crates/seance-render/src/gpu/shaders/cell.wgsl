@@ -203,9 +203,17 @@ fn fs_cell_bg(in: FullScreenOut) -> @location(0) vec4<f32> {
         color = vec4<f32>(sel.rgb, 1.0);
     }
 
+    let on_cursor_col = col == uniforms.overlay_pos.x;
+    // The bar cursor straddles the left edge of its cell, so half of it spills
+    // into the preceding cell. Guard column 0 (nothing to the left to straddle
+    // into — that outer half is simply clipped, matching ghostty).
+    let on_bar_prev_col = uniforms.overlay_shape == 3u
+                       && uniforms.overlay_pos.x > 0u
+                       && col == uniforms.overlay_pos.x - 1u;
+
     if uniforms.cursor_visible != 0u
        && uniforms.overlay_shape != 0u
-       && col == uniforms.overlay_pos.x
+       && (on_cursor_col || on_bar_prev_col)
        && row == uniforms.overlay_pos.y {
         let local = pos - uniforms.cell_size * vec2<f32>(f32(col), f32(row));
         let cur_color = uniforms.overlay_color;
@@ -218,7 +226,14 @@ fn fs_cell_bg(in: FullScreenOut) -> @location(0) vec4<f32> {
             draw = local.y >= (uniforms.cell_size.y - thickness);
         } else if uniforms.overlay_shape == 3u {
             let thickness = max(2.0, uniforms.cell_size.x * 0.1);
-            draw = local.x < thickness;
+            let half = thickness * 0.5;
+            if on_cursor_col {
+                // Inner half: against the left edge inside the cursor cell.
+                draw = local.x < half;
+            } else {
+                // Outer half: against the right edge of the preceding cell.
+                draw = local.x >= (uniforms.cell_size.x - half);
+            }
         }
 
         if draw {
