@@ -257,7 +257,9 @@ impl CellBuilder {
             &mut self.text_cells,
         );
 
-        self.atlas.clear_dirty();
+        // Atlas dirty state is cleared by `clear_atlas_dirty` after a frame
+        // actually uploads, not here — a dropped frame must keep its pending
+        // glyph rects so they reach the GPU on the next successful present.
 
         self.last_frame = Some(FrameInfo {
             cell_width: geom.cell_width,
@@ -292,6 +294,13 @@ impl CellBuilder {
 
     pub fn atlas(&self) -> &GlyphAtlas {
         &self.atlas
+    }
+
+    /// Acknowledge that the atlas planes reached the GPU, so the next frame
+    /// uploads only what changes after this point. Call exactly once per
+    /// presented frame, after `render_frame` succeeds.
+    pub fn clear_atlas_dirty(&mut self) {
+        self.atlas.clear_dirty();
     }
 
     pub fn bg_cells(&self) -> &[[u8; 4]] {
@@ -626,6 +635,7 @@ fn emit_procedural_cells(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::text::PlaneUpload;
     use crate::text::backend::{
         CellMetrics, FontAttrs, GlyphId, RasterizedGlyph, ShapedGlyph, TextBackend,
     };
@@ -1430,6 +1440,75 @@ mod tests {
             hit_rate >= 0.95,
             "warm hit rate {hit_rate:.4} < 0.95 (hits={frame2_hits}, lookups={frame2_lookups})"
         );
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // Atlas dirty-rect upload tracking (issue #25)
+    // ────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn rebuilding_identical_content_uploads_no_atlas() {
+        let theme = Theme::blank();
+        let cells = [
+            ("A", CellColor::Default, CellColor::Default, plain()),
+            ("B", CellColor::Default, CellColor::Default, plain()),
+        ];
+        let mut source = FakeFrame::new(2, 1, &cells);
+        let mut backend = distributing_backend();
+        let mut builder = CellBuilder::new();
+
+        // First frame allocates the planes, so the whole grayscale plane
+        // must reach the GPU.
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        assert_eq!(builder.atlas().grayscale_upload(), PlaneUpload::Full);
+
+        // A presented frame acknowledges that upload.
+        builder.clear_atlas_dirty();
+
+        // Identical content inserts no new glyphs — both 'A' and 'B' hit the
+        // glyph cache — so there is nothing left to upload.
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        assert_eq!(builder.atlas().grayscale_upload(), PlaneUpload::None);
+    }
+
+    #[test]
+    fn a_newly_seen_glyph_uploads_a_single_rect() {
+        let theme = Theme::blank();
+        let mut backend = distributing_backend();
+        let mut builder = CellBuilder::new();
+
+        let warm = [("A", CellColor::Default, CellColor::Default, plain())];
+        let mut warm_src = FakeFrame::new(1, 1, &warm);
+        builder.build_frame(&mut warm_src, &mut backend, build_config(&theme));
+        builder.clear_atlas_dirty();
+        assert_eq!(builder.atlas().grayscale_upload(), PlaneUpload::None);
+
+        // A frame introducing a never-seen glyph uploads exactly its rect,
+        // not the whole 2048×2048 plane.
+        let next = [("C", CellColor::Default, CellColor::Default, plain())];
+        let mut next_src = FakeFrame::new(1, 1, &next);
+        builder.build_frame(&mut next_src, &mut backend, build_config(&theme));
+        match builder.atlas().grayscale_upload() {
+            PlaneUpload::Rects(rects) => assert_eq!(rects.len(), 1),
+            other => panic!("expected one sub-rect upload, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dropped_frame_keeps_pending_atlas_uploads() {
+        // build_frame must not clear atlas dirty state itself; only an
+        // acknowledged (presented) frame does, via clear_atlas_dirty.
+        let theme = Theme::blank();
+        let cells = [("A", CellColor::Default, CellColor::Default, plain())];
+        let mut source = FakeFrame::new(1, 1, &cells);
+        let mut backend = distributing_backend();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        // No clear_atlas_dirty: the frame was "dropped". A rebuild must still
+        // report the glyph as pending rather than silently losing it.
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        assert_eq!(builder.atlas().grayscale_upload(), PlaneUpload::Full);
     }
 
     // ────────────────────────────────────────────────────────────────────

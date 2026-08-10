@@ -4,7 +4,7 @@ use wgpu::*;
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
-use super::atlas_texture::{atlas_view, write_atlas_plane};
+use super::atlas_texture::{PlaneDesc, atlas_view, write_atlas_plane};
 use super::dynamic_buffer::DynamicBuffer;
 use super::layers::{DrawOp, LayerSchedule, SubRole, Z_MAIN};
 use super::pipeline::Pipelines;
@@ -334,9 +334,12 @@ impl GpuState {
                 &self.queue,
                 &mut self.atlas_grayscale,
                 gs_data,
-                gs_size,
-                ATLAS_GRAYSCALE_FORMAT,
-                "atlas_grayscale",
+                PlaneDesc {
+                    size: gs_size,
+                    format: ATLAS_GRAYSCALE_FORMAT,
+                    label: "atlas_grayscale",
+                },
+                atlas.grayscale_upload(),
             )
         {
             self.atlas_bind_group = None;
@@ -349,9 +352,12 @@ impl GpuState {
                 &self.queue,
                 &mut self.atlas_color,
                 color_data,
-                color_size,
-                ATLAS_COLOR_FORMAT,
-                "atlas_color",
+                PlaneDesc {
+                    size: color_size,
+                    format: ATLAS_COLOR_FORMAT,
+                    label: "atlas_color",
+                },
+                atlas.color_upload(),
             )
         {
             self.atlas_bind_group = None;
