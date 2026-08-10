@@ -12,6 +12,10 @@ use serde::Deserialize;
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub theme: Option<String>,
+    /// SGR bold (1) remaps an ANSI 0–7 foreground to its bright 8–15 entry,
+    /// matching Ghostty's `bold-is-bright`. RGB and 256-color foregrounds are
+    /// untouched.
+    pub bold_is_bright: bool,
     pub font: FontConfig,
     pub window: WindowConfig,
     pub cursor: CursorConfig,
@@ -26,6 +30,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             theme: Some("Catppuccin Frappe".to_string()),
+            bold_is_bright: false,
             font: FontConfig::default(),
             window: WindowConfig::default(),
             cursor: CursorConfig::default(),

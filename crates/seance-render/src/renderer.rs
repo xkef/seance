@@ -29,6 +29,8 @@ pub struct RendererConfig {
     /// fullscreen bg pass with the effective theme background.
     pub window_padding: [u16; 2],
     pub background_opacity: f32,
+    /// Remap ANSI 0–7 foregrounds to bright 8–15 on bold cells.
+    pub bold_is_bright: bool,
     pub theme: Theme,
 }
 
@@ -70,6 +72,7 @@ pub struct TerminalRenderer {
     surface_width: u32,
     surface_height: u32,
     window_padding: [u16; 2],
+    bold_is_bright: bool,
 }
 
 impl TerminalRenderer {
@@ -97,6 +100,7 @@ impl TerminalRenderer {
             surface_width: config.width,
             surface_height: config.height,
             window_padding: config.window_padding,
+            bold_is_bright: config.bold_is_bright,
         })
     }
 
@@ -170,6 +174,7 @@ impl TerminalRenderer {
                 theme: &self.theme,
                 bg_color,
                 min_contrast,
+                bold_is_bright: self.bold_is_bright,
             },
         );
         if let Some(fi) = self.cell_builder.last_frame() {
@@ -239,6 +244,12 @@ impl TerminalRenderer {
 
     pub fn set_min_contrast(&mut self, min_contrast: f32) {
         self.min_contrast = min_contrast.clamp(1.0, 21.0);
+    }
+
+    /// Toggle `bold-is-bright`. Consumed CPU-side during the next
+    /// `update_frame()`, so the caller only needs to trigger a repaint.
+    pub fn set_bold_is_bright(&mut self, bold_is_bright: bool) {
+        self.bold_is_bright = bold_is_bright;
     }
 
     pub fn set_background_opacity(&mut self, opacity: f32) {
