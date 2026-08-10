@@ -193,9 +193,19 @@ impl ApplicationHandler<UserEvent> for App {
             return;
         }
 
+        // On macOS the `Hidden`/`ButtonsOnly` presets keep a titled window
+        // (winit decorations on) and reshape the chrome via AppKit in
+        // `configure_window`; a borderless window can't host a
+        // full-size-content titlebar. Elsewhere there is no such AppKit path,
+        // so only `System` gets server-side decorations.
+        let winit_decorated = cfg!(target_os = "macos")
+            || matches!(
+                self.config.window.decoration,
+                seance_config::WindowDecoration::System
+            );
         let mut window_attrs = Window::default_attributes()
             .with_title("seance")
-            .with_decorations(self.config.window.decoration);
+            .with_decorations(winit_decorated);
         if let Some(size) = initial_window_size_from_env() {
             window_attrs = window_attrs.with_inner_size(size);
         }
@@ -205,9 +215,11 @@ impl ApplicationHandler<UserEvent> for App {
                 .expect("failed to create window"),
         );
 
-        if self.config.window.decoration {
-            platform::configure_window(&window);
-        }
+        platform::configure_window(
+            &window,
+            self.config.window.decoration,
+            self.config.window.titlebar_style,
+        );
         platform::set_option_as_alt(
             &window,
             platform::option_as_alt_from_config(self.config.input.macos_option_as_alt),

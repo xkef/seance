@@ -115,6 +115,12 @@ impl App {
                 "scrollback.limit change takes effect on restart (live swap not yet supported)"
             );
         }
+        if diff.window_chrome_changed {
+            tracing::info!(
+                "window.decoration / window.titlebar_style change takes effect on restart \
+                 (window recreation not yet supported)"
+            );
+        }
         if diff.theme_changed {
             self.reload_theme();
         }
