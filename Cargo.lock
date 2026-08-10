@@ -2491,7 +2491,7 @@ dependencies = [
 
 [[package]]
 name = "seance-render-test"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "insta",
  "libghostty-vt",

@@ -95,9 +95,21 @@ fn init_tracing() -> Option<WorkerGuard> {
 }
 
 fn main() {
+    if std::env::args()
+        .skip(1)
+        .any(|arg| arg == "--version" || arg == "-V")
+    {
+        println!(
+            "séance {} ({})",
+            env!("CARGO_PKG_VERSION"),
+            env!("SEANCE_GIT_SHA")
+        );
+        return;
+    }
     let _log_guard = init_tracing();
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
+        git_sha = env!("SEANCE_GIT_SHA"),
         log_dir = ?log_dir(),
         "seance starting",
     );
