@@ -18,7 +18,10 @@
 //!   the frame they apply to.
 //! - [`clipboard`] — OSC 52 request data (parser lives in `seance-vt`).
 //! - [`limits`] — protocol-wide byte limits and history bounds.
+//! - [`agent`] — [`agent::PaneSnapshot`], the stable versioned snapshot
+//!   exposed to agent-plane consumers.
 
+pub mod agent;
 pub mod clipboard;
 pub mod frame;
 pub mod identity;

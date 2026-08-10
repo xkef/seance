@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use seance_frame::SnapshotFrameSource;
+use seance_protocol::agent::PaneSnapshot;
 use seance_protocol::frame::{
     CursorShape, DirtySnapshot, FrameDelta, GridPos, HyperlinkRun, Selection, TerminalModes,
     VtSnapshot, apply_frame_delta,
@@ -11,6 +12,7 @@ use seance_protocol::mux::PaneUpdate;
 use crate::PaneError;
 use crate::interaction::{HoverInput, PaneInteractionState};
 use crate::links::{DetectedLink, LinkDetector, LinkModifiers};
+use crate::locator::{ContentMatch, ContentMatcher};
 
 pub type PaneFrame<'a> = SnapshotFrameSource<'a>;
 
@@ -161,6 +163,21 @@ impl PaneView {
         let selection = self.interaction.selection()?;
         let snapshot = self.latest_snapshot.as_ref()?;
         snapshot.selection_text(selection)
+    }
+
+    /// Locate the first match of `matcher` in the pane's current content.
+    /// `None` if the pane has no snapshot yet or nothing matches.
+    pub fn find_content(&self, matcher: &ContentMatcher) -> Option<ContentMatch> {
+        matcher.find(self.latest_snapshot.as_ref()?)
+    }
+
+    /// Project the pane's current content into the stable
+    /// [`PaneSnapshot`](seance_protocol::agent::PaneSnapshot) schema, or `None`
+    /// if no frame has arrived yet.
+    pub fn stable_snapshot(&self) -> Option<PaneSnapshot> {
+        self.latest_snapshot
+            .as_ref()
+            .map(|snapshot| PaneSnapshot::from_vt(snapshot))
     }
 
     pub fn osc8_run_at(&self, col: u16, row: u16) -> Option<HyperlinkRun<'_>> {
