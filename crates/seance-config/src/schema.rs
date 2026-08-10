@@ -80,6 +80,7 @@ pub struct WindowConfig {
     pub padding_y: u16,
     pub decoration: bool,
     pub background_opacity: f32,
+    pub theme: WindowTheme,
 }
 
 impl Default for WindowConfig {
@@ -89,8 +90,69 @@ impl Default for WindowConfig {
             padding_y: 0,
             decoration: true,
             background_opacity: 1.0,
+            theme: WindowTheme::default(),
         }
     }
+}
+
+/// Ghostty's [`window-theme`](https://ghostty.org/docs/config/reference#window-theme):
+/// the appearance of the window *chrome* (titlebar and other system
+/// decoration), independent of the color `theme` that paints the grid.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum WindowTheme {
+    /// Follow the luminance of the resolved color theme's background — a
+    /// light background yields light chrome, a dark one dark chrome.
+    #[default]
+    Auto,
+    /// Follow the OS light/dark preference.
+    System,
+    Light,
+    Dark,
+    /// Ghostty's tinted chrome. Resolves its light/dark base like `Auto`;
+    /// the additional titlebar tint is a platform-layer concern.
+    Ghostty,
+}
+
+/// The concrete light/dark base a [`WindowTheme`] resolves to. The platform
+/// layer turns this into a native appearance (e.g. `NSAppearance` on macOS).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowAppearance {
+    Light,
+    Dark,
+}
+
+impl WindowTheme {
+    /// Resolve to a concrete [`WindowAppearance`].
+    ///
+    /// `theme_bg` is the resolved color theme's background (RGBA; only RGB is
+    /// read) and drives `Auto`/`Ghostty` via perceived luminance. `system`
+    /// is the OS preference for `System`; `None` (no OS preference reported)
+    /// falls back to `Dark`, matching the color theme resolver's
+    /// appearance-free default.
+    pub fn resolve(self, theme_bg: [u8; 4], system: Option<WindowAppearance>) -> WindowAppearance {
+        match self {
+            WindowTheme::Light => WindowAppearance::Light,
+            WindowTheme::Dark => WindowAppearance::Dark,
+            WindowTheme::System => system.unwrap_or(WindowAppearance::Dark),
+            WindowTheme::Auto | WindowTheme::Ghostty => {
+                if is_light(theme_bg) {
+                    WindowAppearance::Light
+                } else {
+                    WindowAppearance::Dark
+                }
+            }
+        }
+    }
+}
+
+/// Whether an sRGB color reads as "light". Ghostty parity: Rec. 601 perceived
+/// luminance, light when above the midpoint.
+fn is_light(rgba: [u8; 4]) -> bool {
+    let r = f32::from(rgba[0]) / 255.0;
+    let g = f32::from(rgba[1]) / 255.0;
+    let b = f32::from(rgba[2]) / 255.0;
+    0.299 * r + 0.587 * g + 0.114 * b > 0.5
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
@@ -232,5 +294,79 @@ impl Default for LinkModifiersConfig {
         } else {
             Self::CtrlShift
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn window_theme_defaults_to_auto() {
+        assert_eq!(WindowTheme::default(), WindowTheme::Auto);
+        assert_eq!(WindowConfig::default().theme, WindowTheme::Auto);
+    }
+
+    #[test]
+    fn window_theme_parses_from_toml() {
+        let cfg: Config = toml::from_str("[window]\ntheme = \"dark\"\n").unwrap();
+        assert_eq!(cfg.window.theme, WindowTheme::Dark);
+    }
+
+    #[test]
+    fn unknown_window_theme_is_a_parse_error() {
+        assert!(toml::from_str::<Config>("[window]\ntheme = \"sepia\"\n").is_err());
+    }
+
+    #[test]
+    fn forced_variants_ignore_bg_and_system() {
+        let light_bg = [0xff, 0xff, 0xff, 0xff];
+        let dark_bg = [0x00, 0x00, 0x00, 0xff];
+        assert_eq!(
+            WindowTheme::Light.resolve(dark_bg, Some(WindowAppearance::Dark)),
+            WindowAppearance::Light
+        );
+        assert_eq!(
+            WindowTheme::Dark.resolve(light_bg, Some(WindowAppearance::Light)),
+            WindowAppearance::Dark
+        );
+    }
+
+    #[test]
+    fn auto_follows_background_luminance() {
+        assert_eq!(
+            WindowTheme::Auto.resolve([0xff, 0xff, 0xff, 0xff], None),
+            WindowAppearance::Light
+        );
+        assert_eq!(
+            WindowTheme::Auto.resolve([0x1e, 0x1e, 0x2e, 0xff], None),
+            WindowAppearance::Dark
+        );
+    }
+
+    #[test]
+    fn ghostty_resolves_its_base_like_auto() {
+        let bg = [0xee, 0xee, 0xee, 0xff];
+        assert_eq!(
+            WindowTheme::Ghostty.resolve(bg, None),
+            WindowTheme::Auto.resolve(bg, None)
+        );
+    }
+
+    #[test]
+    fn system_uses_os_preference_and_falls_back_to_dark() {
+        let bg = [0xff, 0xff, 0xff, 0xff];
+        assert_eq!(
+            WindowTheme::System.resolve(bg, Some(WindowAppearance::Light)),
+            WindowAppearance::Light
+        );
+        assert_eq!(
+            WindowTheme::System.resolve(bg, Some(WindowAppearance::Dark)),
+            WindowAppearance::Dark
+        );
+        assert_eq!(
+            WindowTheme::System.resolve(bg, None),
+            WindowAppearance::Dark
+        );
     }
 }
