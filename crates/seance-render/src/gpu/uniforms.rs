@@ -34,7 +34,7 @@ impl From<ProtocolCursorShape> for CursorShape {
 }
 
 /// Layout must match the `Uniforms` struct in `cell.wgsl` exactly.
-const _: () = assert!(size_of::<Uniforms>() == 272);
+const _: () = assert!(size_of::<Uniforms>() == 224);
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -52,21 +52,13 @@ pub(crate) struct Uniforms {
     pub overlay_shape: u32,
     pub overlay_pos: [u32; 2],
     pub overlay_color: [f32; 4],
-    pub selection_start: [u32; 2],
-    pub selection_end: [u32; 2],
-    pub selection_color: [f32; 4],
-    /// RGBA selection foreground. `a == 0` is the sentinel for "no
-    /// override" — glyphs inside the selection then fall back to their
-    /// effective bg, which gives natural contrast against `selection_color`.
-    pub selection_fg: [f32; 4],
-    pub selection_active: u32,
     pub baseline: f32,
     pub hovered_link_active: u32,
-    /// Padding to satisfy WGSL `vec2<u32>` 8-byte alignment for the
-    /// hovered_link range below.
-    pub _pad_link: u32,
     pub hovered_link_start: [u32; 2],
     pub hovered_link_end: [u32; 2],
+    /// Padding to satisfy WGSL `vec4<f32>` 16-byte alignment for
+    /// `hovered_link_color` below.
+    pub _pad_link_color: [u32; 2],
     pub hovered_link_color: [f32; 4],
 }
 
@@ -78,15 +70,6 @@ impl Uniforms {
         inputs: &RenderInputs,
         theme: &Theme,
     ) -> Self {
-        let (sel_start, sel_end, sel_active) = match &inputs.selection {
-            Some((start, end)) => (
-                [start.col as u32, start.row as u32],
-                [end.col as u32, end.row as u32],
-                1u32,
-            ),
-            None => ([0u32; 2], [0u32; 2], 0u32),
-        };
-
         let (link_start, link_end, link_active) = match &inputs.hovered_link {
             Some(range) if range.start.row <= range.end.row => (
                 [u32::from(range.start.col), u32::from(range.start.row)],
@@ -114,25 +97,11 @@ impl Uniforms {
             overlay_shape: inputs.cursor_shape as u32,
             overlay_pos: [fi.cursor_pos[0] as u32, fi.cursor_pos[1] as u32],
             overlay_color: u8x4_to_f32(theme.cursor),
-            selection_start: sel_start,
-            selection_end: sel_end,
-            selection_color: theme.selection_bg,
-            selection_fg: match theme.selection_fg {
-                Some([r, g, b]) => [
-                    f32::from(r) / 255.0,
-                    f32::from(g) / 255.0,
-                    f32::from(b) / 255.0,
-                    1.0,
-                ],
-                // alpha=0 sentinel → wgsl falls back to cell bg.
-                None => [0.0, 0.0, 0.0, 0.0],
-            },
-            selection_active: sel_active,
             baseline: fi.baseline,
             hovered_link_active: link_active,
-            _pad_link: 0,
             hovered_link_start: link_start,
             hovered_link_end: link_end,
+            _pad_link_color: [0; 2],
             hovered_link_color: [
                 f32::from(theme.fg[0]) / 255.0,
                 f32::from(theme.fg[1]) / 255.0,

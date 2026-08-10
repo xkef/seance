@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use rustc_hash::FxBuildHasher;
 use seance_config::Theme;
 use seance_frame::{CellView, CellVisitor, FrameSource};
-use seance_protocol::frame::{CellColor, DirtySnapshot};
+use seance_protocol::frame::{CellColor, DirtySnapshot, GridPos};
 
 use super::atlas::{AtlasEntry, GlyphAtlas};
 use super::backend::{CellMetrics, FontAttrs, GlyphFormat, GlyphId, ShapedGlyph, TextBackend};
@@ -41,6 +41,7 @@ pub struct CellText {
 const _: () = assert!(size_of::<CellText>() == 32);
 
 const TEXT_FLAG_MIN_CONTRAST: u32 = 1 << 16;
+const TEXT_FLAG_IN_SELECTION: u32 = 1 << 17;
 
 pub struct FrameInfo {
     pub cell_width: f32,
@@ -64,6 +65,10 @@ pub struct BuildFrameConfig<'a> {
     pub theme: &'a Theme,
     pub bg_color: [u8; 4],
     pub min_contrast: f32,
+    /// Inclusive selection range in row-major reading order. Selection is
+    /// resolved on the CPU into `bg_cells` and the per-glyph colors,
+    /// matching Ghostty; the cell shader has no selection logic.
+    pub selection: Option<(GridPos, GridPos)>,
 }
 
 type GlyphSlots = HashMap<GlyphId, AtlasEntry, FxBuildHasher>;
@@ -90,6 +95,7 @@ struct CellSlot {
     col: u16,
     fg: [u8; 4],
     min_contrast: bool,
+    selected: bool,
 }
 
 /// A single grid cell that bypassed shaping because its grapheme is a
@@ -103,6 +109,7 @@ struct ProceduralCell {
     codepoint: char,
     fg: [u8; 4],
     min_contrast: bool,
+    selected: bool,
 }
 
 /// A contiguous group of cells on the same row sharing one [`FontAttrs`],
@@ -132,12 +139,13 @@ impl ShapeRun {
         }
     }
 
-    fn push_cell(&mut self, col: u16, fg: [u8; 4], min_contrast: bool, text: &str) {
+    fn push_cell(&mut self, col: u16, fg: [u8; 4], min_contrast: bool, selected: bool, text: &str) {
         self.slots.push(CellSlot {
             byte_offset: self.text.len() as u32,
             col,
             fg,
             min_contrast,
+            selected,
         });
         self.text.push_str(text);
     }
@@ -183,6 +191,10 @@ pub struct CellBuilder {
     shape_scratch: Vec<ShapedGlyph>,
     last_frame: Option<FrameInfo>,
     last_dirty: DirtySnapshot,
+    /// Selection rendered into the previous frame's `bg_cells`. Selection
+    /// lives outside the VT, so its rows never appear in the VT dirty set;
+    /// comparing against this widens `last_dirty` when the range moves.
+    last_selection: Option<(GridPos, GridPos)>,
 }
 
 impl CellBuilder {
@@ -201,6 +213,7 @@ impl CellBuilder {
             // First frame must be a full upload — there's nothing on the GPU
             // yet for a `Partial` write to layer onto.
             last_dirty: DirtySnapshot::Full,
+            last_selection: None,
         }
     }
 
@@ -230,10 +243,21 @@ impl CellBuilder {
         };
         let cursor = source.cursor();
 
+        if config.selection != self.last_selection {
+            widen_dirty_rows(
+                &mut self.last_dirty,
+                self.last_selection,
+                config.selection,
+                geom.grid_rows,
+            );
+            self.last_selection = config.selection;
+        }
+
         walk_grid_into_runs(
             source,
             &geom,
             config.theme,
+            config.selection,
             &mut self.bg_cells,
             &mut self.runs,
             &mut self.procedural_cells,
@@ -365,6 +389,7 @@ fn walk_grid_into_runs(
     source: &mut dyn FrameSource,
     geom: &FrameGeometry,
     theme: &Theme,
+    selection: Option<(GridPos, GridPos)>,
     bg_cells: &mut Vec<[u8; 4]>,
     runs: &mut Vec<ShapeRun>,
     procedural_cells: &mut Vec<ProceduralCell>,
@@ -383,11 +408,65 @@ fn walk_grid_into_runs(
         procedural_cells,
         open: None,
         theme,
+        selection,
+        selection_bg: [
+            (theme.selection_bg[0] * 255.0).round() as u8,
+            (theme.selection_bg[1] * 255.0).round() as u8,
+            (theme.selection_bg[2] * 255.0).round() as u8,
+        ],
         cols: geom.grid_cols,
         rows: geom.grid_rows,
     };
     source.visit_cells(&mut visitor);
     visitor.flush();
+}
+
+/// Whether `(row, col)` falls inside the inclusive row-major `selection`
+/// range.
+fn in_selection(selection: Option<(GridPos, GridPos)>, row: u16, col: u16) -> bool {
+    let Some((s, e)) = selection else {
+        return false;
+    };
+    if row < s.row || row > e.row {
+        return false;
+    }
+    if s.row == e.row {
+        return col >= s.col && col <= e.col;
+    }
+    if row == s.row {
+        return col >= s.col;
+    }
+    if row == e.row {
+        return col <= e.col;
+    }
+    true
+}
+
+/// Fold the rows spanned by `old` and `new` selections into `dirty` so the
+/// GPU re-uploads them even when the VT reports those rows unchanged.
+fn widen_dirty_rows(
+    dirty: &mut DirtySnapshot,
+    old: Option<(GridPos, GridPos)>,
+    new: Option<(GridPos, GridPos)>,
+    grid_rows: u16,
+) {
+    if matches!(dirty, DirtySnapshot::Full) || grid_rows == 0 {
+        return;
+    }
+    let mut rows = match std::mem::replace(dirty, DirtySnapshot::Clean) {
+        DirtySnapshot::Partial(rows) => rows,
+        _ => Vec::new(),
+    };
+    for (s, e) in [old, new].into_iter().flatten() {
+        for row in s.row..=e.row.min(grid_rows - 1) {
+            rows.push(row);
+        }
+    }
+    rows.sort_unstable();
+    rows.dedup();
+    if !rows.is_empty() {
+        *dirty = DirtySnapshot::Partial(rows);
+    }
 }
 
 /// Text-aware pass: shape each run through the cache, ensure every glyph
@@ -419,6 +498,9 @@ fn shape_runs(
             let mut atlas_and_flags = u32::from(entry.is_color);
             if slot.min_contrast {
                 atlas_and_flags |= TEXT_FLAG_MIN_CONTRAST;
+            }
+            if slot.selected {
+                atlas_and_flags |= TEXT_FLAG_IN_SELECTION;
             }
             out.push(CellText {
                 glyph_pos: entry.pos,
@@ -482,6 +564,9 @@ struct RunBuilder<'a> {
     procedural_cells: &'a mut Vec<ProceduralCell>,
     open: Option<ShapeRun>,
     theme: &'a Theme,
+    selection: Option<(GridPos, GridPos)>,
+    /// `theme.selection_bg` quantized once to the `bg_cells` byte format.
+    selection_bg: [u8; 3],
     cols: u16,
     rows: u16,
 }
@@ -510,7 +595,14 @@ impl CellVisitor for RunBuilder<'_> {
         if view.attrs.inverse {
             std::mem::swap(&mut fg_rgb, &mut bg_rgb);
         }
-        if bg_rgb != theme_bg {
+        let selected = in_selection(self.selection, row, col);
+        if selected {
+            // Tmux-style: selection paints a fully opaque bg, taking
+            // precedence over the cell's SGR background, so glyphs sit on
+            // a solid block instead of an alpha tint.
+            let sel = self.selection_bg;
+            self.bg_cells[idx] = [sel[0], sel[1], sel[2], 255];
+        } else if bg_rgb != theme_bg {
             self.bg_cells[idx] = [bg_rgb[0], bg_rgb[1], bg_rgb[2], 255];
         }
 
@@ -520,6 +612,12 @@ impl CellVisitor for RunBuilder<'_> {
             return;
         }
 
+        if selected {
+            // Explicit theme selection-fg wins; otherwise fall back to the
+            // cell's effective bg for contrast against the opaque
+            // selection bg.
+            fg_rgb = self.theme.selection_fg.unwrap_or(bg_rgb);
+        }
         let alpha = if view.attrs.faint { FAINT_ALPHA } else { 255 };
         let fg = [fg_rgb[0], fg_rgb[1], fg_rgb[2], alpha];
 
@@ -535,6 +633,7 @@ impl CellVisitor for RunBuilder<'_> {
                 codepoint: c,
                 fg,
                 min_contrast,
+                selected,
             });
             return;
         }
@@ -554,10 +653,13 @@ impl CellVisitor for RunBuilder<'_> {
         }
         // Either the existing run extends, or the branch above just opened
         // a fresh one — `open` is `Some` either way.
-        self.open
-            .as_mut()
-            .expect("open run set above")
-            .push_cell(col, fg, min_contrast, view.text);
+        self.open.as_mut().expect("open run set above").push_cell(
+            col,
+            fg,
+            min_contrast,
+            selected,
+            view.text,
+        );
     }
 }
 
@@ -611,6 +713,9 @@ fn emit_procedural_cells(
         let mut atlas_and_flags = u32::from(entry.is_color);
         if cell.min_contrast {
             atlas_and_flags |= TEXT_FLAG_MIN_CONTRAST;
+        }
+        if cell.selected {
+            atlas_and_flags |= TEXT_FLAG_IN_SELECTION;
         }
         out.push(CellText {
             glyph_pos: entry.pos,
@@ -743,6 +848,17 @@ mod tests {
             theme,
             bg_color: [0, 0, 0, 255],
             min_contrast: 1.0,
+            selection: None,
+        }
+    }
+
+    fn build_config_with_selection(
+        theme: &Theme,
+        selection: Option<(GridPos, GridPos)>,
+    ) -> BuildFrameConfig<'_> {
+        BuildFrameConfig {
+            selection,
+            ..build_config(theme)
         }
     }
 
@@ -756,6 +872,37 @@ mod tests {
         theme: &Theme,
     ) -> (Vec<[u8; 4]>, Vec<ShapeRun>) {
         let (bg, runs, _) = collect_runs_with_procedural(cols, rows, cells, theme);
+        (bg, runs)
+    }
+
+    /// Variant of [`collect_runs`] with an active selection range.
+    fn collect_runs_selected(
+        cols: u16,
+        rows: u16,
+        cells: &[FakeCell<'_>],
+        theme: &Theme,
+        selection: (GridPos, GridPos),
+    ) -> (Vec<[u8; 4]>, Vec<ShapeRun>) {
+        let mut source = FakeFrame::new(cols, rows, cells);
+        let geom = FrameGeometry {
+            cell_width: 10.0,
+            cell_height: 20.0,
+            grid_cols: cols,
+            grid_rows: rows,
+            grid_padding: [0.0; 4],
+        };
+        let mut bg = Vec::new();
+        let mut runs = Vec::new();
+        let mut procedural = Vec::new();
+        walk_grid_into_runs(
+            &mut source,
+            &geom,
+            theme,
+            Some(selection),
+            &mut bg,
+            &mut runs,
+            &mut procedural,
+        );
         (bg, runs)
     }
 
@@ -782,6 +929,7 @@ mod tests {
             &mut source,
             &geom,
             theme,
+            None,
             &mut bg,
             &mut runs,
             &mut procedural,
@@ -1053,9 +1201,9 @@ mod tests {
         // Three cells "a", "é" (2 bytes), "b" → text "aéb",
         // slots at byte_offset [0, 1, 3].
         let mut run = ShapeRun::new(0, FontAttrs::default());
-        run.push_cell(0, [1, 1, 1, 255], true, "a");
-        run.push_cell(1, [2, 2, 2, 255], true, "é");
-        run.push_cell(2, [3, 3, 3, 255], true, "b");
+        run.push_cell(0, [1, 1, 1, 255], true, false, "a");
+        run.push_cell(1, [2, 2, 2, 255], true, false, "é");
+        run.push_cell(2, [3, 3, 3, 255], true, false, "b");
 
         assert_eq!(run.slot_for_cluster(0).col, 0);
         assert_eq!(run.slot_for_cluster(1).col, 1);
@@ -1537,5 +1685,157 @@ mod tests {
         // and land at the start of the grayscale plane again.
         assert_eq!(second.glyph_pos, first.glyph_pos);
         assert_eq!(second.glyph_size, first.glyph_size);
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // CPU-resolved selection (issue #262)
+    // ────────────────────────────────────────────────────────────────────
+
+    fn pos(col: u16, row: u16) -> GridPos {
+        GridPos { col, row }
+    }
+
+    #[test]
+    fn selection_bg_is_opaque_and_overrides_sgr_background() {
+        let theme = Theme::blank();
+        let cells = [
+            ("a", CellColor::Default, CellColor::Palette(1), plain()),
+            ("b", CellColor::Default, CellColor::Palette(1), plain()),
+            ("c", CellColor::Default, CellColor::Palette(1), plain()),
+        ];
+        let (bg, _runs) = collect_runs_selected(3, 1, &cells, &theme, (pos(1, 0), pos(1, 0)));
+
+        assert_eq!(bg[0], [205, 0, 0, 255]);
+        assert_eq!(bg[1], [200, 200, 200, 255], "selection replaces SGR bg");
+        assert_eq!(bg[2], [205, 0, 0, 255]);
+    }
+
+    #[test]
+    fn selection_paints_empty_cells() {
+        let theme = Theme::blank();
+        let cells = [("", CellColor::Default, CellColor::Default, plain())];
+        let (bg, runs) = collect_runs_selected(1, 1, &cells, &theme, (pos(0, 0), pos(0, 0)));
+
+        assert_eq!(bg[0], [200, 200, 200, 255]);
+        assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn selection_fg_uses_explicit_theme_override() {
+        // Theme::blank provides selection_fg = Some(theme bg).
+        let theme = Theme::blank();
+        let cells = [("x", CellColor::Palette(2), CellColor::Default, plain())];
+        let (_bg, runs) = collect_runs_selected(1, 1, &cells, &theme, (pos(0, 0), pos(0, 0)));
+
+        assert_eq!(runs[0].slots[0].fg, [0, 0, 0, 255]);
+        assert!(runs[0].slots[0].selected);
+    }
+
+    #[test]
+    fn selection_fg_falls_back_to_cell_effective_bg() {
+        let mut theme = Theme::blank();
+        theme.selection_fg = None;
+        let cells = [
+            ("d", CellColor::Default, CellColor::Default, plain()),
+            ("p", CellColor::Default, CellColor::Palette(4), plain()),
+        ];
+        let (_bg, runs) = collect_runs_selected(2, 1, &cells, &theme, (pos(0, 0), pos(1, 0)));
+
+        // Default-bg cell falls back to the theme bg; SGR-bg cell to its
+        // own resolved bg.
+        assert_eq!(runs[0].slots[0].fg, [0, 0, 0, 255]);
+        assert_eq!(runs[0].slots[1].fg, [0, 0, 238, 255]);
+    }
+
+    #[test]
+    fn selection_range_spans_rows_in_reading_order() {
+        let theme = Theme::blank();
+        let cells: Vec<FakeCell<'_>> = (0..9)
+            .map(|_| ("x", CellColor::Default, CellColor::Default, plain()))
+            .collect();
+        // (1,0) → (1,2): row 0 from col 1, all of row 1, row 2 up to col 1.
+        let (bg, _runs) = collect_runs_selected(3, 3, &cells, &theme, (pos(1, 0), pos(1, 2)));
+
+        let sel = [200, 200, 200, 255];
+        let off = [0, 0, 0, 0];
+        assert_eq!(bg, vec![off, sel, sel, sel, sel, sel, sel, sel, off]);
+    }
+
+    #[test]
+    fn selected_glyphs_carry_selection_flag() {
+        let theme = Theme::blank();
+        let cells = [
+            ("a", CellColor::Default, CellColor::Default, plain()),
+            ("─", CellColor::Default, CellColor::Default, plain()),
+            ("b", CellColor::Default, CellColor::Default, plain()),
+        ];
+        let mut source = FakeFrame::new(3, 1, &cells);
+        let mut backend = distributing_backend();
+        let mut builder = CellBuilder::new();
+
+        builder.build_frame(
+            &mut source,
+            &mut backend,
+            build_config_with_selection(&theme, Some((pos(1, 0), pos(2, 0)))),
+        );
+
+        // Shape-run glyphs emit first ("a", "b"), then the procedural "─".
+        let flags: Vec<(u16, bool)> = builder
+            .text_cells()
+            .iter()
+            .map(|c| {
+                (
+                    c.grid_pos[0],
+                    c.atlas_and_flags & TEXT_FLAG_IN_SELECTION != 0,
+                )
+            })
+            .collect();
+        assert_eq!(flags, vec![(0, false), (2, true), (1, true)]);
+    }
+
+    #[test]
+    fn selection_change_widens_dirty_rows() {
+        let theme = Theme::blank();
+        let cells = [
+            ("a", CellColor::Default, CellColor::Default, plain()),
+            ("b", CellColor::Default, CellColor::Default, plain()),
+            ("c", CellColor::Default, CellColor::Default, plain()),
+            ("d", CellColor::Default, CellColor::Default, plain()),
+        ];
+        let mut source = FakeFrame::new(1, 4, &cells);
+        let mut backend = StubBackend::new();
+        let mut builder = CellBuilder::new();
+        let selection = Some((pos(0, 1), pos(0, 2)));
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+
+        // The VT reports Clean from here on; only the selection changes.
+        builder.build_frame(
+            &mut source,
+            &mut backend,
+            build_config_with_selection(&theme, selection),
+        );
+        assert_eq!(*builder.last_dirty(), DirtySnapshot::Partial(vec![1, 2]));
+
+        builder.build_frame(
+            &mut source,
+            &mut backend,
+            build_config_with_selection(&theme, selection),
+        );
+        assert_eq!(*builder.last_dirty(), DirtySnapshot::Clean);
+
+        builder.build_frame(&mut source, &mut backend, build_config(&theme));
+        assert_eq!(*builder.last_dirty(), DirtySnapshot::Partial(vec![1, 2]));
+    }
+
+    #[test]
+    fn widen_dirty_rows_merges_and_clamps() {
+        let mut dirty = DirtySnapshot::Partial(vec![0]);
+        widen_dirty_rows(&mut dirty, None, Some((pos(0, 2), pos(0, 9))), 4);
+        assert_eq!(dirty, DirtySnapshot::Partial(vec![0, 2, 3]));
+
+        let mut dirty = DirtySnapshot::Full;
+        widen_dirty_rows(&mut dirty, None, Some((pos(0, 0), pos(0, 1))), 4);
+        assert_eq!(dirty, DirtySnapshot::Full);
     }
 }

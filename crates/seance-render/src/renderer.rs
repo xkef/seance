@@ -44,7 +44,6 @@ pub struct HoveredLinkRange {
 pub struct RenderInputs {
     pub vt_cursor_visible: bool,
     pub cursor_shape: CursorShape,
-    pub selection: Option<(GridPos, GridPos)>,
     pub hovered_link: Option<HoveredLinkRange>,
 }
 
@@ -53,7 +52,6 @@ impl Default for RenderInputs {
         Self {
             vt_cursor_visible: true,
             cursor_shape: CursorShape::Bar,
-            selection: None,
             hovered_link: None,
         }
     }
@@ -157,7 +155,14 @@ impl TerminalRenderer {
             .resize(winit::dpi::PhysicalSize::new(width, height));
     }
 
-    pub fn update_frame(&mut self, source: &mut dyn FrameSource) {
+    /// Rebuild the CPU-side frame. `selection` is the active selection in
+    /// row-major reading order; it is resolved into the cell colors here,
+    /// so any selection change requires a rebuild to become visible.
+    pub fn update_frame(
+        &mut self,
+        source: &mut dyn FrameSource,
+        selection: Option<(GridPos, GridPos)>,
+    ) {
         let bg_color = self.effective_bg_color();
         let min_contrast = self.min_contrast;
         self.cell_builder.build_frame(
@@ -170,6 +175,7 @@ impl TerminalRenderer {
                 theme: &self.theme,
                 bg_color,
                 min_contrast,
+                selection,
             },
         );
         if let Some(fi) = self.cell_builder.last_frame() {
