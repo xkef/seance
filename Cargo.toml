@@ -40,7 +40,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "registry", "std"] }
 tracing-appender = "0.2"
 etagere = "0.3"
-fancy-regex = "0.18"
+fancy-regex = "0.19"
 include_dir = "0.7"
 insta = { version = "1", features = ["glob", "yaml"] }
 libc = "0.2"
