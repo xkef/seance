@@ -4,13 +4,6 @@ all-features = true
 [advisories]
 yanked = "deny"
 ignore = [
-    # quick-xml < 0.41 DoS advisories. quick-xml is reachable only through
-    # wayland-scanner, a build-time proc-macro that parses trusted protocol
-    # XML shipped inside the wayland crates; the latest wayland-scanner
-    # (0.31.10) still pins quick-xml ^0.39, so 0.41 is unreachable until
-    # upstream bumps it.
-    { id = "RUSTSEC-2026-0194", reason = "build-time only, trusted input; blocked on wayland-scanner" },
-    { id = "RUSTSEC-2026-0195", reason = "build-time only, trusted input; blocked on wayland-scanner" },
     # ttf-parser is unmaintained but pinned by fontdb/cosmic-text; revisit
     # when the font stack migrates.
     { id = "RUSTSEC-2026-0192", reason = "pinned by fontdb/cosmic-text; no fixed upgrade path yet" },
